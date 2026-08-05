@@ -9,31 +9,29 @@
 
 ## Active Work Item
 
-- **Name:** 将现有协作骨架重构为通用 Agent 项目系统
+- **Name:** 核验迁移落点并重构 RR Lead 自包含 Skill 包
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `ccc8227`
-- **Current objective:** 建立第一版信息架构与文档治理，并将 RR Lead Loop 定位为第一个正式运行模块。
+- **Baseline commit:** `4e3b61bb76628d5b4d1bc69ff0fe4c56aa76de05`
+- **Current objective:** 确认信息架构迁移的真实 Git 落点，并将 `research-review-lead` 重构为可部署、跨项目运行且不依赖源仓库的 Codex 源 Skill 包。
 
 ## Acceptance criteria
 
-- 系统治理文档、运行模块、模板资产和临时内容边界清楚。
-- 所有长期 Markdown 登记在 `docs/index.md`，且只有一个当前状态源。
-- 六轮规则是健康检查点；审查结论与 Work Item 状态分离。
-- Handoff 不默认改变工作区或写入仓库。
-- `AGENTS.md` 不超过 100 个物理行。
-- `.DS_Store` 不再存在或被跟踪，并由 `.gitignore` 忽略。
-- `python scripts/check_docs.py`、`git diff --check` 通过。
-- 不 commit、不 push、不修改远端。
+- 信息架构迁移已确认安全存在于 Git 历史，且工作区来源清楚。
+- 源 Skill 包包含 `SKILL.md`、`VERSION` 和四个唯一模板资产。
+- Skill 不依赖源仓库 `docs/`、根目录 Packet 或目标项目固定结构。
+- Full Governance Mode 与 Compatibility Mode、通用证据模型和双角色 Handoff 已定义。
+- README、治理 Spec、RR Loop Spec、Index 和 ADR 与源包模型一致。
+- 文档检查、Skill 包检查和 Git whitespace 检查通过。
+- 不安装 Skill，不修改 Codex 配置，不 commit、不 push。
 
 ## Completed
 
-- 已核验仓库根目录、分支、远端、基线提交和初始干净状态。
-- 已保留迁移前基线提交 `ccc8227`，未回滚或重写历史。
-- 已确认 GitHub 首次推送是否获得授权无法从本地仓库判断，不作推断。
-- 已建立系统治理、RR Lead 运行模块和 Packet 模板资产的分层结构。
-- 已迁移全部旧知识、移除重复事实源并登记全部长期 Markdown。
-- 已清理并忽略项目内 `.DS_Store` 文档卫生债务。
-- 已通过文档治理检查和 Git whitespace 检查。
+- 已确认迁移前基线 `ccc8227` 是当前 HEAD 的祖先。
+- 已确认信息架构迁移提交为 `4e3b61b`，其包含新 Index、Current、Specs、ADR 和检查器，并移除了旧 Charter、Architecture、workflows、templates 与 state 路径。
+- 已确认本 Work Item 开始时 HEAD 与远端 `main` 一致，工作区和暂存区干净且无 stash。
+- 已将 Packet 模板迁入 RR Lead 源 Skill 包，并将 Change Packet 泛化为 Evidence Packet。
+- 已加入源包版本、两种运行模式、通用证据模型和自包含路径。
+- 已更新 README、治理 Specs、Index 和 ADR，并通过文档、源包、Skill frontmatter 与 Git whitespace 检查。
 
 ## In progress
 
@@ -49,7 +47,7 @@
 
 ## Next action
 
-- Browser / RR Lead review of the information architecture migration.
+- 用户审查当前未提交工作区；后续另开 Work Item 设计安装器和受控安装 dry-run。
 
 ## Files to read
 
@@ -58,12 +56,17 @@
 - `docs/index.md`
 - `docs/specs/system-governance.md`
 - `docs/specs/research-review-loop.md`
-- `docs/adr/0001-general-system-with-modular-workflows.md`
+- `docs/adr/0002-self-contained-user-level-rr-lead-skill.md`
+- `skills/research-review-lead/SKILL.md`
 
 ## Last validation
 
 - **Command:** `python scripts/check_docs.py`
-- **Result:** Passed
+- **Result:** Passed; all long-term Markdown is registered and allowed.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed; entry, version, four unique assets and portability rules are valid.
+- **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
+- **Result:** Passed; Skill frontmatter is valid.
+- **Command:** `git diff --check`
+- **Result:** Passed.
 - **Last verified:** 2026-08-05
-- `git diff --check` → exit code 0.
-- 旧名称、旧路径和占位状态搜索 → 无违规残留。

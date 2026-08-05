@@ -27,13 +27,15 @@ RR Lead 监督方向和质量；IDE Agent 用本地事实监督并纠正纸面�
 - Decision Request：仅在用户决策闸口使用。
 - Handoff：对话不再可靠继续时的最小接力信息。
 
-模板位于 `assets/packets/`。实际填写的 Packet 默认作为消息传递，不提交到仓库。浏览器与 IDE 彼此隔离，不依赖自动文件上传。
+模板随源 Skill 包位于 `skills/research-review-lead/assets/`。实际填写的 Packet 默认作为消息传递，不提交到目标项目。浏览器与 IDE 彼此隔离，不依赖自动文件上传。
+
+Evidence Packet 使用通用核心，将目标、范围、产物、验证、来源、不确定性、验收映射、Blocker 和 Debt 分开。Git Diff、命令和退出码只在项目实际使用这些证据时提供；备课、文档、调研和非 Git 项目使用其可复查的产物、来源、覆盖与观察结果。
 
 ## Loop
 
 1. IDE 核验当前 Work Item 与本地状态，必要时用 Context Packet 提供背景。
 2. RR Lead 检查目标、进行必要调研并下发可执行的 `NEXT_WORK_ORDER` 与验证标准。
-3. IDE 在授权范围内执行，用真实 Diff、命令、退出码和测试输出形成 Change Packet。
+3. IDE 在授权范围内执行，用适合当前项目类型的真实证据形成 Evidence Packet。
 4. RR Lead 分别给出本轮审查结论和整个任务状态，区分 Blocker 与 Debt，并给出下一步。
 5. 达到验收标准时任务进入 `ACHIEVED`；需要用户决定时进入 `NEEDS_DECISION`；否则继续推进。
 
@@ -68,7 +70,7 @@ RR Lead 每轮响应还应包含 `GOAL_CHECK`、`FINDINGS`、`BLOCKERS`、`DEBT`
 
 ## Handoff and resume
 
-- 仓库只保留一个 `assets/packets/handoff.md` 权威模板，不为 IDE Agent 和 RR Lead 创建两套独立模板。
+- 源 Skill 包只保留一个 `assets/handoff.md` 权威模板，不为 IDE Agent 和 RR Lead 创建两套独立模板。
 - 所有交接都填写 Common Handoff Core：Work Item ID、Conversation ID、交接原因、目标、验收标准、任务状态、确认事实、已有决定、Blocker、Debt、下一步和必读权威文件。
 - IDE Agent 交接时再填写 IDE Agent Extension，提供仓库、Git、命令、退出码、测试、关键 Diff、本地限制和禁止重复的失败路径。
 - RR Lead 交接时再填写 RR Lead Extension，提供用户意图、待决策项、外部调研、已否定路线、审查结论、任务状态、判断理由、下一工作指令和漂移检查。
@@ -85,3 +87,5 @@ RR Lead 每轮响应还应包含 `GOAL_CHECK`、`FINDINGS`、`BLOCKERS`、`DEBT`
 ## MVP limits
 
 第一版只允许一个 Active Work Item；不开发多任务调度、自动通知、GitHub Issues/Projects 同步或图形界面。普通 Git 与远端仓库可用于保存历史。
+
+RR Lead 在具有项目权威入口时采用 Full Governance Mode，并服从目标项目自己的规则和状态源；没有完整治理结构时采用 Compatibility Mode，以用户请求和现有入口运行，不强制 Git、`docs/current.md` 或治理初始化。

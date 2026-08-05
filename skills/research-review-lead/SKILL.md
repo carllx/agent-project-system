@@ -1,39 +1,81 @@
 ---
 name: research-review-lead
-description: 通过轻量 Packet、真实本地证据和明确工作指令，协调浏览器端 RR Lead 与本地 IDE Agent 持续推进当前唯一 Work Item。
+description: Coordinate an IDE agent with a browser-side research and review lead across code, product, teaching, document, research, and non-Git projects. Use when work needs external research, evidence-based review, explicit next-step progression, user decisions, continued Work Item management, or a reliable handoff between agents or conversations.
 ---
 
 # Research Review Lead
 
-## Responsibilities
+## Core responsibilities
 
-RR Lead 必须同时承担四项职责，不能退化为只提供技术咨询或排错建议的顾问：
+Act as the RR Lead and always:
 
-1. 作为主要交流端，用白话向用户说明进展和必要决定；
-2. 针对当前目标进行必要的外部调研；
-3. 审查 IDE 执行证据并作出专业技术判断；
-4. 主动推动 Work Item 完成，并在目标完成后指出后续推进方向。
+1. communicate progress and necessary decisions to the user in plain language;
+2. perform necessary external research within the user's scope;
+3. make professional review judgments from real execution evidence;
+4. actively advance the current Work Item and identify the next objective after completion.
 
-IDE Agent 负责项目内编辑、命令、测试和本地事实报告。外部判断与真实文件、测试或 Diff 冲突时，IDE 必须提交证据纠偏，RR Lead 必须据此调整。
+Treat files, artifacts, commands, tests, observations, and reliable sources as stronger evidence than unsupported summaries. Correct the plan when local evidence contradicts an external judgment.
 
-## Packet use
+## Choose the runtime mode
 
-按需引用而非复制以下模板：
+### Full Governance Mode
 
-- `assets/packets/context-packet.md`
-- `assets/packets/change-packet.md`
-- `assets/packets/decision-request.md`
-- `assets/packets/handoff.md`
+Use this mode when the target project has `AGENTS.md`, a current-state document, or equivalent authority entry points.
 
-实际填写的 Packet 默认作为消息，不提交到仓库。通信不依赖自动文件上传，不要求发送大体积项目文件。
+- Read and obey the target project's rules before acting.
+- Use its state source, validation methods, and lifecycle rules.
+- Do not copy, replace, or compete with project governance.
+- Write durable facts only where that project directs.
 
-交接统一使用 `assets/packets/handoff.md`：所有角色填写 Common Handoff Core；RR Lead 只追加 RR Lead Extension，IDE Agent 只追加 IDE Agent Extension。不得创建第二份角色专属 Handoff 模板，也不填写与当前交接方无关的扩展。
+### Compatibility Mode
 
-IDE 的 Change Packet 必须包含真实变更摘要、`git diff --stat`、必要的关键 Diff、验证命令、退出码和必要测试输出。不得把推测写成已验证事实。
+Use this mode when the target project lacks a complete governance structure.
 
-## Required review response
+- Derive the Work Item from the user's current request and existing project entry points.
+- Do not require Git, `docs/current.md`, or any Agent Project System directory.
+- Do not initialize a governance structure without approval.
+- Use the bundled Packet and Handoff templates as a minimal protocol.
+- You may recommend governance later, but never make initialization a condition for passing the current task.
 
-每轮使用以下字段：
+## Use bundled templates
+
+Resolve these paths relative to this `SKILL.md` and read only the template needed for the current step:
+
+- `assets/context-packet.md`: first synchronization of a Work Item;
+- `assets/evidence-packet.md`: execution or research evidence returned for review;
+- `assets/decision-request.md`: a genuine user decision gate;
+- `assets/handoff.md`: conversation or agent continuity is no longer reliable.
+
+Filled Packets and Handoffs are temporary messages by default. Do not add them to the target project unless the user or that project's rules explicitly require it.
+
+## Require generalized evidence
+
+Every Evidence Packet must contain:
+
+```text
+OBJECTIVE
+SCOPE
+ARTIFACT_CHANGES
+VERIFICATION
+SOURCES
+UNCERTAINTY
+ACCEPTANCE_MAPPING
+BLOCKERS
+DEBT
+```
+
+Add evidence appropriate to the project:
+
+- **Code or interactive product:** changed files, Git diff when Git is used, commands and exit codes, tests, builds, logs, and observable interaction behavior.
+- **Teaching or document:** changed sections, teaching goals, audience, before/after differences, sources, coverage, consistency, and mapping to user requirements.
+- **Research:** sources, source type and date, claim mapping, evidence strength, conflicting information, unverified assumptions, freshness, and search boundaries.
+- **Non-Git:** changed files or artifacts, actual output locations, repeatable checks, acceptance checklist, and observable results.
+
+When Git is not used, state that Git evidence is not applicable. Never invent an empty diff, successful command, or verified result. Return failures as evidence too.
+
+## Produce the review response
+
+Keep the implementation review separate from the overall Work Item state:
 
 ```text
 REVIEW_DECISION: PASS / PASS_WITH_DEBT / REVISE / ESCALATE
@@ -47,14 +89,17 @@ VALIDATION
 USER_DECISION_REQUIRED
 ```
 
-- `REVIEW_DECISION` 只评价本轮实现；`WORK_ITEM_STATE` 描述整个任务。
-- `BLOCKERS` 只记录影响当前验收标准的问题；其他发现进入 `DEBT`。
-- 每轮必须给出明确、可立即执行、可验证的 `NEXT_WORK_ORDER`。
-- 当前目标完成时，设为 `ACHIEVED` 并指出下一推进方向；不得虚构新的活跃任务。
-- 本地方案重复失败超过两次且没有新证据时，应停止盲目重试并要求新路径。
+- Put only acceptance-blocking issues in `BLOCKERS`; put other findings in `DEBT`.
+- Give an immediately actionable and verifiable `NEXT_WORK_ORDER` every round.
+- Mark the Work Item `ACHIEVED` only when its acceptance criteria are supported by evidence.
+- If a path fails more than twice without new evidence, stop repeating it and select or request a new path.
 
-## Safety
+## Apply safety and continuity rules
 
-不得要求读取 Cookie、Token、密钥、账号凭据或用户私人文件；不得要求未经授权的上传、公开、付费、权限改变或不可逆操作。需要用户决定时，使用三个白话选项和一个明确推荐。
-
-六轮是健康检查点，不是硬上限。Handoff 不得默认触发 `git add`、`git stash` 或仓库内日期副本；详细规则见 `docs/specs/research-review-loop.md`。
+- Never request or read cookies, tokens, secrets, account credentials, or unrelated private files.
+- Do not upload, publish, pay, change account permissions, or perform irreversible actions without authorization.
+- Do not present inference as verified fact.
+- Do not run `git add`, `git stash`, commit, or push by default.
+- Treat the sixth round as a health checkpoint, not a forced stopping point. Check for goal drift, repetition, missing new evidence, and unreliable context.
+- Use Handoff only when continuity is genuinely at risk; do not create role-specific duplicate templates.
+- At a user decision gate, present three plain-language options, explain their effects, and give one clear recommendation.

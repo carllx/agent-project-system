@@ -4,9 +4,11 @@ Agent Project System 是一套通用的 Agent 项目系统，用于帮助不同�
 
 Research Review Lead Loop（RR Lead Loop）是本系统的第一个正式运行模块，但不等于整个系统。后续能力会在完成登记和验证后逐步加入，而不是在第一版一次铺开。
 
+本仓库是 `research-review-lead` 的开发和唯一手工维护源。源 Skill 包位于 `skills/research-review-lead/`，包含运行说明、版本和 Packet 资产，可以在后续阶段部署为 Codex 用户级 Skill。安装副本只是由源包生成的部署产物，不应手工编辑；目标项目无需克隆本仓库，也不必采用本仓库的治理目录。
+
 ## 当前阶段
 
-当前处于第一版信息架构与文档治理重构阶段。重点是建立权威文档、运行模块、模板资产和临时运行内容之间的边界；暂不开展真实自动协作实验。
+当前已完成第一版信息架构迁移和 RR Lead 自包含源包重构。本阶段只维护和验证源包，尚未安装到用户级 Skills，也不开展真实自动协作实验。
 
 ## 阅读入口
 
@@ -26,4 +28,10 @@ Research Review Lead Loop（RR Lead Loop）是本系统的第一个正式运行�
 
 ```bash
 python scripts/check_docs.py
+```
+
+RR Lead 源包检查：
+
+```bash
+python scripts/check_skill_package.py
 ```

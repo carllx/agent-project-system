@@ -37,7 +37,11 @@ def is_allowed(path: Path) -> bool:
         return True
     if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md":
         return True
-    return len(parts) == 3 and parts[:2] == ("assets", "packets")
+    return (
+        len(parts) == 4
+        and parts[0] == "skills"
+        and parts[2] == "assets"
+    )
 
 
 def garbage_reason(path: Path) -> str | None:
@@ -52,7 +56,10 @@ def garbage_reason(path: Path) -> str | None:
     compact = re.sub(r"[^a-z0-9]", "", lowered)
     if "sessionsummary" in compact or "nextsteps" in compact:
         return "temporary summary/next-steps document"
-    if "handoff" in lowered and relative != "assets/packets/handoff.md":
+    if (
+        "handoff" in lowered
+        and not re.fullmatch(r"skills/[^/]+/assets/handoff\.md", relative)
+    ):
         return "actual or duplicate handoff document"
     return None
 

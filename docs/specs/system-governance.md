@@ -16,7 +16,7 @@ Agent Project System 用于治理、初始化和持续推进不同类型的 Agen
 
 1. **系统治理文档：** 定义系统身份、治理规则、架构决定和当前状态，全部登记在 `docs/index.md`。
 2. **运行模块：** 系统可以实际采用的正式能力，例如 `skills/research-review-lead/SKILL.md`；不是普通说明，但必须登记。
-3. **模板资产：** 可复用的项目产品文件，例如 `assets/packets/`；模板可长期保存，填写后的实例默认是临时内容。
+3. **模板资产：** 随运行模块保存的可复用产品文件，例如 `skills/*/assets/`；模板可长期保存，填写后的实例默认是临时内容。
 4. **临时运行内容：** 实际 Handoff、Packet、调查草稿、Session Summary、日期状态副本以及 `final`、`v2`、`backup` 等副本，不得进入仓库。
 
 ## Closed document types
@@ -26,8 +26,7 @@ Agent Project System 用于治理、初始化和持续推进不同类型的 Agen
 - `AGENTS.md`、`README.md` 和可选的根目录 `CLAUDE.md`
 - `docs/index.md`、`docs/current.md`
 - `docs/specs/*.md`、`docs/adr/*.md`、`docs/references/*.md`
-- `skills/*/SKILL.md`
-- `assets/packets/*.md`
+- `skills/*/SKILL.md`、`skills/*/assets/*.md`
 
 未登记的 Markdown 不属于项目知识系统。不得创建 `old`、`final`、`v2`、`backup`、日期 Handoff、Session Summary 或 Next Steps 文件来保存历史。
 
@@ -46,7 +45,18 @@ Agent Project System 用于治理、初始化和持续推进不同类型的 Agen
 
 ## Modules, assets, and adapters
 
-运行模块和模板资产是允许进入仓库的产品文件，但必须登记并保持边界清楚。工具适配文件只能作为薄适配层，引用现有权威文档；不得复制整套规则或成为新的事实源。第一版不预建未经批准的模块。
+运行模块和随包模板资产是允许进入仓库的产品文件，但必须登记并保持边界清楚。工具适配文件只能作为薄适配层，引用现有权威文档；不得复制整套规则或成为新的事实源。第一版不预建未经批准的模块。
+
+## Skill source and deployment model
+
+四个位置必须分开：
+
+1. **Source Repository：** 开发、评审、验证和保存历史的唯一仓库。
+2. **Source Skill Package：** 仓库内自包含的 Skill 目录，是安装内容的唯一手工维护源。
+3. **Installed Copy：** 从源包部署到用户级 Skills 的副本，不作为手工编辑或规则演进来源。
+4. **Target Project：** Skill 实际协助的项目，提供自己的目标、规则、状态和证据。
+
+源 Skill 包必须携带运行所需的模板和资源，不得依赖源仓库的 `docs/`、根目录资产或固定绝对路径。目标项目无需克隆 Source Repository，也不要求采用 Agent Project System 的目录结构。安装和更新必须从源包进行并验证完整性，不得静默覆盖安装位置中的未知修改。项目级同名 Skill 与用户级 Skill 不得无意并存；发现同名来源时必须显式处理版本和选择，不能假设静默覆盖。
 
 ## User communication and decision gates
 

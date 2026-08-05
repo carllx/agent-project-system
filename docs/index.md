@@ -11,8 +11,9 @@
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/research-review-loop.md` | RR Loop 的角色、循环、状态和交接规则 | 执行或修改 RR Loop 时 | Active | 2026-08-05 |
 | `docs/adr/0001-general-system-with-modular-workflows.md` | 通用系统与模块化工作流的架构决定 | 质疑项目定位或模块边界时 | Accepted | 2026-08-05 |
+| `docs/adr/0002-self-contained-user-level-rr-lead-skill.md` | RR Lead 自包含用户级 Skill 的打包与部署决定 | 修改 RR Lead 包结构、安装或分发策略时 | Accepted | 2026-08-05 |
 | `skills/research-review-lead/SKILL.md` | RR Lead 模块的操作准则 | 调用或维护 RR Lead 模块时 | Active | 2026-08-05 |
-| `assets/packets/context-packet.md` | Context Packet 可复用模板 | 首次向 RR Lead 同步 Work Item 时 | Active | 2026-08-05 |
-| `assets/packets/change-packet.md` | Change Packet 可复用模板 | 向 RR Lead 返回本地执行证据时 | Active | 2026-08-05 |
-| `assets/packets/decision-request.md` | Decision Request 可复用模板 | 触发用户决策闸口时 | Active | 2026-08-05 |
-| `assets/packets/handoff.md` | Handoff 可复用模板 | 对话不再可靠继续且需要接力时 | Active | 2026-08-05 |
+| `skills/research-review-lead/assets/context-packet.md` | Context Packet 可复用模板 | 首次向 RR Lead 同步 Work Item 时 | Active | 2026-08-05 |
+| `skills/research-review-lead/assets/evidence-packet.md` | 通用 Evidence Packet 可复用模板 | 向 RR Lead 返回跨项目执行或调研证据时 | Active | 2026-08-05 |
+| `skills/research-review-lead/assets/decision-request.md` | Decision Request 可复用模板 | 触发用户决策闸口时 | Active | 2026-08-05 |
+| `skills/research-review-lead/assets/handoff.md` | Handoff 可复用模板 | 对话不再可靠继续且需要接力时 | Active | 2026-08-05 |
