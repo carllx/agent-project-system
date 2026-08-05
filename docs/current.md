@@ -11,7 +11,7 @@
 
 - **ID:** `EXPERIMENT-EXECUTION-DISCIPLINE-014`
 - **Name:** 禁止实验 Agent 无意义等待与占位符执行
-- **Work Item state:** `IN_PROGRESS`
+- **Work Item state:** `ACHIEVED`
 - **Baseline commit:** `b53615615956b18dce7e237ea52d39d27a347624`
 - **Current objective:** 阻止实验 Agent 使用未解析占位符执行命令，并禁止同步命令完成后的 schedule、sleep、timer 或无意义轮询。
 
@@ -33,14 +33,17 @@
 - 已通过 37 项纯本地测试，其中 11 项覆盖本轮协议和占位符零执行，并保留原有 26 项 A2.1/A2.2/A3 回归。
 - 已通过文档检查、0.4.4 包检查、Skill Creator UTF-8 `quick_validate.py` 和 whitespace 检查。
 - 已创建本地实现 Commit `a462e49a5c05f03ecaaa0a865e587a370ec1538e`，未 push。
+- 已删除 Lab Skill 的全部八个旧包文件，并从 `0.4.4` 权威源包整包覆盖同步到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`；未创建或安装全局副本。
+- 已核验源/Lab 版本均为 `0.4.4`、文件数均为 8、相对路径差异为 0、逐文件字节差异为 0，规范包哈希均为 `dc7594e0b42fcc1a75c2955d25cbad9b683c914a77be37aeb6bf0c3770c88828`。
+- 已核验 Lab 的 29 个历史 Runtime 文件同步前后规范哈希均为 `6c28fc3a68fa4be29a337b0eb1abe6aa8295c287df86dc10e5033ab1246cc043`，路径与内容未改变。
 
 ## In progress
 
-- 获得 Lab Skill 的精确绝对路径后，覆盖同步整包、核验逐文件一致和包哈希，并证明 Runtime 保留。
+- None.
 
 ## Blockers
 
-- 当前仓库、ADR 默认用户级路径及已知 Codex/Agents/Gemini/项目路径均未找到现有 Lab Skill；必须由用户提供精确绝对路径，才能避免覆盖错误位置并核验 Runtime。
+- None.
 
 ## Decisions pending
 
@@ -48,7 +51,7 @@
 
 ## Next action
 
-- 用户提供现有 Lab Skill 的精确绝对路径；随后完成整包覆盖同步与最终证据记录。
+- 在新的独立 Work Item 中决定是否运行真实 Browser 实验；本 Work Item 未运行实验、未发送消息。
 
 ## Files to read
 
@@ -72,5 +75,9 @@
 - **Result:** Passed. The first invocation without UTF-8 mode failed only because Windows Python used GBK to decode the UTF-8 Skill.
 - **Command:** `git diff --check`
 - **Result:** Passed; only Git line-ending conversion warnings were emitted.
+- **Command:** source/Lab relative-path manifest, per-file SHA-256 comparison, and canonical package hash
+- **Result:** Source/Lab versions are `0.4.4`; both contain 8 files; path diff and byte diff are zero; both canonical hashes are `dc7594e0b42fcc1a75c2955d25cbad9b683c914a77be37aeb6bf0c3770c88828`.
+- **Command:** Lab `.runtime` canonical path-and-byte hash before and after package replacement
+- **Result:** 29 Runtime files remained; before and after hashes are both `6c28fc3a68fa4be29a337b0eb1abe6aa8295c287df86dc10e5033ab1246cc043`.
 - **Scope:** 只运行纯本地假 OpenCLI 与合成协议轨迹；未运行真实 Browser 实验、未发送消息。
 - **Last verified:** 2026-08-05
