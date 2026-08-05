@@ -154,7 +154,7 @@ PREPARE_MESSAGE
 → PARSE_RR_REVIEW
 ```
 
-新 Conversation 发送前先记录活动 URL 和有限最近 ID，单独执行 `opencli chatgpt new`，再用 `status` 证明 URL 已变化且不在任何旧 `/c/<id>` 页面，并用 `read` 证明当前页面为空。只有这些条件全部满足才在当前已验证空白页执行一次 `ask`，不得再用 `ask --new` 承载真实 Work Item。OpenCLI 自动验证失败时，降级为用户人工打开空白 ChatGPT 根 URL 并提供 URL；Wrapper 仍必须核对当前 URL 完全一致且页面为空，不允许口头确认绕过验证。
+新 Conversation 的正式发送必须由单一 `send --prepare-new` Wrapper 调用完成：先保存有限 recent history 基线，再执行一次 `opencli chatgpt new`，用 `status` 证明当前 URL 为 ChatGPT 根页面或 `/new`，并用 `read` 证明当前页面为空；只有这些条件全部满足才执行一次 `ask`，随后解析 ask 身份并检查发送后 status。不得使用 `ask --new`，不得要求用户预先打开 `/new`，也不得把创建验证与发送拆成两个正式实验。
 
 正常恢复不得扫描全部 pre-send Conversation。NEW 模式必须先保存有限 recent history 基线；ask 无可用 Conversation ID 时依次执行一次发送后 status、一次相同窗口的 history refresh、排除基线 ID 的 `NEW_CANDIDATE_DIFF`，再选择 ask 身份、当前发送后 Conversation 或唯一新增候选中的最强目标执行最多一次 detail。只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，命中立即停止，不保存无关正文；不得扩大候选数量或无限轮询。当前发送后目标若属于发送前 ID 且精确命中两个标识，仍为 `MISROUTED_DELIVERY`；找不到则保持 `DELIVERY_UNKNOWN` 并永久禁止该 Message ID 重发。
 
@@ -162,28 +162,34 @@ Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversatio
 
 默认实验预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=9`、`MAX_EXPERIMENT_SECONDS=60`。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
 
-### A2.1 preparation interface
+### Integrated start-new-and-send interface
 
-Wrapper 必须提供独立公开命令 `prepare-new --runtime-dir <path> --work-item-id <id>`。普通空白环境准备可以省略旧 Conversation 要求；正式 A2.1 转换验收必须增加 `--require-existing-conversation`。它只执行：
+Wrapper 必须提供单一正式命令 `send --prepare-new`。它在同一进程、同一 Runtime 状态和同一预算内执行：
 
 ```text
-CREATE_NEW_CONVERSATION
-→ VERIFY_NEW_CONVERSATION
-→ PERSIST_RUNTIME_STATE
-→ STOP_WITHOUT_SEND
+PRE_SEND_HISTORY_BASELINE
+→ CREATE_NEW_CONVERSATION
+→ VERIFY_NEW_URL
+→ VERIFY_EMPTY_READ
+→ SEND_ONCE
+→ PARSE_ASK_IDENTITY
+→ POST_SEND_STATUS
+→ POST_SEND_HISTORY_DIFF_IF_NEEDED
+→ AT_MOST_ONE_DETAIL
+→ FINAL_STATE
 ```
 
-`prepare-new` 是 A2.1，只创建并验证空白新对话；`send` 是 A2.2/A3，才负责发送消息。带 `--require-existing-conversation` 时，Wrapper 首先只读执行一次 `status`；只有精确的 ChatGPT `/c/<id>` URL 满足前置条件。ChatGPT 根 URL、`/new`、其他域名、畸形路径或非精确 `/c/<id>` 路径必须在 `new` 和 `read` 前停止，保存 `test_result=BLOCKED_BEFORE_EXECUTION`、`stop_reason=EXISTING_CONVERSATION_PRECONDITION_NOT_MET`、`conversation_transition_verified=false`、`message_send_count=0`。实验 Agent 不得自行打开、搜索或制造旧对话，也不得覆盖 Wrapper 原始结果。未带该参数时保留普通空白环境准备的既有兼容行为。
+发送前验证失败时必须在 ask 前停止，两个发送计数保持零。ask 只允许调用一次，并在实际调用边界同时持久化两个发送计数；崩溃、timeout、`DELIVERY_UNKNOWN` 或 `MISROUTED_DELIVERY` 均不得允许同一 Message ID 再次发送。
 
-前置条件通过后，A2.1 必须记录操作前 URL 与旧 Conversation ID，执行一次 `new`，证明最终 URL 已离开旧 `/c/<id>` 且为 ChatGPT 根页面或 `/new`，再执行一次只读 `read`。URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码精确为 `EMPTY_RESULT` 时，即使 CLI 返回非零退出码，也允许作为 `prepare-new` 的空页面证据；空 JSON 对象或数组同样为空。其他错误码、未知结构或不可解析输出必须以 `READ_UNPARSEABLE` 阻止发送；可识别的真实 ChatGPT 消息必须以 `READ_NOT_EMPTY` 阻止发送。本命令不得调用 `ask` 或 `send`、不得创建 Message ID。`PREPARED_NEW_CONVERSATION` 只表示 Wrapper 成功准备并验证了空白环境，不代表消息已投递或 A2.2 已通过；`BLOCKED_BEFORE_EXECUTION` 表示实验所需起始条件不存在且 Wrapper 未执行转换。
+URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码精确为 `EMPTY_RESULT` 时，即使 CLI 返回非零退出码，也允许作为空页面证据；空 JSON 对象或数组同样为空。其他错误码、未知结构或不可解析输出必须以 `READ_UNPARSEABLE` 阻止发送；可识别的真实 ChatGPT 消息必须以 `READ_NOT_EMPTY` 阻止发送。
 
-`prepare-new` 与 `send` 的预发送空页验证必须调用唯一共享的 `classify_chatgpt_read_result`。两条路径对精确 `EMPTY_RESULT`、空对象或空数组、真实消息、未知错误和不可解析输出使用同一分类语义：前两者为 `EMPTY`，真实消息为 `NON_EMPTY/READ_NOT_EMPTY`，其余为 `UNPARSEABLE/READ_UNPARSEABLE`；不得要求精确 `EMPTY_RESULT` 的退出码为零，也不得只读取 stdout。验证失败时 `send_attempt_count=0` 且 `message_send_count=0`。`ask` 身份解析同时接受 OpenCLI 的 JSON 与真实 flat YAML `conversationId` / `conversationUrl` 输出，不得因输出格式分叉把明确身份降级为 `DELIVERY_UNKNOWN`。
+集成路径必须调用唯一共享的 `classify_chatgpt_read_result`。`ask` 身份解析同时接受 OpenCLI 的 JSON 与真实 flat YAML `conversationId` / `conversationUrl` 输出，不得因输出格式分叉把明确身份降级为 `DELIVERY_UNKNOWN`。ask 后必须执行一次 status；只有身份缺失、传输错误或身份冲突时才执行一次发送后 history 差集与最多一次 detail。
 
-`send --manual-new-url <url>` 必须按 `status -> 当前 URL 精确匹配 -> 有限 history 基线 -> read -> 单次 ask` 执行，不得调用 `opencli chatgpt new`。只有共享分类器返回 `EMPTY` 才设置 `blank_environment_verified=true` 并进入写命令；只有真正调用底层写命令时两个发送计数才同时变为 1。Runtime 记录 `pre_send_already_new`、`new_command_called` 和 `browser_navigation_occurred`；起始和验证 URL 均为 `/new` 且未调用 `new` 时，后两项均为 false，不得报告发生了 Browser 导航。
+不得把 `send --manual-new-url` 作为正式流程或要求用户调整 Browser 页面。旧参数与独立 `prepare-new` 仅保留向后兼容和本地诊断，不是下一次真实实验的前置步骤或验收项。
 
-A2.1 在 Wrapper 内固定强制 `MAX_SEND_ATTEMPTS=0`、`MAX_RECOVERY_ATTEMPTS=0`、`MAX_DETAIL_CHECKS=0`、`MAX_EXTERNAL_COMMANDS=4`、`MAX_EXPERIMENT_SECONDS=60`。六十秒覆盖 Wrapper 启动及全部子命令和轮询；预算耗尽时停止后续命令并持久化 `stop_reason=BUDGET_EXHAUSTED`。Runtime 至少保存 `work_item_id`、`operation=PREPARE_NEW`、`require_existing_conversation`、`precondition_checked`、`precondition_met`、`pre_operation_url`、`pre_operation_conversation_id`、`pre_operation_mode`、`new_command_called`、`post_operation_url`、`conversation_transition_verified`、`blank_environment_verified`、`verification_result`、`read_result`、`message_send_count=0`、`external_command_count`、`placeholder_validation_performed`、`unresolved_placeholders`、`wrapper_schedule_call_count=0`、`agent_schedule_call_count=null`、`total_schedule_call_count=null`、`agent_tool_trace_verification=UNAVAILABLE`、`idle_wait_seconds=0`、`poll_attempt_count=0`、`synchronous_command_completed`、`terminated_immediately_after_result`、`started_at`、`stopped_at`、`elapsed_seconds`、`stop_reason` 和 `test_result`。Wrapper 的零只描述 Wrapper 自身，不能作为外层 Agent 工具轨迹计数。起始为旧 `/c/<id>` 且最终进入根页面或 `/new` 时记录 `pre_operation_mode=EXISTING_CONVERSATION` 与 `conversation_transition_verified=true`；起始已为根页面或 `/new` 时记录 `pre_operation_mode=ALREADY_NEW` 与 `conversation_transition_verified=false`。只有读取为空才记录 `blank_environment_verified=true`。允许结果仅为 `PREPARED_NEW_CONVERSATION`、`BLOCKED_BEFORE_EXECUTION`、`BLOCKED_BEFORE_SEND`、`BUDGET_EXHAUSTED`、`TEST_PROTOCOL_VIOLATION`。
+集成 Runtime 记录 `operation=START_NEW_AND_SEND`、`prepare_new=true`、基线、new/read 验证、ask 身份、发送后 status、可选 history diff/detail、全部预算与最终 delivery state。Wrapper 自身无法观察的外层 Agent 工具计数仍必须标记为 `UNAVAILABLE`，不得伪报整个实验为零。
 
-本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此独立创建后必须组合 URL 与空页面验证。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
+本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此集成调用仍必须组合 URL 与空页面验证，且不得依赖未验证的 `opencli chatgpt send`。
 
 ### 实验 Agent 协议
 
@@ -210,25 +216,13 @@ Shell 在 `COMMAND_WAIT_SECONDS=15` 内直接返回 `exit code`、`stdout` 和 `
 
 静态测试通过只证明包结构和规则存在，不能证明传输、循环或人工决策恢复有效。
 
-### Experiment A1: Non-mutating recovery regression
+### Final integrated transport experiment
 
-使用已知 Conversation ID 和已知 `MESSAGE_ID` 验证 wrapper 的 recover 分支可返回 `RESPONSE_READY`，且不发送消息。
-
-### Experiment A2.1: Prepare new without send
-
-从用户预先放置的旧 `/c/<id>` 页面开始，使用新的 Work Item ID 和 Runtime 目录调用公开 `prepare-new --require-existing-conversation`，只验证从该旧 Conversation 转换到新空白对话及正式 Runtime 状态。实验 Agent 不得自行打开或搜索旧对话。该实验不得发送消息；成功结果只为 `PREPARED_NEW_CONVERSATION`，起始条件不存在时必须为 `BLOCKED_BEFORE_EXECUTION`。
-
-### Experiment A2.2: One-send transport
-
-在 A2.1 独立通过后，使用新的无副作用 Work Item、单一 `MESSAGE_ID` 和全新 Runtime 目录验证 `SEND_MESSAGE`、身份捕获或一次恢复及无重复投递。执行前需用户授权真实 Browser 写入；`TRANSPORT-RECOVERY-002` 不得用于判定通过。
-
-### Experiment A3: `send` candidate
-
-在隔离对话中验证 `send` 是否要求先创建或打开对话、如何绑定明确 Conversation ID、是否只发送不等待，以及如何证明发往正确对话。通过前保持 `UNVERIFIED`。
+本地验证完成后只运行一次真实 `send --prepare-new` 端到端实验，使用新的 Work Item ID、Message ID 和 Runtime，并在单一 Wrapper 调用内验证 new、空页、一次 ask、发送后 status、必要的一次恢复以及最终 Conversation ID 和回复。不得再运行独立 A2.1/A2.2 微型实验，不得要求用户先打开 `/new`。若在现有有限预算内仍不能取得明确 Conversation ID 和回复，立即停止继续修补 OpenCLI 1.8.6 Transport，并把该路线标记为当前不可可靠使用。
 
 ### Experiment B: Two-round Loop
 
-只有 A2 与 A3 都通过后才开始正式 Loop。核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认响应属于同一目标对话。
+只有最终集成 Transport 实验通过后才开始正式 Loop。不得用更多传输微型实验替代这一终止判据。
 
 使用备课 fixture，至少执行两个完整的 `IDE 执行 → Evidence Packet → RR Lead 审查` 循环。验收标准未全部 `MET` 时不得返回 `ACHIEVED`。
 

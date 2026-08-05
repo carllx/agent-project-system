@@ -25,7 +25,7 @@ Resolve these paths relative to this `SKILL.md`:
 - `assets/evidence-packet.md`: verified execution evidence;
 - `assets/decision-request.md`: genuine user decision gate;
 - `assets/handoff.md`: continuity handoff;
-- `scripts/opencli_transport.py`: independent A2.1 preparation plus bounded send, identity recovery, deduplication, polling, and machine-readable state.
+- `scripts/opencli_transport.py`: integrated start-new-and-send, bounded identity recovery, deduplication, compatibility diagnostics, and machine-readable state.
 
 Filled Packets, receipts, transport records, and Handoffs are temporary by default. Keep transport state and raw command output in the system temporary directory, record their paths, exclude credentials and unnecessary private content, and clean them after the loop. Do not depend on an IDE-private scratch directory. Prefer stdin; use a safely created temporary file only when stdin is unsuitable.
 
@@ -136,31 +136,28 @@ A CLI timeout moves to `DELIVERY_UNKNOWN`, not automatically to `FAILED`. Recove
 
 ## Create, verify, then send
 
-Treat preparation and delivery as separate public operations:
+Use one formal operation for every new-conversation delivery:
 
 ```text
-prepare-new = A2.1: CREATE_NEW_CONVERSATION -> VERIFY_NEW_CONVERSATION -> PERSIST_RUNTIME_STATE -> STOP_WITHOUT_SEND
-send        = A2.2/A3: send a message only after the applicable target verification
+send --prepare-new = START_NEW_AND_SEND
+  -> PRE_SEND_HISTORY_BASELINE
+  -> CREATE_NEW_CONVERSATION
+  -> VERIFY_NEW_URL_AND_EMPTY_READ
+  -> SEND_ONCE
+  -> PARSE_ASK_IDENTITY
+  -> POST_SEND_STATUS
+  -> BOUNDED_RECOVERY_IF_NEEDED
 ```
 
-Run A2.1 with a fresh Runtime directory:
+Run it with a fresh Runtime and unique Message ID:
 
 ```powershell
-python <skill-dir>/scripts/opencli_transport.py prepare-new `
-  --runtime-dir <path> `
-  --work-item-id <id> `
-  --require-existing-conversation `
-  --max-external-commands 4 `
-  --max-experiment-seconds 60
+$packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
+  --work-item-id <id> --message-id <id-R0-CONTEXT> `
+  --round 0 --message-type CONTEXT_PACKET
 ```
 
-Use `--require-existing-conversation` for every formal A2.1 transition experiment. The wrapper first runs one read-only `status`. Only an exact ChatGPT `/c/<id>` URL satisfies the precondition. A ChatGPT root URL, `/new`, another host, or any malformed or non-exact Conversation path must produce `test_result=BLOCKED_BEFORE_EXECUTION` and `stop_reason=EXISTING_CONVERSATION_PRECONDITION_NOT_MET` before `new` or `read`. The experiment Agent must not open, search for, or otherwise manufacture an old Conversation to satisfy this condition. An operator performing ordinary blank-environment preparation may omit the flag; that preserves the compatible behavior of preparing and verifying a blank environment from the current page.
-
-After the precondition passes, `prepare-new` records the pre-operation URL and old Conversation ID, runs one `new`, verifies the final URL is the ChatGPT root or `/new` and is no longer the old `/c/<id>`, then runs one read-only `read`. A `/new` URL alone does not prove that the page has no messages. Make `prepare-new` and the `send` pre-send check call the same `classify_chatgpt_read_result` implementation. Treat an exact structured OpenCLI error code of `EMPTY_RESULT`, including its nonzero CLI exit, or an empty JSON object/array as successful empty-page evidence in both paths. Do not treat any other error code as empty. Recognized ChatGPT messages produce `READ_NOT_EMPTY`; unknown errors, unknown JSON structures, and unparseable output produce `READ_UNPARSEABLE`; all block before send with both send counters at zero.
-
-Persist `require_existing_conversation`, `precondition_checked`, `precondition_met`, `pre_operation_mode=EXISTING_CONVERSATION|ALREADY_NEW|UNKNOWN`, `pre_operation_url`, `pre_operation_conversation_id`, `new_command_called`, `conversation_transition_verified`, and `blank_environment_verified` in addition to `operation=PREPARE_NEW`, `message_send_count=0`, timestamps, counters, verification, read result, stop reason, and test result. When the pre-operation URL is already `/new`, report `ALREADY_NEW`, `conversation_transition_verified=false`, and only set `blank_environment_verified=true` after the read proves emptiness in non-strict ordinary preparation. Never describe that case as a verified transition from an old Conversation. `PREPARED_NEW_CONVERSATION` means only that the wrapper prepared and verified a blank environment; `BLOCKED_BEFORE_EXECUTION` means the required starting Conversation did not exist and no transition was attempted. Never let an experiment Agent override the wrapper's original result. `prepare-new` must never call `ask` or `send`, create a Message ID, or claim message delivery or A2.2 success.
-
-Enforce A2.1 budgets inside the wrapper: zero send attempts, zero recovery attempts, zero detail checks, at most four external commands, and at most sixty seconds from wrapper start through all commands and polling. On exhaustion, stop subsequent commands and persist `stop_reason=BUDGET_EXHAUSTED` with `test_result=BUDGET_EXHAUSTED`.
+Within the same Wrapper process, record the bounded history baseline before `new`; verify the resulting URL is ChatGPT root or `/new`; require the shared read classifier to return `EMPTY`; invoke `ask` once; parse JSON or strict flat YAML identity; and always check post-send status. Only when identity is absent, transport fails, or status conflicts may the same call perform one post-send history diff and at most one exact detail. Never use `ask --new`, never require the user to open `/new`, and never split creation and sending into separate formal experiments. The standalone `prepare-new` command remains only for backward-compatible diagnostics and is not a prerequisite or acceptance step.
 
 Use this transport flow:
 
@@ -174,14 +171,12 @@ PREPARE_MESSAGE
 -> PARSE_RR_REVIEW
 ```
 
-For a new Work Item, complete `prepare-new` (A2.1) independently before any A2.2/A3 delivery experiment. The `send` path remains the message-delivery operation and must not treat `PREPARED_NEW_CONVERSATION` as delivery evidence.
-
-If OpenCLI cannot verify the blank page, stop before sending with `BLOCKED`. The fallback is: the user manually opens a blank ChatGPT root URL, copies that exact URL, and the Loop Driver reruns with `--manual-new-url <url>`. In that path run `status -> exact URL match -> bounded history baseline -> read -> one ask`; never call `opencli chatgpt new`. A human assertion alone does not bypass verification. Persist `pre_send_already_new`, `new_command_called`, and `browser_navigation_occurred`; when the initial and verified URL are already `/new` and `new` was not called, keep navigation false rather than claiming successful navigation. Set `send_attempt_count=1` and `message_send_count=1` only at the actual underlying write-command invocation boundary after blank-page verification.
+If `new`, URL verification, or empty-read verification fails, stop before sending with `BLOCKED`; do not ask the user to repair Browser page state manually. Set `send_attempt_count=1` and `message_send_count=1` only at the actual underlying `ask` invocation boundary.
 
 Use the wrapper from the target project without copying it:
 
 ```powershell
-$packet | python <skill-dir>/scripts/opencli_transport.py send `
+$packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
   --work-item-id <id> --message-id <id-R0-CONTEXT> `
   --round 0 --message-type CONTEXT_PACKET
 
@@ -211,6 +206,8 @@ Keep each command wait short, impose a total response bound, and never use unlim
 ## Bound recovery and experiments
 
 Recovery saves a bounded pre-send history baseline, performs one send, reads post-send status, refreshes the same bounded history window once, computes IDs absent from the baseline, and performs at most one detail check against the strongest bounded target. Search only exact Work Item ID and Message ID, stop on the first hit, and retain no unrelated conversation body. Never scan all pre-send Conversations, enlarge the candidate limit, or poll repeatedly as a recovery substitute.
+
+Run only one final real end-to-end `send --prepare-new` experiment after local validation. If that experiment cannot return a clear Conversation ID and response within the existing finite budget, stop Transport iteration and mark OpenCLI 1.8.6 as currently unreliable for this route; do not create more A2.1/A2.2 micro-experiments or extend the Work Item through repeated patches.
 
 Every experimental Agent Prompt must state that the Agent must not modify the Skill or wrapper; reset Runtime and retry; resend the same Message ID; send unplanned hello/test probes; read unrelated Browser conversations; repair code; or turn the test into open-ended development. Any violation is `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`; stop immediately and do not use that run to pass A2 or A3.
 

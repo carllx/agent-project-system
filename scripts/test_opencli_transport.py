@@ -681,7 +681,7 @@ def legacy_result(
 
 def send_cli_command(
     root: Path, *, max_external_commands: int = 9, manual_new_url: str | None = None,
-    conversation: str | None = None,
+    conversation: str | None = None, prepare_new: bool = False,
 ) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
@@ -704,12 +704,15 @@ def send_cli_command(
         command.extend(["--manual-new-url", manual_new_url])
     if conversation:
         command.extend(["--conversation", conversation])
+    if prepare_new:
+        command.append("--prepare-new")
     return command
 
 
 def run_send_case(
     sequence: list[dict], *, max_external_commands: int = 9,
     manual_new_url: str | None = None, conversation: str | None = None,
+    prepare_new: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
@@ -727,7 +730,7 @@ def run_send_case(
     })
     command = send_cli_command(
         root, max_external_commands=max_external_commands, manual_new_url=manual_new_url,
-        conversation=conversation,
+        conversation=conversation, prepare_new=prepare_new,
     )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
@@ -783,6 +786,70 @@ def test_send_correct_new_conversation_regression() -> None:
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["send_attempt_count"] == 1
     assert state["message_send_count"] == 1
+
+
+def test_send_help_exposes_integrated_prepare_new() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(TRANSPORT), "send", "--help"],
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert completed.returncode == 0
+    assert "--prepare-new" in completed.stdout
+    assert "START_NEW_AND_SEND" in completed.stdout
+
+
+def test_start_new_and_send_completes_in_one_wrapper_call() -> None:
+    completed, state, calls, _, _ = run_send_case([
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        legacy_result([{
+            "conversationId": NEW_ID,
+            "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}",
+            "response": "ok",
+        }]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
+    verbs = [call[1] for call in calls]
+    assert completed.returncode == 0
+    assert verbs == ["history", "status", "new", "status", "read", "ask", "status"]
+    assert state["operation"] == "START_NEW_AND_SEND"
+    assert state["prepare_new"] is True
+    assert state["new_command_called"] is True
+    assert state["blank_environment_verified"] is True
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+    assert state["post_send_active_conversation_id"] == NEW_ID
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["post_send_history_called"] is False
+
+
+def test_start_new_and_send_uses_one_bounded_recovery_when_needed() -> None:
+    completed, state, calls, _, _ = run_send_case([
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        legacy_result([{"response": "completed without identity"}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        legacy_history(OLD_ID, NEW_ID),
+        legacy_detail(),
+    ], prepare_new=True)
+    verbs = [call[1] for call in calls]
+    assert completed.returncode == 0
+    assert verbs == [
+        "history", "status", "new", "status", "read", "ask", "status",
+        "history", "detail",
+    ]
+    assert verbs.count("ask") == 1
+    assert state["recovery_attempt_count"] == 1
+    assert state["detail_check_count"] == 1
+    assert state["post_send_history_called"] is True
+    assert state["new_candidate_diff"] == [NEW_ID]
+    assert state["delivery_state"] == "RESPONSE_READY"
 
 
 def test_ask_yaml_explicit_conversation_id_is_accepted() -> None:
@@ -1172,18 +1239,19 @@ def test_report_rejects_unknown_agent_trace_verification() -> None:
 
 def test_send_same_message_id_rejected_regression() -> None:
     completed, _, calls, command, env = run_send_case([
-        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
+        legacy_history(OLD_ID), legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
-    ])
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
     assert completed.returncode == 0
     repeated = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
     )
     assert repeated.returncode == 1
     assert "same-ID resend is forbidden" in repeated.stderr
-    assert len(calls) == 6
+    assert len(calls) == 7
 
 
 def test_send_external_budget_regression() -> None:
@@ -1239,6 +1307,9 @@ def main() -> int:
         test_prepare_never_calls_ask_or_send,
         test_external_command_budget_stops_before_next_command,
         test_send_correct_new_conversation_regression,
+        test_send_help_exposes_integrated_prepare_new,
+        test_start_new_and_send_completes_in_one_wrapper_call,
+        test_start_new_and_send_uses_one_bounded_recovery_when_needed,
         test_ask_yaml_explicit_conversation_id_is_accepted,
         test_ask_yaml_body_cannot_spoof_identity_or_ready_response,
         test_ask_identity_rejects_mismatch_and_non_chatgpt_url,
