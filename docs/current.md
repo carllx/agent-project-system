@@ -9,48 +9,42 @@
 
 ## Active Work Item
 
-- **ID:** `EXPERIMENT-EXECUTOR-SEMANTICS-016`
-- **Name:** 诊断 Antigravity 命令后台化与无意义等待
-- **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `008d94d053fdf43af47a3171d191ea05abfecd49`
-- **Current objective:** 确认 Shell 命令超过约五秒后的真实完成模式，并消除固定 300 秒 schedule 等无进程关联等待。
+- **ID:** `TRANSPORT-SEND-READ-COMPAT-024`
+- **Name:** 统一 send 与 prepare-new 的空页面解析
+- **Work Item state:** `IN_PROGRESS`
+- **Baseline commit:** `e42d21c13203f1162aad4681d32aed36c8bc09af`
+- **Current objective:** 让 `send` 与 `prepare-new` 共享真实 OpenCLI `EMPTY_RESULT` 解析逻辑，并修正 manual-new-url 的调用和副作用语义。
 
 ## Acceptance criteria
 
-- 根据实际工具事件区分 `MODEL_INITIATED`、`PLATFORM_REQUIRED`、`PLATFORM_AUTO_INSERTED` 和 `UNKNOWN`，不得用实验 Agent 自述替代事件证据。
-- 只用 2 秒与 7 秒无副作用本地探针；总命令内等待不超过 15 秒，不调用 OpenCLI、Browser 或 ChatGPT。
-- 前台命令最多等待 15 秒；后台结果读取必须绑定真实进程句柄、最多一次且最多 15 秒；没有句柄时不得等待。
-- 固定 schedule、timer 或空等属于 `IDLE_TIMER_WAIT` 并默认禁止；后台完成不得冒充同步完成。
-- schedule、立即终止、同步/后台模式、协议违规和 PASS 之间的矛盾必须触发 `REPORT_VALIDATION_FAILED`。
-- 纯本地测试覆盖本 Work Item 的十类场景且不破坏 Transport 既有回归；Skill 版本升至 `0.4.5`。
-- 完成本地 Commit（不 push）、Lab Skill 整包覆盖同步和逐文件核验；保留全部历史 Runtime，不运行真实 Browser 实验。
+- 只读取 `TRANSPORT-A2P2-023` 指定证据，不运行真实 Browser、不发送消息、不修改历史 Runtime。
+- `prepare-new` 与 `send` 调用同一个空页分类器；精确 `EMPTY_RESULT` 允许出现在 stderr 且允许非零退出码。
+- `send --manual-new-url` 使用首次 status 精确校验、有限 history、read 和单次 ask，不调用 `new`。
+- 非空、未知错误和不可解析输出保守阻塞且发送计数保持零；实际写命令调用时两个发送计数才同时为一。
+- Browser 副作用状态区分已在 `/new`、是否调用 `new` 和是否真的发生导航。
+- 版本升至 `0.4.6`，现有恢复、幂等、A2.1、A2.2/A3 回归全部通过。
+- 完成本地 Commit（不 push）、Lab Skill 整包同步和逐文件核验，历史 Runtime 保持不变。
 
 ## Confirmed facts
 
-- 源工作区在本项开始时干净；基线为 `008d94d053fdf43af47a3171d191ea05abfecd49`。
-- Lab `.runtime` 中不存在 `TRANSPORT-BROWSER-TARGET-015` 目录或其原始工具事件；仓库中也没有该 Work Item 的事件记录。现有证据只能确认用户提供的 `SCHEDULE_CALL_COUNT=1`，不能证明是谁发起 schedule，因此根因分类为 `D. UNKNOWN`。
-- 2 秒探针输出 `PROBE_2S_DONE` 并由 Shell 前台返回完整 `exit code=0/stdout/stderr`；工具记录的 Shell wall time 为 8.3 秒（包含调用开销），未返回后台进程句柄，schedule 调用为零。
-- 7 秒探针在 15 秒 Shell 前台上限内输出 `PROBE_7S_DONE` 并返回 `exit code=0`；外层执行通道约 10 秒后让出一个 `exec cell ID`，一次与该 cell 绑定的读取取得最终结果，Shell wall time 为 12.9 秒。该 cell 不是 Shell 后台进程句柄，且没有调用 schedule。
-- 当前 Codex 工具事件证明本机 Shell 可用 15 秒前台上限完成七秒命令，但不能外推为 Antigravity 的前台阈值；`ANTIGRAVITY_FOREGROUND_THRESHOLD` 仍为 `UNKNOWN`。
-- 修改前的确定性协议只把直接出现 `exit code/stdout/stderr` 视为同步结果，没有 `BACKGROUND_PROCESS_COMPLETION`、句柄绑定读取、一次/15 秒边界或报告矛盾验证，因此需要 Skill 与执行协议适配。
-- 同步前 Lab Runtime 为 29 个文件；以相对路径和逐文件 SHA-256 组成的规范清单哈希为 `4f43640e7ee27bafe0b24aeef3ba09cbb3f8030ab9711db94e131057dbd32e0e`。
+- 指定 `raw/04-read-new.json` 的 `returncode=66`、stdout 为空，stderr 是 OpenCLI error envelope 且错误码精确为 `EMPTY_RESULT`；原始分类为 `A. EXACT_EMPTY_RESULT`。
+- 修改前 `prepare-new` 调用 `classify_read_result`，该函数能读取 stderr 的精确错误码；`send` 另用 `timed_out/returncode/result_rows(stdout)` 条件，仍要求退出码为零并未读取 stderr envelope。
+- 真实 A2.2 因上述分叉在发送前错误停止；原 Runtime 的 `send_attempt_count=0`，且没有调用底层发送命令。
+- 指定 Runtime 的六个文件已记录同步前逐文件路径、字节与 SHA-256；本轮不读取其他 Runtime。
 
 ## In progress
 
-- None.
+- 已实现共享 `classify_chatgpt_read_result`、manual-new-url 有界序列、发送计数调用边界和 Browser 副作用字段。
+- 已加入真实 A2.2 `EMPTY_RESULT + exit 66` 脱敏精确结构 fixture 与 send 回归。
+- 待完成全部治理/包/Skill Creator 校验、本地提交、Lab 整包同步与最终哈希核验。
 
 ## Completed
 
-- 已实现 `SYNCHRONOUS_COMPLETION`、`BACKGROUND_PROCESS_COMPLETION`、`IDLE_TIMER_WAIT`、一次有界后台结果读取和报告不变量判定；45 项纯本地 Transport 测试全部通过。
-- 已通过文档治理、0.4.5 包检查、Skill Creator UTF-8 `quick_validate.py` 和 whitespace 检查。
-- 已创建本地实现 Commit `f5b451a62c19e33bf6e32b78a5c5521c9fe1a5d1`，未 push。
-- 已从权威源包逐项覆盖同步到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`。整目录清空尝试被本机策略拒绝且未发生删除；因源/Lab 最终均严格为同一 8 文件路径集合、逐文件字节差异为零，不存在旧包文件残留。
-- 已核验源/Lab 版本均为 `0.4.5`、文件数均为 8、相对路径差异为 0、逐文件字节差异为 0，规范包哈希均为 `c4cb03ca1ffe0b062eb746ecd0e877a47ce346a54a8b82ef2c9fafda83f3ac96`。
-- 已核验 Lab 的 29 个历史 Runtime 文件同步前后规范哈希均为 `4f43640e7ee27bafe0b24aeef3ba09cbb3f8030ab9711db94e131057dbd32e0e`，路径与内容未改变。
+- 50 项纯本地 Transport 测试首轮全部通过；原 45 项与新增 5 项均通过。
 
 ## Blockers
 
-- None. Antigravity 原始工具事件仍缺失，因此历史 schedule 的责任来源保持 `UNKNOWN`；保守执行策略不依赖该归因。
+- None.
 
 ## Decisions pending
 
@@ -58,7 +52,7 @@
 
 ## Next action
 
-- 若要把根因从 `UNKNOWN` 提升为 A、B 或 C，下一轮必须保存 Antigravity 的原始模型工具调用事件、平台事件和返回句柄；在此之前不得运行预计超过前台阈值且无句柄保障的正式实验命令。
+- 运行完整校验，审查 Diff，创建本地实现 Commit；随后整包同步到 Lab 并核验源/Lab 与指定 Runtime。
 
 ## Files to read
 
@@ -67,25 +61,20 @@
 - `docs/index.md`
 - `docs/specs/research-review-loop.md`
 - `skills/research-review-lead/SKILL.md`
-- `skills/research-review-lead/assets/rr-lead-init.md`
 - `skills/research-review-lead/scripts/opencli_transport.py`
 - `scripts/test_opencli_transport.py`
 
 ## Last validation
 
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 45 pure-local scenarios, including the ten executor-semantics requirements and all existing Transport regressions.
+- **Result:** Passed 50 pure-local scenarios, including all prior 45 scenarios and five send/read compatibility regressions.
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed for version `0.4.5` and the exact eight-file package.
+- **Result:** Passed for version `0.4.6` and the exact eight-file package.
 - **Command:** `PYTHONUTF8=1` Skill Creator `quick_validate.py skills/research-review-lead`
 - **Result:** Passed.
 - **Command:** `git diff --check`
 - **Result:** Passed; only Git line-ending conversion warnings were emitted.
-- **Command:** source/Lab relative-path manifest, per-file SHA-256 comparison, and canonical package hash
-- **Result:** Source/Lab versions are `0.4.5`; both contain 8 files; path diff and byte diff are zero; both canonical hashes are `c4cb03ca1ffe0b062eb746ecd0e877a47ce346a54a8b82ef2c9fafda83f3ac96`.
-- **Command:** Lab `.runtime` canonical path-and-byte hash before and after package replacement
-- **Result:** 29 Runtime files remained; before and after hashes are both `4f43640e7ee27bafe0b24aeef3ba09cbb3f8030ab9711db94e131057dbd32e0e`.
-- **Scope:** 仅使用合成协议轨迹、假 OpenCLI 和两个本地 sleep 探针；未运行 OpenCLI、真实 Browser 实验或发送消息。
+- **Scope:** 仅使用指定 Runtime 的脱敏 fixture 与假 OpenCLI；未运行 OpenCLI、真实 Browser 实验或发送消息。
 - **Last verified:** 2026-08-05

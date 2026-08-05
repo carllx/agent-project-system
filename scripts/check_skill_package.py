@@ -235,6 +235,11 @@ def main() -> int:
             "test_unauthorized_sleep_is_protocol_violation",
             "test_poll_requires_authorized_running_job",
             "test_all_experiment_actions_are_counted",
+            "test_prepare_and_send_use_one_shared_read_classifier",
+            "test_send_manual_real_empty_result_sends_once_without_new",
+            "test_send_manual_existing_messages_block_without_send",
+            "test_send_manual_unknown_error_blocks_without_send",
+            "test_send_manual_unparseable_output_blocks_without_send",
         ):
             if scenario not in test_text:
                 errors.append(f"transport synthetic test is missing scenario: {scenario}")

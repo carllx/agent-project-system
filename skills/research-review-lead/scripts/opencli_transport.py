@@ -19,7 +19,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 
@@ -430,7 +430,7 @@ def contains_chat_message(value: Any) -> bool:
     )
 
 
-def classify_read_result(result: dict[str, Any]) -> str:
+def classify_chatgpt_read_result(result: dict[str, Any]) -> str:
     """Return EMPTY, NON_EMPTY, or UNPARSEABLE without guessing at UI data."""
     if result["timed_out"]:
         return "UNPARSEABLE"
@@ -504,7 +504,14 @@ def stop(state: dict[str, Any], reason: str, work_item_state: str = "BLOCKED") -
     state["stop_reason"] = reason
 
 
-def command(state: dict[str, Any], state_path: Path, label: str, args: list[str], timeout: int) -> dict[str, Any] | None:
+def command(
+    state: dict[str, Any],
+    state_path: Path,
+    label: str,
+    args: list[str],
+    timeout: int,
+    before_invoke: Callable[[], None] | None = None,
+) -> dict[str, Any] | None:
     if state["external_command_count"] >= state["parameters"]["max_external_commands"]:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXTERNAL_COMMANDS")
         return None
@@ -513,6 +520,8 @@ def command(state: dict[str, Any], state_path: Path, label: str, args: list[str]
     if elapsed >= state["parameters"]["max_experiment_seconds"]:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXPERIMENT_SECONDS")
         return None
+    if before_invoke:
+        before_invoke()
     state["external_command_count"] += 1
     result = run_opencli(args, min(timeout, max(1, int(state["parameters"]["max_experiment_seconds"] - elapsed))))
     save_raw(state, state_path, label, result)
@@ -754,7 +763,7 @@ def prepare_new_command(args: argparse.Namespace) -> int:
             ["chatgpt", "read", "-f", "json", "--window", "background"],
         )
     if read is not None:
-        classification = classify_read_result(read)
+        classification = classify_chatgpt_read_result(read)
         if classification == "EMPTY":
             state["read_result"] = "EMPTY"
             state["verification_result"] = "NEW_BLANK_CONVERSATION_VERIFIED"
@@ -793,14 +802,18 @@ def read_payload(args: argparse.Namespace) -> str:
 
 def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 2, "work_item_id": args.work_item_id, "message_id": args.message_id,
+        "schema_version": 3, "work_item_id": args.work_item_id, "message_id": args.message_id,
         "round": args.round, "message_type": args.message_type,
         "expected_conversation_mode": "EXISTING" if args.conversation else "NEW",
         "pre_send_active_conversation_id": None, "verified_target_conversation_id": args.conversation,
         "actual_delivery_conversation_id": None, "verified_target_url": None,
         "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
-        "send_attempt_count": 0, "recovery_attempt_count": 0, "detail_check_count": 0,
+        "send_attempt_count": 0, "message_send_count": 0,
+        "recovery_attempt_count": 0, "detail_check_count": 0,
         "external_command_count": 0, "misroute_detected": False,
+        "read_result": "NOT_RUN", "blank_environment_verified": False,
+        "pre_send_already_new": False, "new_command_called": False,
+        "browser_navigation_occurred": False,
         "official_response_eligible": False, "started_at": utc_now(), "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
@@ -889,30 +902,44 @@ def recover_delivery(state: dict[str, Any], state_path: Path, returned_identity:
     return False
 
 
-def verify_new_conversation(state: dict[str, Any], state_path: Path, manual_url: str | None) -> bool:
-    set_state(state, "CREATING_CONVERSATION", "create a blank conversation without sending")
-    if not manual_url:
+def verify_new_conversation(
+    state: dict[str, Any],
+    state_path: Path,
+    manual_url: str | None,
+    pre_send_url: str | None,
+) -> bool:
+    url = pre_send_url
+    if manual_url:
+        set_state(state, "VERIFYING_CONVERSATION", "verify the already-open manual URL and blank page")
+    else:
+        set_state(state, "CREATING_CONVERSATION", "create a blank conversation without sending")
+        before_new_count = state["external_command_count"]
         created = command(state, state_path, "new", ["chatgpt", "new", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+        state["new_command_called"] = state["external_command_count"] > before_new_count
         if not result_rows(created):
             stop(state, "CREATE_NEW_CONVERSATION_UNVERIFIED: use a manually opened blank ChatGPT URL")
             return False
-    set_state(state, "VERIFYING_CONVERSATION", "verify URL changed and blank page has no messages")
-    status = command(state, state_path, "status-new", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
-    if status is None:
-        return False
-    url = status_url(status)
-    if manual_url and url != manual_url:
-        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: current URL does not match manual blank URL")
-        return False
+        set_state(state, "VERIFYING_CONVERSATION", "verify URL changed and blank page has no messages")
+        status = command(state, state_path, "status-new", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+        if status is None:
+            return False
+        url = status_url(status)
+        state["browser_navigation_occurred"] = bool(url and pre_send_url and url != pre_send_url)
     if not blank_new_url(url, state["pre_send_active_conversation_id"]):
         stop(state, "VERIFY_NEW_CONVERSATION_FAILED: still on an old /c/<id> page or URL is not a blank ChatGPT page")
         return False
     read_result = command(state, state_path, "read-new", ["chatgpt", "read", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
     if read_result is None:
         return False
-    if read_result is None or read_result["timed_out"] or read_result["returncode"] != 0 or result_rows(read_result):
-        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: blank-page read was not empty and reliable")
+    classification = classify_chatgpt_read_result(read_result)
+    state["read_result"] = classification
+    if classification == "NON_EMPTY":
+        stop(state, "READ_NOT_EMPTY")
         return False
+    if classification != "EMPTY":
+        stop(state, "READ_UNPARSEABLE")
+        return False
+    state["blank_environment_verified"] = True
     state["verified_target_url"] = url
     return True
 
@@ -954,6 +981,11 @@ def send_command(args: argparse.Namespace) -> int:
     pre_status = command(state, state_path, "status-before-send", ["chatgpt", "status", "-f", "json", "--window", "background"], args.command_wait_seconds)
     pre_url = status_url(pre_status)
     state["pre_send_active_conversation_id"] = conversation_id_from_url(pre_url or "")
+    state["pre_send_already_new"] = blank_new_url(pre_url, None)
+    if args.manual_new_url and pre_url != args.manual_new_url:
+        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: current URL does not match manual blank URL")
+        write_json(state_path, state)
+        return output_state(state)
     pre_rows = history(state, state_path)
     state["pre_send_recent_conversation_ids"] = [identity for row in pre_rows if (identity := conversation_identity(row)[0])]
     write_json(state_path, state)
@@ -964,7 +996,7 @@ def send_command(args: argparse.Namespace) -> int:
             return output_state(state)
         target = ["--conversation", args.conversation]
     else:
-        if not verify_new_conversation(state, state_path, args.manual_new_url):
+        if not verify_new_conversation(state, state_path, args.manual_new_url, pre_url):
             write_json(state_path, state)
             return output_state(state)
         target = []
@@ -972,12 +1004,23 @@ def send_command(args: argparse.Namespace) -> int:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_SEND_ATTEMPTS_PER_MESSAGE")
         write_json(state_path, state)
         return output_state(state)
-    state["send_attempt_count"] += 1
     set_state(state, "SENDING", "single ask on verified target")
-    # Persist the one permitted send attempt before invoking the write command.
-    # A process crash during ask must still make a same-ID retry impossible.
     write_json(state_path, state)
-    result = command(state, state_path, "ask", ["chatgpt", "ask", payload, *target, "--timeout", str(args.command_wait_seconds), "-f", "json", "--window", "background"], args.command_wait_seconds + 5)
+    def mark_send_invoked() -> None:
+        # Persist the one permitted write at the actual invocation boundary.
+        # A process crash during ask must still make a same-ID retry impossible.
+        state["send_attempt_count"] = 1
+        state["message_send_count"] = 1
+        write_json(state_path, state)
+
+    result = command(
+        state,
+        state_path,
+        "ask",
+        ["chatgpt", "ask", payload, *target, "--timeout", str(args.command_wait_seconds), "-f", "json", "--window", "background"],
+        args.command_wait_seconds + 5,
+        before_invoke=mark_send_invoked,
+    )
     if result is None:
         write_json(state_path, state)
         return output_state(state)

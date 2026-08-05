@@ -1,0 +1,8 @@
+{
+  "finished_at": "2026-08-05T14:18:07+00:00",
+  "returncode": 66,
+  "started_at": "2026-08-05T14:18:05+00:00",
+  "stderr": "ok: false\nerror:\n  code: EMPTY_RESULT\n  message: chatgpt read returned no data\n  help: No visible ChatGPT messages were found in the current conversation.\n  exitCode: 66\n# AutoFix: re-run with --trace=retain-on-failure for trace artifact\n# opencli chatgpt read --trace retain-on-failure\n",
+  "stdout": "",
+  "timed_out": false
+}

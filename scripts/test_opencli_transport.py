@@ -14,6 +14,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "skills" / "research-review-lead" / "scripts" / "opencli_transport.py"
 REAL_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p1-read-empty-result.json"
+REAL_A2P2_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p2-read-empty-result.json"
 sys.dont_write_bytecode = True
 OLD_ID = "old-conversation"
 WORK_ITEM = "SYNTHETIC-A2P1-001"
@@ -650,10 +651,12 @@ def legacy_result(
     }
 
 
-def send_cli_command(root: Path, *, max_external_commands: int = 8) -> list[str]:
+def send_cli_command(
+    root: Path, *, max_external_commands: int = 8, manual_new_url: str | None = None
+) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
-    return [
+    command = [
         sys.executable, str(TRANSPORT), "send",
         "--work-item-id", LEGACY_WORK_ITEM,
         "--message-id", LEGACY_MESSAGE_ID,
@@ -668,10 +671,14 @@ def send_cli_command(root: Path, *, max_external_commands: int = 8) -> list[str]
         "--max-experiment-seconds", "60",
         "--recent-candidate-limit", "3",
     ]
+    if manual_new_url:
+        command.extend(["--manual-new-url", manual_new_url])
+    return command
 
 
 def run_send_case(
-    sequence: list[dict], *, max_external_commands: int = 8
+    sequence: list[dict], *, max_external_commands: int = 8,
+    manual_new_url: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
@@ -687,7 +694,9 @@ def run_send_case(
         "OPENCLI_FAKE_COUNTER": str(counter),
         "OPENCLI_FAKE_LOG": str(log),
     })
-    command = send_cli_command(root, max_external_commands=max_external_commands)
+    command = send_cli_command(
+        root, max_external_commands=max_external_commands, manual_new_url=manual_new_url
+    )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
     )
@@ -722,6 +731,72 @@ def test_send_correct_new_conversation_regression() -> None:
     assert completed.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+
+
+def test_prepare_and_send_use_one_shared_read_classifier() -> None:
+    source = TRANSPORT.read_text(encoding="utf-8")
+    assert "def classify_chatgpt_read_result(" in source
+    assert source.count("classification = classify_chatgpt_read_result(") == 2
+    real_read = json.loads(REAL_A2P2_EMPTY_RESULT_FIXTURE.read_text(encoding="utf-8"))
+    assert TRANSPORT_MODULE.classify_chatgpt_read_result(real_read) == "EMPTY"
+
+
+def run_manual_read_case(read: dict) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+    manual_url = "https://chatgpt.com/new"
+    completed, state, calls, _, _ = run_send_case([
+        legacy_status(manual_url), legacy_history(), read,
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
+    ], manual_new_url=manual_url)
+    return completed, state, calls
+
+
+def test_send_manual_real_empty_result_sends_once_without_new() -> None:
+    real_read = json.loads(REAL_A2P2_EMPTY_RESULT_FIXTURE.read_text(encoding="utf-8"))
+    completed, state, calls = run_manual_read_case(real_read)
+    verbs = [call[1] for call in calls]
+    assert completed.returncode == 0
+    assert verbs == ["status", "history", "read", "ask"]
+    assert "new" not in verbs
+    assert verbs.count("ask") == 1
+    assert state["new_command_called"] is False
+    assert state["pre_send_already_new"] is True
+    assert state["browser_navigation_occurred"] is False
+    assert state["read_result"] == "EMPTY"
+    assert state["blank_environment_verified"] is True
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+
+
+def assert_manual_read_blocks(read: dict, expected_result: str, expected_reason: str) -> None:
+    completed, state, calls = run_manual_read_case(read)
+    verbs = [call[1] for call in calls]
+    assert completed.returncode == 2
+    assert state["read_result"] == expected_result
+    assert state["stop_reason"] == expected_reason
+    assert state["send_attempt_count"] == 0
+    assert state["message_send_count"] == 0
+    assert "ask" not in verbs and "new" not in verbs
+
+
+def test_send_manual_existing_messages_block_without_send() -> None:
+    assert_manual_read_blocks(
+        legacy_result([{"Role": "assistant", "Text": "existing"}]),
+        "NON_EMPTY", "READ_NOT_EMPTY",
+    )
+
+
+def test_send_manual_unknown_error_blocks_without_send() -> None:
+    assert_manual_read_blocks(
+        legacy_result("", returncode=66, stderr="ok: false\nerror:\n  code: SELECTOR_FAILED\n"),
+        "UNPARSEABLE", "READ_UNPARSEABLE",
+    )
+
+
+def test_send_manual_unparseable_output_blocks_without_send() -> None:
+    assert_manual_read_blocks(
+        legacy_result("not-json"), "UNPARSEABLE", "READ_UNPARSEABLE"
+    )
 
 
 def test_send_timeout_recovery_regression() -> None:
@@ -819,6 +894,11 @@ def main() -> int:
         test_prepare_never_calls_ask_or_send,
         test_external_command_budget_stops_before_next_command,
         test_send_correct_new_conversation_regression,
+        test_prepare_and_send_use_one_shared_read_classifier,
+        test_send_manual_real_empty_result_sends_once_without_new,
+        test_send_manual_existing_messages_block_without_send,
+        test_send_manual_unknown_error_blocks_without_send,
+        test_send_manual_unparseable_output_blocks_without_send,
         test_send_timeout_recovery_regression,
         test_send_misroute_regression,
         test_send_same_message_id_rejected_regression,
