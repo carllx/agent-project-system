@@ -11,7 +11,7 @@
 
 - **ID:** `EXPERIMENT-EXECUTOR-SEMANTICS-016`
 - **Name:** 诊断 Antigravity 命令后台化与无意义等待
-- **Work Item state:** `IN_PROGRESS`
+- **Work Item state:** `ACHIEVED`
 - **Baseline commit:** `008d94d053fdf43af47a3171d191ea05abfecd49`
 - **Current objective:** 确认 Shell 命令超过约五秒后的真实完成模式，并消除固定 300 秒 schedule 等无进程关联等待。
 
@@ -37,12 +37,20 @@
 
 ## In progress
 
-- 已实现 `SYNCHRONOUS_COMPLETION`、`BACKGROUND_PROCESS_COMPLETION`、`IDLE_TIMER_WAIT`、一次有界后台结果读取和报告不变量判定；首轮 45 项纯本地 Transport 测试通过。
-- 待运行完整验证、创建本地提交、整包同步 Lab 并核验 Runtime 前后不变。
+- None.
+
+## Completed
+
+- 已实现 `SYNCHRONOUS_COMPLETION`、`BACKGROUND_PROCESS_COMPLETION`、`IDLE_TIMER_WAIT`、一次有界后台结果读取和报告不变量判定；45 项纯本地 Transport 测试全部通过。
+- 已通过文档治理、0.4.5 包检查、Skill Creator UTF-8 `quick_validate.py` 和 whitespace 检查。
+- 已创建本地实现 Commit `f5b451a62c19e33bf6e32b78a5c5521c9fe1a5d1`，未 push。
+- 已从权威源包逐项覆盖同步到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`。整目录清空尝试被本机策略拒绝且未发生删除；因源/Lab 最终均严格为同一 8 文件路径集合、逐文件字节差异为零，不存在旧包文件残留。
+- 已核验源/Lab 版本均为 `0.4.5`、文件数均为 8、相对路径差异为 0、逐文件字节差异为 0，规范包哈希均为 `c4cb03ca1ffe0b062eb746ecd0e877a47ce346a54a8b82ef2c9fafda83f3ac96`。
+- 已核验 Lab 的 29 个历史 Runtime 文件同步前后规范哈希均为 `4f43640e7ee27bafe0b24aeef3ba09cbb3f8030ab9711db94e131057dbd32e0e`，路径与内容未改变。
 
 ## Blockers
 
-- Antigravity 原始工具事件缺失，因此无法把历史 schedule 的责任来源从 `UNKNOWN` 提升为 A、B 或 C。此证据缺口不阻塞保守协议修正。
+- None. Antigravity 原始工具事件仍缺失，因此历史 schedule 的责任来源保持 `UNKNOWN`；保守执行策略不依赖该归因。
 
 ## Decisions pending
 
@@ -50,7 +58,7 @@
 
 ## Next action
 
-- 完整验证 0.4.5 源包，创建本地提交，然后整包同步 Lab 并核验包和 Runtime 哈希。
+- 若要把根因从 `UNKNOWN` 提升为 A、B 或 C，下一轮必须保存 Antigravity 的原始模型工具调用事件、平台事件和返回句柄；在此之前不得运行预计超过前台阈值且无句柄保障的正式实验命令。
 
 ## Files to read
 
@@ -67,5 +75,17 @@
 
 - **Command:** `python scripts/test_opencli_transport.py`
 - **Result:** Passed 45 pure-local scenarios, including the ten executor-semantics requirements and all existing Transport regressions.
+- **Command:** `python scripts/check_docs.py`
+- **Result:** Passed; 14 registered Markdown files.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed for version `0.4.5` and the exact eight-file package.
+- **Command:** `PYTHONUTF8=1` Skill Creator `quick_validate.py skills/research-review-lead`
+- **Result:** Passed.
+- **Command:** `git diff --check`
+- **Result:** Passed; only Git line-ending conversion warnings were emitted.
+- **Command:** source/Lab relative-path manifest, per-file SHA-256 comparison, and canonical package hash
+- **Result:** Source/Lab versions are `0.4.5`; both contain 8 files; path diff and byte diff are zero; both canonical hashes are `c4cb03ca1ffe0b062eb746ecd0e877a47ce346a54a8b82ef2c9fafda83f3ac96`.
+- **Command:** Lab `.runtime` canonical path-and-byte hash before and after package replacement
+- **Result:** 29 Runtime files remained; before and after hashes are both `4f43640e7ee27bafe0b24aeef3ba09cbb3f8030ab9711db94e131057dbd32e0e`.
 - **Scope:** 仅使用合成协议轨迹、假 OpenCLI 和两个本地 sleep 探针；未运行 OpenCLI、真实 Browser 实验或发送消息。
 - **Last verified:** 2026-08-05
