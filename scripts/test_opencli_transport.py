@@ -178,7 +178,9 @@ def test_runtime_contains_required_a2p1_fields() -> None:
         "external_command_count", "started_at", "stopped_at",
         "elapsed_seconds", "stop_reason", "test_result",
         "placeholder_validation_performed", "unresolved_placeholders",
-        "schedule_call_count", "idle_wait_seconds", "poll_attempt_count",
+        "wrapper_schedule_call_count", "agent_schedule_call_count",
+        "total_schedule_call_count", "agent_bound_result_retrieval_count",
+        "agent_tool_trace_verification", "idle_wait_seconds", "poll_attempt_count",
         "background_result_check_count", "background_wait_seconds",
         "background_process_handle_support", "supported_wait_or_result_method",
         "completion_mode", "test_protocol_violation", "report_validation",
@@ -192,7 +194,10 @@ def test_runtime_contains_required_a2p1_fields() -> None:
     assert state["parameters"]["max_detail_checks"] == 0
     assert state["placeholder_validation_performed"] is True
     assert state["unresolved_placeholders"] == []
-    assert state["schedule_call_count"] == 0
+    assert state["wrapper_schedule_call_count"] == 0
+    assert state["agent_schedule_call_count"] is None
+    assert state["total_schedule_call_count"] is None
+    assert state["agent_tool_trace_verification"] == "UNAVAILABLE"
     assert state["idle_wait_seconds"] == 0
     assert state["poll_attempt_count"] == 0
     assert state["synchronous_command_completed"] is True
@@ -210,6 +215,22 @@ def protocol_report(
     return TRANSPORT_MODULE.assess_experiment_protocol(
         {"EXPECTED_CONVERSATION_URL": value}, events or [], **overrides
     )
+
+
+def validate_report(overrides: dict[str, object]) -> dict:
+    report: dict[str, object] = {
+        "WRAPPER_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_SCHEDULE_CALL_COUNT": 0,
+        "TOTAL_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_TOOL_TRACE_VERIFICATION": "VERIFIED",
+        "AGENT_BOUND_RESULT_RETRIEVAL_COUNT": 0,
+        "EXPERIMENT_ACCEPTANCE": "NOT_MET",
+        "IDLE_WAIT_SECONDS": 0,
+        "TEST_PROTOCOL_VIOLATION": False,
+        "TEST_RESULT": "BLOCKED",
+    }
+    report.update(overrides)
+    return TRANSPORT_MODULE.validate_experiment_report(report)
 
 
 def synchronous_status_event() -> dict[str, object]:
@@ -389,8 +410,9 @@ def test_background_completion_is_not_synchronous_completion() -> None:
 
 
 def test_schedule_call_cannot_report_zero_wait() -> None:
-    report = TRANSPORT_MODULE.validate_experiment_report({
-        "SCHEDULE_CALL_COUNT": 1,
+    report = validate_report({
+        "AGENT_SCHEDULE_CALL_COUNT": 1,
+        "TOTAL_SCHEDULE_CALL_COUNT": 1,
         "IDLE_WAIT_SECONDS": 0,
         "TERMINATED_IMMEDIATELY_AFTER_RESULT": False,
         "TEST_PROTOCOL_VIOLATION": True,
@@ -401,8 +423,9 @@ def test_schedule_call_cannot_report_zero_wait() -> None:
 
 
 def test_protocol_violation_cannot_return_pass() -> None:
-    report = TRANSPORT_MODULE.validate_experiment_report({
-        "SCHEDULE_CALL_COUNT": 0,
+    report = validate_report({
+        "AGENT_SCHEDULE_CALL_COUNT": 0,
+        "TOTAL_SCHEDULE_CALL_COUNT": 0,
         "IDLE_WAIT_SECONDS": 0,
         "TERMINATED_IMMEDIATELY_AFTER_RESULT": False,
         "TEST_PROTOCOL_VIOLATION": True,
@@ -413,8 +436,9 @@ def test_protocol_violation_cannot_return_pass() -> None:
 
 
 def test_contradictory_report_fails_validation() -> None:
-    report = TRANSPORT_MODULE.validate_experiment_report({
-        "SCHEDULE_CALL_COUNT": 1,
+    report = validate_report({
+        "AGENT_SCHEDULE_CALL_COUNT": 1,
+        "TOTAL_SCHEDULE_CALL_COUNT": 1,
         "IDLE_WAIT_SECONDS": 300,
         "TERMINATED_IMMEDIATELY_AFTER_RESULT": True,
         "SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN": False,
@@ -425,7 +449,11 @@ def test_contradictory_report_fails_validation() -> None:
         "TEST_RESULT": "PASS",
     })
     assert report["PROTOCOL_RESULT"] == "REPORT_VALIDATION_FAILED"
-    assert len(report["REPORT_VALIDATION_ERRORS"]) == 2
+    assert set(report["REPORT_VALIDATION_ERRORS"]) == {
+        "AGENT_SCHEDULE_REQUIRES_PROTOCOL_VIOLATION",
+        "SCHEDULE_CONTRADICTS_IMMEDIATE_TERMINATION",
+        "NONSYNCHRONOUS_COMPLETION_HAS_NO_BACKGROUND_PROCESS",
+    }
 
 
 def test_unauthorized_sleep_is_protocol_violation() -> None:
@@ -652,7 +680,8 @@ def legacy_result(
 
 
 def send_cli_command(
-    root: Path, *, max_external_commands: int = 8, manual_new_url: str | None = None
+    root: Path, *, max_external_commands: int = 9, manual_new_url: str | None = None,
+    conversation: str | None = None,
 ) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
@@ -673,12 +702,14 @@ def send_cli_command(
     ]
     if manual_new_url:
         command.extend(["--manual-new-url", manual_new_url])
+    if conversation:
+        command.extend(["--conversation", conversation])
     return command
 
 
 def run_send_case(
-    sequence: list[dict], *, max_external_commands: int = 8,
-    manual_new_url: str | None = None,
+    sequence: list[dict], *, max_external_commands: int = 9,
+    manual_new_url: str | None = None, conversation: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
@@ -695,7 +726,8 @@ def run_send_case(
         "OPENCLI_FAKE_LOG": str(log),
     })
     command = send_cli_command(
-        root, max_external_commands=max_external_commands, manual_new_url=manual_new_url
+        root, max_external_commands=max_external_commands, manual_new_url=manual_new_url,
+        conversation=conversation,
     )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
@@ -710,8 +742,12 @@ def legacy_status(url: str) -> dict:
     return legacy_result([{"Status": "Connected", "Login": "Yes", "Url": url}])
 
 
-def legacy_history() -> dict:
-    return legacy_result([{"Id": OLD_ID, "Title": "pre-existing", "Url": f"https://chatgpt.com/c/{OLD_ID}"}])
+def legacy_history(*identities: str) -> dict:
+    selected = identities or (OLD_ID,)
+    return legacy_result([
+        {"Id": identity, "Title": "candidate", "Url": f"https://chatgpt.com/c/{identity}"}
+        for identity in selected
+    ])
 
 
 def legacy_detail(ready: bool = True) -> dict:
@@ -719,6 +755,21 @@ def legacy_detail(ready: bool = True) -> dict:
     if ready:
         messages.append({"Role": "assistant", "Text": "synthetic response", "Generating": False, "StableSeconds": 3})
     return legacy_result(messages)
+
+
+def recovery_sequence(
+    *, ask: dict | None = None, post_url: str = "https://chatgpt.com/",
+    post_history: dict | None = None, detail_result: dict | None = None,
+) -> list[dict]:
+    return [
+        legacy_status("https://chatgpt.com/new"),
+        legacy_history(OLD_ID),
+        legacy_result([]),
+        ask or legacy_result([{"response": "completed without identity"}]),
+        legacy_status(post_url),
+        post_history or legacy_history(OLD_ID, NEW_ID),
+        detail_result or legacy_detail(),
+    ]
 
 
 def test_send_correct_new_conversation_regression() -> None:
@@ -732,6 +783,203 @@ def test_send_correct_new_conversation_regression() -> None:
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["send_attempt_count"] == 1
     assert state["message_send_count"] == 1
+
+
+def test_ask_yaml_explicit_conversation_id_is_accepted() -> None:
+    yaml_stdout = (
+        f"- conversationId: {NEW_ID}\n"
+        f"  conversationUrl: https://chatgpt.com/c/{NEW_ID}\n"
+        "  tool: ''\n"
+        "  response: 'ok'\n"
+    )
+    completed, state, calls, _, _ = run_send_case([
+        legacy_status("https://chatgpt.com/new"), legacy_history(OLD_ID),
+        legacy_result([]), legacy_result(yaml_stdout),
+    ], manual_new_url="https://chatgpt.com/new")
+    assert completed.returncode == 0
+    assert state["ask_reported_conversation_id"] == NEW_ID
+    assert state["ask_reported_url"] == f"https://chatgpt.com/c/{NEW_ID}"
+    assert state["ask_delivery_classification"] == "A. ASK_CONFIRMED_DELIVERY_WITH_ID"
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["post_send_history_called"] is False
+    assert [call[1] for call in calls] == ["status", "history", "read", "ask"]
+
+
+def test_ask_yaml_body_cannot_spoof_identity_or_ready_response() -> None:
+    spoofed = legacy_result(
+        "- conversationId: ''\n"
+        "  conversationUrl: ''\n"
+        "  tool: ''\n"
+        "  response: |-\n"
+        "    conversationId: spoofed-old-id\n"
+        "    conversationUrl: https://chatgpt.com/c/spoofed-old-id\n"
+    )
+    identity, url = TRANSPORT_MODULE.ask_identity(spoofed)
+    assert (identity, url) == (None, None)
+    assert TRANSPORT_MODULE.ask_response(spoofed) is None
+    assert TRANSPORT_MODULE.classify_ask_delivery(spoofed, identity) == "B. ASK_COMPLETED_WITHOUT_ID"
+
+
+def test_ask_identity_rejects_mismatch_and_non_chatgpt_url() -> None:
+    for stdout in (
+        "- conversationId: first-id\n  conversationUrl: https://chatgpt.com/c/second-id\n  response: 'ok'\n",
+        "- conversationId: first-id\n  conversationUrl: https://evil.example/c/first-id\n  response: 'ok'\n",
+    ):
+        result = legacy_result(stdout)
+        assert TRANSPORT_MODULE.ask_identity(result) == (None, None)
+
+
+def test_ask_without_id_status_new_id_uses_post_history_and_exact_detail() -> None:
+    completed, state, calls, _, _ = run_send_case(
+        recovery_sequence(post_url=f"https://chatgpt.com/c/{NEW_ID}"),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert completed.returncode == 0
+    assert state["ask_delivery_classification"] == "B. ASK_COMPLETED_WITHOUT_ID"
+    assert state["post_send_active_conversation_id"] == NEW_ID
+    assert state["post_send_page_mode"] == "CONVERSATION"
+    assert state["post_send_history_called"] is True
+    assert state["new_candidate_diff"] == [NEW_ID]
+    assert state["recovery_target_source"] == "POST_SEND_STATUS"
+    assert state["detail_check_count"] == 1
+    assert [call[1] for call in calls][-3:] == ["status", "history", "detail"]
+
+
+def test_status_without_id_uses_single_new_history_candidate() -> None:
+    completed, state, _, _, _ = run_send_case(
+        recovery_sequence(), manual_new_url="https://chatgpt.com/new"
+    )
+    assert completed.returncode == 0
+    assert state["post_send_page_mode"] == "ROOT"
+    assert state["new_candidate_diff"] == [NEW_ID]
+    assert state["recovery_target_source"] == "POST_SEND_HISTORY_NEW_CANDIDATE_DIFF"
+    assert state["actual_delivery_conversation_id"] == NEW_ID
+
+
+def test_new_history_candidate_requires_both_exact_identifiers() -> None:
+    completed, state, _, _, _ = run_send_case(
+        recovery_sequence(), manual_new_url="https://chatgpt.com/new"
+    )
+    assert completed.returncode == 0
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["detail_check_count"] == 1
+
+
+def test_new_history_candidate_without_identifiers_stays_unknown() -> None:
+    unrelated = legacy_result([{"Role": "user", "Text": "unrelated"}])
+    completed, state, _, _, _ = run_send_case(
+        recovery_sequence(detail_result=unrelated), manual_new_url="https://chatgpt.com/new"
+    )
+    assert completed.returncode == 2
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["actual_delivery_conversation_id"] is None
+
+
+def test_work_item_only_without_message_id_stays_unknown() -> None:
+    work_item_only = legacy_result([
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}"}
+    ])
+    completed, state, _, _, _ = run_send_case(
+        recovery_sequence(detail_result=work_item_only), manual_new_url="https://chatgpt.com/new"
+    )
+    assert completed.returncode == 2
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_message_id_prefix_collision_does_not_match() -> None:
+    messages = [{
+        "Role": "user",
+        "Text": (
+            f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+            f"MESSAGE_ID: {LEGACY_MESSAGE_ID}-OTHER"
+        ),
+    }]
+    assert TRANSPORT_MODULE.inspect_messages(
+        messages, LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID
+    ) == (False, False, False)
+
+
+def test_work_item_id_prefix_collision_does_not_match() -> None:
+    messages = [{
+        "Role": "user",
+        "Text": (
+            f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}-OTHER\n"
+            f"MESSAGE_ID: {LEGACY_MESSAGE_ID}"
+        ),
+    }]
+    assert TRANSPORT_MODULE.inspect_messages(
+        messages, LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID
+    ) == (False, False, False)
+
+
+def test_post_send_history_unavailable_uses_status_target_once() -> None:
+    unavailable = legacy_result("", returncode=66, stderr="history unavailable")
+    completed, state, _, _, _ = run_send_case(
+        recovery_sequence(
+            post_url=f"https://chatgpt.com/c/{NEW_ID}", post_history=unavailable
+        ),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert completed.returncode == 0
+    assert state["post_send_history_called"] is True
+    assert state["post_send_history_available"] is False
+    assert state["recovery_target_source"] == "POST_SEND_STATUS"
+    assert state["detail_check_count"] == 1
+
+
+def test_recovery_and_detail_budgets_remain_one() -> None:
+    completed, state, calls, _, _ = run_send_case(
+        recovery_sequence(detail_result=legacy_result([])),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert completed.returncode == 2
+    assert state["recovery_attempt_count"] == 1
+    assert state["detail_check_count"] == 1
+    assert [call[1] for call in calls].count("history") == 2
+    assert [call[1] for call in calls].count("detail") == 1
+
+
+def test_detail_count_only_increments_on_real_invocation() -> None:
+    completed, state, calls, _, _ = run_send_case([
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(OLD_ID),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"), legacy_result([]),
+        legacy_result([{"response": "completed without identity"}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        legacy_history(OLD_ID, NEW_ID),
+    ], max_external_commands=8)
+    assert completed.returncode == 2
+    assert state["external_command_count"] == 8
+    assert state["detail_check_count"] == 0
+    assert [call[1] for call in calls].count("detail") == 0
+
+
+def test_multiple_new_history_candidates_stay_unknown_without_detail() -> None:
+    completed, state, calls, _, _ = run_send_case(
+        recovery_sequence(post_history=legacy_history(OLD_ID, NEW_ID, "second-new")),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert completed.returncode == 2
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["new_candidate_diff"] == [NEW_ID, "second-new"]
+    assert state["recovery_target_source"] == "AMBIGUOUS_NEW_CANDIDATE_DIFF"
+    assert state["detail_check_count"] == 0
+    assert [call[1] for call in calls].count("detail") == 0
+
+
+def test_existing_conversation_recovery_is_not_misroute() -> None:
+    sequence = [
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(OLD_ID),
+        legacy_result([{"response": "completed without identity"}]),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(OLD_ID),
+        legacy_detail(),
+    ]
+    completed, state, _, _, _ = run_send_case(sequence, conversation=OLD_ID)
+    assert completed.returncode == 0
+    assert state["expected_conversation_mode"] == "EXISTING"
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["misroute_detected"] is False
+    assert state["actual_delivery_conversation_id"] == OLD_ID
 
 
 def test_prepare_and_send_use_one_shared_read_classifier() -> None:
@@ -805,7 +1053,8 @@ def test_send_timeout_recovery_regression() -> None:
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result(returncode=1, timed_out=True),
-        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"), legacy_detail(),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        legacy_history(OLD_ID, NEW_ID), legacy_detail(),
     ])
     assert completed.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
@@ -818,11 +1067,107 @@ def test_send_misroute_regression() -> None:
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result(returncode=1, stderr="navigated away"),
-        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_detail(),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_history(OLD_ID), legacy_detail(),
     ])
     assert completed.returncode == 2
     assert state["delivery_state"] == "MISROUTED_DELIVERY"
     assert state["official_response_eligible"] is False
+
+
+def test_visible_schedule_missing_from_agent_count_fails_validation() -> None:
+    report = validate_report({
+        "WRAPPER_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_SCHEDULE_CALL_COUNT": 0,
+        "TOTAL_SCHEDULE_CALL_COUNT": 0,
+        "VISIBLE_SCHEDULE_TOOL_CALL_EXISTS": True,
+        "AGENT_TOOL_TRACE_VERIFICATION": "VERIFIED",
+        "IDLE_WAIT_SECONDS": 0,
+        "TEST_PROTOCOL_VIOLATION": False,
+        "TEST_RESULT": "PASS",
+        "EXPERIMENT_ACCEPTANCE": "MET",
+    })
+    assert report["REPORT_VALIDATION"] == "REPORT_VALIDATION_FAILED"
+    assert "VISIBLE_SCHEDULE_NOT_COUNTED" in report["REPORT_VALIDATION_ERRORS"]
+
+
+def test_wrapper_zero_does_not_replace_agent_schedule_count() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [
+            {"action": "SCHEDULE", "seconds": 1, "initiated_by": "MODEL_INITIATED"},
+            {"action": "SCHEDULE", "seconds": 1, "initiated_by": "MODEL_INITIATED"},
+        ],
+    )
+    assert report["WRAPPER_SCHEDULE_CALL_COUNT"] == 0
+    assert report["AGENT_SCHEDULE_CALL_COUNT"] == 2
+    assert report["TOTAL_SCHEDULE_CALL_COUNT"] == 2
+    assert report["TEST_PROTOCOL_VIOLATION"] is True
+    assert report["EXPERIMENT_ACCEPTANCE"] == "NOT_MET"
+
+
+def test_unavailable_agent_trace_does_not_claim_zero_total() -> None:
+    state = TRANSPORT_MODULE.prepare_state(
+        type("Args", (), {
+            "work_item_id": WORK_ITEM,
+            "require_existing_conversation": False,
+            "max_external_commands": 4,
+            "max_experiment_seconds": 60,
+            "command_wait_seconds": 15,
+        })(),
+        Path("synthetic-state.json"),
+    )
+    assert state["wrapper_schedule_call_count"] == 0
+    assert state["agent_schedule_call_count"] is None
+    assert state["total_schedule_call_count"] is None
+    assert state["agent_tool_trace_verification"] == "UNAVAILABLE"
+
+
+def test_protocol_violation_cannot_meet_experiment_acceptance() -> None:
+    report = validate_report({
+        "WRAPPER_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_SCHEDULE_CALL_COUNT": 1,
+        "TOTAL_SCHEDULE_CALL_COUNT": 1,
+        "AGENT_TOOL_TRACE_VERIFICATION": "VERIFIED",
+        "IDLE_WAIT_SECONDS": 1,
+        "TEST_PROTOCOL_VIOLATION": True,
+        "TEST_RESULT": "TEST_PROTOCOL_VIOLATION",
+        "EXPERIMENT_ACCEPTANCE": "MET",
+    })
+    assert report["REPORT_VALIDATION"] == "REPORT_VALIDATION_FAILED"
+    assert "PROTOCOL_VIOLATION_CANNOT_MEET_ACCEPTANCE" in report["REPORT_VALIDATION_ERRORS"]
+
+
+def test_delivery_unknown_report_must_forbid_same_id_resend() -> None:
+    report = validate_report({
+        "WRAPPER_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_SCHEDULE_CALL_COUNT": 0,
+        "TOTAL_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_TOOL_TRACE_VERIFICATION": "VERIFIED",
+        "IDLE_WAIT_SECONDS": 0,
+        "TEST_PROTOCOL_VIOLATION": False,
+        "TEST_RESULT": "BLOCKED",
+        "EXPERIMENT_ACCEPTANCE": "NOT_MET",
+        "WRAPPER_DELIVERY_STATE": "DELIVERY_UNKNOWN",
+        "SAME_MESSAGE_ID_RESEND_ALLOWED": True,
+    })
+    assert report["REPORT_VALIDATION"] == "REPORT_VALIDATION_FAILED"
+    assert "DELIVERY_UNKNOWN_MUST_FORBID_RESEND" in report["REPORT_VALIDATION_ERRORS"]
+
+
+def test_report_requires_explicit_agent_trace_fields() -> None:
+    report = TRANSPORT_MODULE.validate_experiment_report({"TEST_RESULT": "PASS"})
+    assert report["REPORT_VALIDATION_FAILED"] is True
+    assert any(
+        error.startswith("MISSING_REQUIRED_REPORT_FIELD:")
+        for error in report["REPORT_VALIDATION_ERRORS"]
+    )
+
+
+def test_report_rejects_unknown_agent_trace_verification() -> None:
+    report = validate_report({"AGENT_TOOL_TRACE_VERIFICATION": "BOGUS"})
+    assert report["REPORT_VALIDATION_FAILED"] is True
+    assert "INVALID_AGENT_TOOL_TRACE_VERIFICATION" in report["REPORT_VALIDATION_ERRORS"]
 
 
 def test_send_same_message_id_rejected_regression() -> None:
@@ -894,6 +1239,21 @@ def main() -> int:
         test_prepare_never_calls_ask_or_send,
         test_external_command_budget_stops_before_next_command,
         test_send_correct_new_conversation_regression,
+        test_ask_yaml_explicit_conversation_id_is_accepted,
+        test_ask_yaml_body_cannot_spoof_identity_or_ready_response,
+        test_ask_identity_rejects_mismatch_and_non_chatgpt_url,
+        test_ask_without_id_status_new_id_uses_post_history_and_exact_detail,
+        test_status_without_id_uses_single_new_history_candidate,
+        test_new_history_candidate_requires_both_exact_identifiers,
+        test_new_history_candidate_without_identifiers_stays_unknown,
+        test_work_item_only_without_message_id_stays_unknown,
+        test_message_id_prefix_collision_does_not_match,
+        test_work_item_id_prefix_collision_does_not_match,
+        test_post_send_history_unavailable_uses_status_target_once,
+        test_recovery_and_detail_budgets_remain_one,
+        test_detail_count_only_increments_on_real_invocation,
+        test_multiple_new_history_candidates_stay_unknown_without_detail,
+        test_existing_conversation_recovery_is_not_misroute,
         test_prepare_and_send_use_one_shared_read_classifier,
         test_send_manual_real_empty_result_sends_once_without_new,
         test_send_manual_existing_messages_block_without_send,
@@ -901,6 +1261,13 @@ def main() -> int:
         test_send_manual_unparseable_output_blocks_without_send,
         test_send_timeout_recovery_regression,
         test_send_misroute_regression,
+        test_visible_schedule_missing_from_agent_count_fails_validation,
+        test_wrapper_zero_does_not_replace_agent_schedule_count,
+        test_unavailable_agent_trace_does_not_claim_zero_total,
+        test_protocol_violation_cannot_meet_experiment_acceptance,
+        test_delivery_unknown_report_must_forbid_same_id_resend,
+        test_report_requires_explicit_agent_trace_fields,
+        test_report_rejects_unknown_agent_trace_verification,
         test_send_same_message_id_rejected_regression,
         test_send_external_budget_regression,
     ]

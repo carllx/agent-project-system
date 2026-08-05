@@ -188,7 +188,7 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send `
 python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
 ```
 
-For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Review its JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false.
+For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Accept the real OpenCLI JSON or flat YAML `conversationId`/`conversationUrl` identity returned by `ask`. When `ask` returns no usable identity, recovery executes `POST_SEND_STATUS -> POST_SEND_HISTORY_REFRESH -> NEW_CANDIDATE_DIFF -> EXACT_ID_DETAIL_CHECK`: compare the same bounded recent-history window with the pre-send baseline, exclude every pre-send ID from the new-candidate diff, and use at most one exact detail check. Prefer an ask-reported identity, then the current post-send Conversation, then a unique new history candidate. If the current target is a pre-send Conversation and both exact identifiers match, mark `MISROUTED_DELIVERY`; if no exact two-marker match is found, preserve `DELIVERY_UNKNOWN` and forbid resend. Review the JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false.
 
 Default adjustable parameters are:
 
@@ -199,7 +199,7 @@ TOTAL_RESPONSE_WAIT_SECONDS=30
 MAX_SEND_ATTEMPTS_PER_MESSAGE=1
 MAX_RECOVERY_ATTEMPTS=1
 MAX_DETAIL_CHECKS=1
-MAX_EXTERNAL_COMMANDS=8
+MAX_EXTERNAL_COMMANDS=9
 MAX_EXPERIMENT_SECONDS=60
 MAX_BACKGROUND_RESULT_CHECKS=1
 MAX_BACKGROUND_WAIT_SECONDS=15
@@ -210,7 +210,7 @@ Keep each command wait short, impose a total response bound, and never use unlim
 
 ## Bound recovery and experiments
 
-Recovery checks the post-send active Conversation first, then at most the configured small number of recent candidates. Search only exact Work Item ID and Message ID, stop on the first hit, and retain no unrelated conversation body. Never scan all pre-send Conversations as a normal recovery path.
+Recovery saves a bounded pre-send history baseline, performs one send, reads post-send status, refreshes the same bounded history window once, computes IDs absent from the baseline, and performs at most one detail check against the strongest bounded target. Search only exact Work Item ID and Message ID, stop on the first hit, and retain no unrelated conversation body. Never scan all pre-send Conversations, enlarge the candidate limit, or poll repeatedly as a recovery substitute.
 
 Every experimental Agent Prompt must state that the Agent must not modify the Skill or wrapper; reset Runtime and retry; resend the same Message ID; send unplanned hello/test probes; read unrelated Browser conversations; repair code; or turn the test into open-ended development. Any violation is `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`; stop immediately and do not use that run to pass A2 or A3.
 
@@ -235,7 +235,11 @@ Every experiment report must include:
 ```text
 PLACEHOLDER_VALIDATION_PERFORMED
 UNRESOLVED_PLACEHOLDERS
-SCHEDULE_CALL_COUNT
+WRAPPER_SCHEDULE_CALL_COUNT
+AGENT_SCHEDULE_CALL_COUNT
+TOTAL_SCHEDULE_CALL_COUNT
+AGENT_TOOL_TRACE_VERIFICATION
+AGENT_BOUND_RESULT_RETRIEVAL_COUNT
 WHO_INITIATED_SCHEDULE
 IDLE_WAIT_SECONDS
 POLL_ATTEMPT_COUNT
@@ -249,9 +253,10 @@ TERMINATED_IMMEDIATELY_AFTER_RESULT
 TEST_PROTOCOL_VIOLATION
 TEST_RESULT
 REPORT_VALIDATION
+EXPERIMENT_ACCEPTANCE
 ```
 
-Default idle, schedule, poll, and background-result-check counters to zero. Also report the external-command count, total experiment-action count, per-action counts, and schedule initiator so discovery and waiting cannot disappear from the evidence. Enforce these report invariants: `SCHEDULE_CALL_COUNT > 0` forbids `TERMINATED_IMMEDIATELY_AFTER_RESULT=true` unless the event trace proves that schedule completed before the command result existed; a schedule call cannot report zero idle-wait time; a completed command with `SYNCHRONOUS_COMMAND_COMPLETED=false` must identify a real handle-bound `BACKGROUND_PROCESS_COMPLETION`; and `TEST_PROTOCOL_VIOLATION=true` forbids `TEST_RESULT=PASS`. Return `REPORT_VALIDATION_FAILED` when any report fields conflict.
+Set `WRAPPER_SCHEDULE_CALL_COUNT` only from Wrapper-owned actions. The experiment Agent must fill `AGENT_SCHEDULE_CALL_COUNT` and `AGENT_BOUND_RESULT_RETRIEVAL_COUNT` from its visible tool trace; `TOTAL_SCHEDULE_CALL_COUNT` is their sum. When that trace cannot be counted reliably, report `AGENT_TOOL_TRACE_VERIFICATION=UNAVAILABLE` and leave Agent and total counts unknown—never substitute Wrapper zero for the whole experiment. Also report the external-command count, total experiment-action count, per-action counts, and schedule initiator so discovery and waiting cannot disappear from the evidence. Enforce these report invariants: a visible schedule tool call requires `AGENT_SCHEDULE_CALL_COUNT >= 1`; any positive Agent schedule count requires `TEST_PROTOCOL_VIOLATION=true`; a protocol violation forbids both `TEST_RESULT=PASS` and `EXPERIMENT_ACCEPTANCE=MET`; a schedule call cannot report zero idle-wait time; a completed command with `SYNCHRONOUS_COMMAND_COMPLETED=false` must identify a real handle-bound `BACKGROUND_PROCESS_COMPLETION`; and Wrapper `DELIVERY_UNKNOWN` forbids reuse of the same Message ID. Return `REPORT_VALIDATION_FAILED` when any report fields conflict.
 
 Transport A2 and A3 must both pass before the formal Loop starts. The formal Loop must contain at least two complete `IDE execution -> Evidence Packet -> RR Lead review` cycles, and may return `ACHIEVED` only when every original acceptance criterion is `MET`.
 

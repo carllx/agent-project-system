@@ -31,7 +31,7 @@ TOTAL_RESPONSE_WAIT_SECONDS = 30
 MAX_SEND_ATTEMPTS_PER_MESSAGE = 1
 MAX_RECOVERY_ATTEMPTS = 1
 MAX_DETAIL_CHECKS = 1
-MAX_EXTERNAL_COMMANDS = 8
+MAX_EXTERNAL_COMMANDS = 9
 MAX_EXPERIMENT_SECONDS = 60
 PREPARE_MAX_SEND_ATTEMPTS = 0
 PREPARE_MAX_RECOVERY_ATTEMPTS = 0
@@ -244,6 +244,7 @@ def assess_experiment_protocol(
         protocol_result = "BLOCKED_BEFORE_EXECUTION"
     if failure_types:
         protocol_result = "TEST_PROTOCOL_VIOLATION"
+    agent_schedule_call_count = counts["SCHEDULE"]
     report = {
         "PROTOCOL_RESULT": protocol_result,
         "TEST_RESULT": protocol_result,
@@ -254,7 +255,14 @@ def assess_experiment_protocol(
         "EXTERNAL_COMMAND_COUNT": counts["SHELL_COMMAND"],
         "EXPERIMENT_ACTION_COUNT": sum(counts.values()),
         "ACTION_COUNTS": counts,
-        "SCHEDULE_CALL_COUNT": counts["SCHEDULE"],
+        "WRAPPER_SCHEDULE_CALL_COUNT": 0,
+        "AGENT_SCHEDULE_CALL_COUNT": agent_schedule_call_count,
+        "TOTAL_SCHEDULE_CALL_COUNT": agent_schedule_call_count,
+        # Compatibility alias. It is the verified total, never the Wrapper-only count.
+        "SCHEDULE_CALL_COUNT": agent_schedule_call_count,
+        "VISIBLE_SCHEDULE_TOOL_CALL_EXISTS": agent_schedule_call_count > 0,
+        "AGENT_TOOL_TRACE_VERIFICATION": "VERIFIED",
+        "AGENT_BOUND_RESULT_RETRIEVAL_COUNT": counts["BACKGROUND_RESULT_CHECK"],
         "WHO_INITIATED_SCHEDULE": (
             next(iter(schedule_initiators)) if len(schedule_initiators) == 1 else
             "NONE" if not schedule_initiators else "UNKNOWN"
@@ -270,6 +278,7 @@ def assess_experiment_protocol(
         "SYNCHRONOUS_COMMAND_COMPLETED": synchronous_command_completed,
         "TERMINATED_IMMEDIATELY_AFTER_RESULT": terminated_immediately,
         "SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN": schedule_before_result_proven,
+        "EXPERIMENT_ACCEPTANCE": "NOT_MET" if failure_types else "MET",
     }
     return validate_experiment_report(report)
 
@@ -278,13 +287,67 @@ def validate_experiment_report(report: dict[str, Any]) -> dict[str, Any]:
     """Fail a report whose completion, waiting, or result claims conflict."""
     validated = dict(report)
     failures: list[str] = []
+    required_trace_fields = {
+        "WRAPPER_SCHEDULE_CALL_COUNT", "AGENT_SCHEDULE_CALL_COUNT",
+        "TOTAL_SCHEDULE_CALL_COUNT", "AGENT_TOOL_TRACE_VERIFICATION",
+        "AGENT_BOUND_RESULT_RETRIEVAL_COUNT", "EXPERIMENT_ACCEPTANCE",
+    }
+    for field in sorted(required_trace_fields - validated.keys()):
+        failures.append(f"MISSING_REQUIRED_REPORT_FIELD:{field}")
+    wrapper_schedule_count = validated.get("WRAPPER_SCHEDULE_CALL_COUNT")
+    agent_schedule_count = validated.get("AGENT_SCHEDULE_CALL_COUNT")
+    total_schedule_count = validated.get("TOTAL_SCHEDULE_CALL_COUNT")
+    validated["SCHEDULE_CALL_COUNT"] = total_schedule_count
+    agent_trace_verification = validated.get("AGENT_TOOL_TRACE_VERIFICATION")
+    if agent_trace_verification not in {"VERIFIED", "UNAVAILABLE"}:
+        failures.append("INVALID_AGENT_TOOL_TRACE_VERIFICATION")
+    if agent_trace_verification == "UNAVAILABLE":
+        if agent_schedule_count is not None or total_schedule_count is not None:
+            failures.append("UNAVAILABLE_AGENT_TRACE_CANNOT_CLAIM_TOTAL_SCHEDULE_COUNT")
+        if validated.get("AGENT_BOUND_RESULT_RETRIEVAL_COUNT") is not None:
+            failures.append("UNAVAILABLE_AGENT_TRACE_CANNOT_CLAIM_BOUND_RESULT_COUNT")
+    elif agent_trace_verification == "VERIFIED":
+        if (
+            not isinstance(wrapper_schedule_count, int)
+            or not isinstance(agent_schedule_count, int)
+            or wrapper_schedule_count < 0
+            or agent_schedule_count < 0
+        ):
+            failures.append("SCHEDULE_COUNT_NOT_INTEGER")
+        elif total_schedule_count != wrapper_schedule_count + agent_schedule_count:
+            failures.append("TOTAL_SCHEDULE_COUNT_MISMATCH")
+        bound_count = validated.get("AGENT_BOUND_RESULT_RETRIEVAL_COUNT")
+        if not isinstance(bound_count, int) or bound_count < 0:
+            failures.append("AGENT_BOUND_RESULT_RETRIEVAL_COUNT_NOT_INTEGER")
     if (
-        int(validated.get("SCHEDULE_CALL_COUNT", 0)) > 0
+        validated.get("VISIBLE_SCHEDULE_TOOL_CALL_EXISTS") is True
+        and (not isinstance(agent_schedule_count, int) or agent_schedule_count < 1)
+    ):
+        failures.append("VISIBLE_SCHEDULE_NOT_COUNTED")
+    if (
+        isinstance(agent_schedule_count, int)
+        and agent_schedule_count > 0
+        and validated.get("TEST_PROTOCOL_VIOLATION") is not True
+    ):
+        failures.append("AGENT_SCHEDULE_REQUIRES_PROTOCOL_VIOLATION")
+    if (
+        validated.get("TEST_PROTOCOL_VIOLATION") is True
+        and validated.get("EXPERIMENT_ACCEPTANCE") == "MET"
+    ):
+        failures.append("PROTOCOL_VIOLATION_CANNOT_MEET_ACCEPTANCE")
+    if (
+        validated.get("WRAPPER_DELIVERY_STATE") == "DELIVERY_UNKNOWN"
+        and validated.get("SAME_MESSAGE_ID_RESEND_ALLOWED") is not False
+    ):
+        failures.append("DELIVERY_UNKNOWN_MUST_FORBID_RESEND")
+    schedule_count_for_validation = total_schedule_count if isinstance(total_schedule_count, int) else 0
+    if (
+        schedule_count_for_validation > 0
         and float(validated.get("IDLE_WAIT_SECONDS", 0)) <= 0
     ):
         failures.append("SCHEDULE_CALL_HAS_ZERO_IDLE_WAIT")
     if (
-        int(validated.get("SCHEDULE_CALL_COUNT", 0)) > 0
+        schedule_count_for_validation > 0
         and validated.get("TERMINATED_IMMEDIATELY_AFTER_RESULT") is True
         and validated.get("SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN") is not True
     ):
@@ -311,6 +374,7 @@ def validate_experiment_report(report: dict[str, Any]) -> dict[str, Any]:
 
     validated["REPORT_VALIDATION_ERRORS"] = failures
     validated["REPORT_VALIDATION"] = "PASS" if not failures else "REPORT_VALIDATION_FAILED"
+    validated["REPORT_VALIDATION_FAILED"] = bool(failures)
     if failures:
         validated["PROTOCOL_RESULT"] = "REPORT_VALIDATION_FAILED"
         validated["TEST_RESULT"] = "REPORT_VALIDATION_FAILED"
@@ -534,6 +598,107 @@ def result_rows(result: dict[str, Any] | None) -> list[dict[str, Any]]:
     return rows(parse_json(result["stdout"]))
 
 
+def yaml_scalar(value: str) -> str | None:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        quote = value[0]
+        value = value[1:-1]
+        if quote == "'":
+            value = value.replace("''", "'")
+    return value or None
+
+
+def flat_ask_yaml_record(text: str) -> dict[str, str]:
+    """Parse only the first strict flat ask record; never search response body lines."""
+    lines = text.splitlines()
+    first = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first is None:
+        return {}
+    match = re.fullmatch(r"- conversationId:\s*(.*?)\s*", lines[first])
+    if not match:
+        return {}
+    record: dict[str, str] = {}
+    identity = yaml_scalar(match.group(1))
+    if identity:
+        record["conversationId"] = identity
+    for line in lines[first + 1:]:
+        if not line.strip():
+            continue
+        field = re.fullmatch(r"  (conversationUrl|tool|response):\s*(.*?)\s*", line)
+        if not field:
+            break
+        name, raw_value = field.groups()
+        value = yaml_scalar(raw_value)
+        if value:
+            record[name] = value
+        if name == "response":
+            break
+    return record
+
+
+def validated_ask_identity(
+    identity: str | None, url: str | None
+) -> tuple[str | None, str | None]:
+    if identity and not re.fullmatch(r"[A-Za-z0-9-]+", identity):
+        return None, None
+    if url:
+        url_identity = existing_chatgpt_conversation_id(url)
+        if not url_identity or (identity and identity != url_identity):
+            return None, None
+        identity = identity or url_identity
+    return (identity, url) if identity else (None, None)
+
+
+def ask_identity(result: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Extract ask identity from JSON or the YAML emitted by real OpenCLI 1.8.6."""
+    for row in result_rows(result):
+        identity, url = conversation_identity(row)
+        if identity or url:
+            return validated_ask_identity(identity, url)
+    record = flat_ask_yaml_record(str(result.get("stdout") or ""))
+    return validated_ask_identity(
+        record.get("conversationId"), record.get("conversationUrl")
+    )
+
+
+def ask_response(result: dict[str, Any]) -> str | None:
+    for row in result_rows(result):
+        response = pick(row, "response")
+        if response:
+            return str(response)
+    response = flat_ask_yaml_record(str(result.get("stdout") or "")).get("response")
+    return None if response in {"|", "|-", "|+", ">", ">-", ">+"} else response
+
+
+def classify_ask_delivery(result: dict[str, Any], identity: str | None) -> str:
+    if result.get("timed_out"):
+        return "C. ASK_TIMEOUT_OR_TRANSPORT_ERROR"
+    if result.get("returncode") == 0 and identity:
+        return "A. ASK_CONFIRMED_DELIVERY_WITH_ID"
+    if result.get("returncode") == 0:
+        return "B. ASK_COMPLETED_WITHOUT_ID"
+    if cli_error_code(str(result.get("stderr") or "")) in {
+        "INVALID_ARGUMENT", "REQUIRED_VALUE_UNRESOLVED", "UNAUTHORIZED",
+    }:
+        return "D. ASK_REJECTED_BEFORE_DELIVERY"
+    return "C. ASK_TIMEOUT_OR_TRANSPORT_ERROR"
+
+
+def page_mode(url: str | None) -> str:
+    if existing_chatgpt_conversation_id(url):
+        return "CONVERSATION"
+    if not url:
+        return "UNKNOWN"
+    parsed = urlparse(url)
+    if parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}:
+        return "UNKNOWN"
+    if parsed.path == "/new":
+        return "NEW"
+    if parsed.path in {"", "/"}:
+        return "ROOT"
+    return "UNKNOWN"
+
+
 def status_url(result: dict[str, Any] | None) -> str | None:
     for row in result_rows(result):
         url = pick(row, "Url")
@@ -546,12 +711,22 @@ def marker(message_id: str) -> str:
     return f"MESSAGE_ID: {message_id}"
 
 
+def has_exact_header(text: str, name: str, value: str) -> bool:
+    return bool(re.search(
+        rf"(?m)^{re.escape(name)}:[ \t]*{re.escape(value)}[ \t]*\r?$", text
+    ))
+
+
 def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_id: str) -> tuple[bool, bool, bool]:
     user_index: int | None = None
     for index, message in enumerate(messages):
         role = str(pick(message, "Role") or "").lower()
         text = str(pick(message, "Text") or "")
-        if role == "user" and marker(message_id) in text and f"WORK_ITEM_ID: {work_item_id}" in text:
+        if (
+            role == "user"
+            and has_exact_header(text, "MESSAGE_ID", message_id)
+            and has_exact_header(text, "WORK_ITEM_ID", work_item_id)
+        ):
             user_index = index
     if user_index is None:
         return False, False, False
@@ -601,7 +776,11 @@ def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "external_command_count": 0,
         "placeholder_validation_performed": True,
         "unresolved_placeholders": [],
-        "schedule_call_count": 0,
+        "wrapper_schedule_call_count": 0,
+        "agent_schedule_call_count": None,
+        "total_schedule_call_count": None,
+        "agent_bound_result_retrieval_count": None,
+        "agent_tool_trace_verification": "UNAVAILABLE",
         "idle_wait_seconds": 0,
         "poll_attempt_count": 0,
         "background_result_check_count": 0,
@@ -817,6 +996,11 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "official_response_eligible": False, "started_at": utc_now(), "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
+        "post_send_status_url": None, "post_send_active_conversation_id": None,
+        "post_send_page_mode": "NOT_RUN", "post_send_history_called": False,
+        "post_send_history_available": False, "post_send_recent_conversation_ids": [],
+        "new_candidate_diff": [], "recovery_target_source": None,
+        "recovery_target_conversation_id": None,
         "parameters": {
             "command_wait_seconds": args.command_wait_seconds,
             "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
@@ -829,16 +1013,30 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     }
 
 
+def history_result(
+    state: dict[str, Any], state_path: Path, label: str = "history"
+) -> tuple[list[dict[str, Any]], bool]:
+    result = command(state, state_path, label, ["chatgpt", "history", "--limit", str(state["parameters"]["recent_candidate_limit"]), "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    available = bool(
+        result is not None
+        and not result["timed_out"]
+        and result["returncode"] == 0
+        and isinstance(parse_json(result["stdout"]), list)
+    )
+    return result_rows(result), available
+
+
 def history(state: dict[str, Any], state_path: Path) -> list[dict[str, Any]]:
-    result = command(state, state_path, "history", ["chatgpt", "history", "--limit", str(state["parameters"]["recent_candidate_limit"]), "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
-    return result_rows(result)
+    return history_result(state, state_path)[0]
 
 
 def detail(state: dict[str, Any], state_path: Path, identity: str) -> tuple[list[dict[str, Any]], str | None]:
     if state["detail_check_count"] >= state["parameters"]["max_detail_checks"]:
         return [], None
-    state["detail_check_count"] += 1
+    before_command_count = state["external_command_count"]
     result = command(state, state_path, "detail", ["chatgpt", "detail", identity, "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    if state["external_command_count"] > before_command_count:
+        state["detail_check_count"] += 1
     raw = state["raw_outputs"][-1] if result is not None else None
     return result_rows(result), raw
 
@@ -873,29 +1071,45 @@ def recover_delivery(state: dict[str, Any], state_path: Path, returned_identity:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_RECOVERY_ATTEMPTS")
         return False
     state["recovery_attempt_count"] += 1
-    candidates: list[str] = []
+    candidates: list[tuple[str, str]] = []
     status = command(state, state_path, "status-after-send", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
     current_url = status_url(status)
     current_id = conversation_id_from_url(current_url or "")
-    if current_id:
-        candidates.append(current_id)
-    if returned_identity and returned_identity not in candidates:
-        candidates.append(returned_identity)
-    if not candidates and state["external_command_count"] < state["parameters"]["max_external_commands"]:
-        for row in history(state, state_path):
-            identity, _ = conversation_identity(row)
-            if identity and identity not in candidates:
-                candidates.append(identity)
-    for identity in candidates[:state["parameters"]["recent_candidate_limit"]]:
+    state["post_send_status_url"] = current_url
+    state["post_send_active_conversation_id"] = current_id
+    state["post_send_page_mode"] = page_mode(current_url)
+    before_history_count = state["external_command_count"]
+    post_rows, history_available = history_result(state, state_path, "history-after-send")
+    state["post_send_history_called"] = state["external_command_count"] > before_history_count
+    state["post_send_history_available"] = history_available
+    post_ids = [identity for row in post_rows if (identity := conversation_identity(row)[0])]
+    baseline = pre_send_ids(state)
+    new_ids = [identity for identity in post_ids if identity not in baseline]
+    state["post_send_recent_conversation_ids"] = post_ids
+    state["new_candidate_diff"] = new_ids
+
+    def add_candidate(identity: str | None, source: str) -> None:
+        if identity and all(existing != identity for existing, _ in candidates):
+            candidates.append((identity, source))
+
+    add_candidate(returned_identity, "ASK_REPORTED_CONVERSATION_ID")
+    add_candidate(current_id, "POST_SEND_STATUS")
+    if len(new_ids) == 1:
+        add_candidate(new_ids[0], "POST_SEND_HISTORY_NEW_CANDIDATE_DIFF")
+    elif len(new_ids) > 1 and not candidates:
+        state["recovery_target_source"] = "AMBIGUOUS_NEW_CANDIDATE_DIFF"
+    if candidates:
+        identity, source = candidates[0]
+        state["recovery_target_source"] = source
+        state["recovery_target_conversation_id"] = identity
         messages, raw_path = detail(state, state_path, identity)
         delivered, response_exists, ready = inspect_messages(messages, state["work_item_id"], state["message_id"])
-        if not delivered:
-            continue
-        if identity in pre_send_ids(state):
-            mark_misroute(state, identity, raw_path)
-        else:
-            accept_delivery(state, identity, ready, response_exists)
-        return True
+        if delivered:
+            if state.get("expected_conversation_mode") == "NEW" and identity in baseline:
+                mark_misroute(state, identity, raw_path)
+            else:
+                accept_delivery(state, identity, ready, response_exists)
+            return True
     if not state.get("stopped_at"):
         set_state(state, "DELIVERY_UNKNOWN", "bounded exact-ID recovery found no delivery")
         stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID")
@@ -1024,12 +1238,13 @@ def send_command(args: argparse.Namespace) -> int:
     if result is None:
         write_json(state_path, state)
         return output_state(state)
-    returned_id, returned_url = (None, None)
-    for row in result_rows(result):
-        returned_id, returned_url = conversation_identity(row)
-        if returned_id or returned_url:
-            break
-    returned_id = returned_id or conversation_id_from_url(returned_url or "")
+    returned_id, returned_url = ask_identity(result)
+    state["ask_return_code"] = result.get("returncode")
+    state["ask_timed_out"] = bool(result.get("timed_out"))
+    state["ask_error_code"] = cli_error_code(str(result.get("stderr") or ""))
+    state["ask_reported_conversation_id"] = returned_id
+    state["ask_reported_url"] = returned_url
+    state["ask_delivery_classification"] = classify_ask_delivery(result, returned_id)
     if result["timed_out"] or result["returncode"] != 0:
         set_state(state, "DELIVERY_UNKNOWN", "ask timed out or returned nonzero; one bounded recovery only")
         recover_delivery(state, state_path, returned_id)
@@ -1039,7 +1254,7 @@ def send_command(args: argparse.Namespace) -> int:
         state["actual_delivery_conversation_id"] = returned_id
         state["verified_target_conversation_id"] = returned_id
         state["official_response_eligible"] = True
-        response = next((pick(row, "response") for row in result_rows(result) if pick(row, "response")), None)
+        response = ask_response(result)
         set_state(state, "RESPONSE_READY" if response else "DELIVERED", "ask returned verified new conversation identity")
         stop(state, "RESPONSE_READY" if response else "BOUNDED_WAIT_COMPLETE", "ACHIEVED" if response else "IN_PROGRESS")
     else:

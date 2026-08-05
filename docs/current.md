@@ -9,42 +9,41 @@
 
 ## Active Work Item
 
-- **ID:** `TRANSPORT-SEND-READ-COMPAT-024`
-- **Name:** 统一 send 与 prepare-new 的空页面解析
+- **ID:** `TRANSPORT-A2P2-RECOVERY-026`
+- **Name:** 分析 A2.2 DELIVERY_UNKNOWN 与外层 schedule 漏报
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `e42d21c13203f1162aad4681d32aed36c8bc09af`
-- **Current objective:** 让 `send` 与 `prepare-new` 共享真实 OpenCLI `EMPTY_RESULT` 解析逻辑，并修正 manual-new-url 的调用和副作用语义。
+- **Baseline commit:** `7d40e1f39da3a23c50dcefbe5cba207a2b1198fd`
+- **Current objective:** 确认 `TRANSPORT-A2P2-025` 的发送与恢复边界，补齐 NEW 模式 post-send history 恢复，并修正外层 Agent schedule 报告语义。
 
 ## Acceptance criteria
 
-- 只读取 `TRANSPORT-A2P2-023` 指定证据，不运行真实 Browser、不发送消息、不修改历史 Runtime。
-- `prepare-new` 与 `send` 调用同一个空页分类器；精确 `EMPTY_RESULT` 允许出现在 stderr 且允许非零退出码。
-- `send --manual-new-url` 使用首次 status 精确校验、有限 history、read 和单次 ask，不调用 `new`。
-- 非空、未知错误和不可解析输出保守阻塞且发送计数保持零；实际写命令调用时两个发送计数才同时为一。
-- Browser 副作用状态区分已在 `/new`、是否调用 `new` 和是否真的发生导航。
-- 版本升至 `0.4.6`，现有恢复、幂等、A2.1、A2.2/A3 回归全部通过。
-- 完成本地 Commit（不 push）、Lab Skill 整包同步和逐文件核验，历史 Runtime 保持不变。
+- 只读取 `TRANSPORT-A2P2-025` 指定七个证据文件，不运行真实 Browser、不发送消息、不修改历史 Runtime。
+- 正确分类 ask、发送后 status 与 detail 实际目标，不根据 Browser 外观猜测。
+- NEW 模式执行有限 pre-send baseline、单次发送、post-send status、单次 post-send history、baseline diff 与最多一次 exact-ID detail。
+- 保留 `MISROUTED_DELIVERY`、`DELIVERY_UNKNOWN` 和相同 Message ID 永久禁止重发语义。
+- 区分 Wrapper、Agent 与 Total schedule 计数；无法观察外层轨迹时明确 `UNAVAILABLE`，报告冲突必须失败。
+- 版本升至 `0.4.7`，纯本地 Transport、治理、包和 Skill Creator 校验通过。
+- 本地 Commit（不 push），Lab 整包同步且源/Lab 字节一致，指定 Runtime 保持不变。
 
 ## Confirmed facts
 
-- 指定 `raw/04-read-new.json` 的 `returncode=66`、stdout 为空，stderr 是 OpenCLI error envelope 且错误码精确为 `EMPTY_RESULT`；原始分类为 `A. EXACT_EMPTY_RESULT`。
-- 修改前 `prepare-new` 调用 `classify_read_result`，该函数能读取 stderr 的精确错误码；`send` 另用 `timed_out/returncode/result_rows(stdout)` 条件，仍要求退出码为零并未读取 stderr envelope。
-- 真实 A2.2 因上述分叉在发送前错误停止；原 Runtime 的 `send_attempt_count=0`，且没有调用底层发送命令。
-- 指定 Runtime 的六个文件已记录同步前逐文件路径、字节与 SHA-256；本轮不读取其他 Runtime。
-
-## In progress
-
-- None.
+- `raw/04-ask.json` 的 `returncode=0`、`timed_out=false`、stderr 为空；flat YAML stdout 明确报告 Conversation ID `6a734bbd-df5c-83ea-95e8-06e6967be6df`、同 ID URL 与 response，分类为 `A. ASK_CONFIRMED_DELIVERY_WITH_ID`。
+- `raw/05-status-after-send.json` 的 `returncode=0`，URL 为同一新 `/c/6a734bbd-df5c-83ea-95e8-06e6967be6df`，页面模式为 Conversation；没有停留 `/new` 或返回根页面。
+- 旧 Wrapper 从发送后 status 取得该新 ID，并用 `detail <id>` 检查它；`raw/06-detail.json` 只含精确 Work Item ID，不含 Message ID，因此旧 exact-two-marker 检查未命中。
+- 旧 `result_rows` 只解析 JSON，漏掉真实 ask flat YAML 身份；旧恢复在 status 已有 ID 时跳过 post-send history。
+- 历史实验可见 Agent 工具轨迹至少有两次 schedule，而 Runtime 的 `schedule_call_count=0` 只能代表 Wrapper 内部；在本轮允许的证据范围内无法可靠重数完整 Agent 轨迹，因此历史报告必须标记 `AGENT_TOOL_TRACE_VERIFICATION=UNAVAILABLE`、协议违规且实验验收不能为 `MET`。
 
 ## Completed
 
-- 50 项纯本地 Transport 测试首轮全部通过；原 45 项与新增 5 项均通过。
-- 已实现唯一共享 `classify_chatgpt_read_result`、manual-new-url 有界序列、发送计数调用边界和 Browser 副作用字段。
-- 已加入与真实 A2.2 `raw/04-read-new.json` 逐字节相同的 `EMPTY_RESULT + exit 66` 回归 fixture；文件 SHA-256 均为 `c99007ba1f1b43467af27f886f7a1cb39ef5c49047907a7d0c17681f02ddf97d`。
-- 已通过 50 项 Transport、文档治理、0.4.6 包检查、源/Lab Skill Creator 和 whitespace 校验。
-- 已创建本地实现 Commit `a15b74e4145715ec5bd37c3ed01c9e05e99dd601`，未 push。
-- 已逐文件覆盖同步权威源包到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`；源/Lab 均为 0.4.6、各 8 文件、路径差异和字节差异均为 0，规范包哈希均为 `65b146f6091ecb005715fbbee60b3c2b8d2476f004004cc38e779ff2b1a9e121`。
-- 同步操作未以 `.runtime` 为目标；在禁止扫描其他 Runtime 的边界内，指定 `TRANSPORT-A2P2-023` 的 6 文件路径和逐文件 SHA-256 与同步前完全一致。
+- ask 身份解析支持 JSON 与严格的首个 flat YAML record，并校验 ID、精确 ChatGPT `/c/<id>` URL 和二者一致性；正文伪造、block scalar、非 ChatGPT URL 与身份冲突均保守拒绝。
+- NEW 恢复固定执行一次 post-send status 与一次有限 history refresh，排除发送前 ID，只对 ask 身份、当前 status 或唯一新增候选中的最强目标执行最多一次 detail；多新增候选保持未知。
+- detail 只有在底层命令真实调用后才计数；EXISTING 模式合法恢复不再被误判为 misroute。
+- Work Item ID 与 Message ID 使用独立 Header 整行精确匹配，拒绝前缀碰撞。
+- 报告字段拆分为 `WRAPPER_SCHEDULE_CALL_COUNT`、`AGENT_SCHEDULE_CALL_COUNT`、`TOTAL_SCHEDULE_CALL_COUNT`、`AGENT_TOOL_TRACE_VERIFICATION` 与 `AGENT_BOUND_RESULT_RETRIEVAL_COUNT`；缺字段、伪零、无效枚举、违规后 PASS/MET 和 `DELIVERY_UNKNOWN` 允许重发均使 `REPORT_VALIDATION_FAILED=true`。
+- 独立审查 Agent 最终结论为 `PASS`，先后发现的 EXISTING 误判、YAML 正文伪造、detail 虚计数、报告默认伪零和 ID 前缀碰撞均已修复并回归。
+- 72 项纯本地 Transport 测试、文档治理、0.4.7 包检查和 `git diff --check` 已通过。
+- 权威源包已逐文件同步到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`；源/Lab 各 8 文件、版本均为 0.4.7、字节差异为零，规范包哈希均为 `f5b87edd3336622a4df9fe327da7b93d881b76e1da375a2da52353a5c0ae5d90`。
+- 指定 `TRANSPORT-A2P2-025` 七个文件的同步前后 SHA-256 差异为零；未读取其他 Runtime。
 
 ## Blockers
 
@@ -56,7 +55,7 @@
 
 ## Next action
 
-- 使用新的 Work Item ID、Message ID 和 Runtime 目录重跑正式 A2.2：由用户预先打开 `https://chatgpt.com/new`，调用 `send --manual-new-url https://chatgpt.com/new`，验证单次真实发送和身份恢复；不得复用或修改 `TRANSPORT-A2P2-023`。
+- 如需重新验收 A2.2，使用全新的 Work Item ID、Message ID 与 Runtime；禁止重发 `MSG-TRANSPORT-A2P2-025-01`。实验 Agent 必须从其可见工具轨迹填写 Agent schedule 与绑定结果读取计数，任何 schedule 调用都使协议违规且实验验收不能为 `MET`。
 
 ## Files to read
 
@@ -71,18 +70,18 @@
 ## Last validation
 
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 50 pure-local scenarios, including all prior 45 scenarios and five send/read compatibility regressions.
+- **Result:** Passed 72 pure-local scenarios, including the required A2.2 recovery, exact-identifier, schedule-reporting, deduplication, A2.1, existing-send and prior send regressions.
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed for version `0.4.6` and the exact eight-file package.
-- **Command:** `PYTHONUTF8=1` Skill Creator `quick_validate.py skills/research-review-lead`
-- **Result:** Passed.
+- **Result:** Passed for version `0.4.7` and the exact eight-file package.
+- **Command:** Skill Creator `quick_validate.py` for source and Lab packages
+- **Result:** Passed for both packages.
 - **Command:** `git diff --check`
 - **Result:** Passed; only Git line-ending conversion warnings were emitted.
 - **Command:** source/Lab relative-path manifest, per-file SHA-256 comparison, and canonical package hash
-- **Result:** Source/Lab versions are `0.4.6`; both contain 8 files; path and byte diff counts are zero; both canonical hashes are `65b146f6091ecb005715fbbee60b3c2b8d2476f004004cc38e779ff2b1a9e121`.
-- **Command:** authorized `TRANSPORT-A2P2-023` relative-path and per-file SHA-256 comparison before/after sync
-- **Result:** All 6 authorized Runtime files are unchanged; path and content diff counts are zero.
-- **Scope:** 仅使用指定 Runtime 的脱敏 fixture 与假 OpenCLI；未运行 OpenCLI、真实 Browser 实验或发送消息。
+- **Result:** Both contain 8 files; path and byte diff counts are zero; both canonical hashes are `f5b87edd3336622a4df9fe327da7b93d881b76e1da375a2da52353a5c0ae5d90`.
+- **Command:** authorized `TRANSPORT-A2P2-025` seven-file SHA-256 comparison before/after sync
+- **Result:** All seven authorized Runtime files are unchanged; content diff count is zero.
+- **Scope:** 只使用指定 Runtime、脱敏纯本地 fake OpenCLI 与静态检查；未运行真实 OpenCLI、Browser 实验或发送消息。
 - **Last verified:** 2026-08-05
