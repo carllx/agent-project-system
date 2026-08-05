@@ -164,7 +164,7 @@ Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversatio
 
 ### A2.1 preparation interface
 
-Wrapper 必须提供独立公开命令 `prepare-new --runtime-dir <path> --work-item-id <id>`。它只执行：
+Wrapper 必须提供独立公开命令 `prepare-new --runtime-dir <path> --work-item-id <id>`。普通空白环境准备可以省略旧 Conversation 要求；正式 A2.1 转换验收必须增加 `--require-existing-conversation`。它只执行：
 
 ```text
 CREATE_NEW_CONVERSATION
@@ -173,9 +173,11 @@ CREATE_NEW_CONVERSATION
 → STOP_WITHOUT_SEND
 ```
 
-`prepare-new` 是 A2.1，只创建并验证空白新对话；`send` 是 A2.2/A3，才负责发送消息。A2.1 必须记录操作前 URL 与旧 Conversation ID，执行一次 `new`，证明最终 URL 已离开旧 `/c/<id>` 且为 ChatGPT 根页面或 `/new`，再执行一次只读 `read`。URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码精确为 `EMPTY_RESULT` 时，即使 CLI 返回非零退出码，也允许作为 `prepare-new` 的空页面证据；空 JSON 对象或数组同样为空。其他错误码、未知结构或不可解析输出必须以 `READ_UNPARSEABLE` 阻止发送；可识别的真实 ChatGPT 消息必须以 `READ_NOT_EMPTY` 阻止发送。本命令不得调用 `ask` 或 `send`、不得创建 Message ID，且 `PREPARED_NEW_CONVERSATION` 不代表消息已投递或 A2.2 已通过。
+`prepare-new` 是 A2.1，只创建并验证空白新对话；`send` 是 A2.2/A3，才负责发送消息。带 `--require-existing-conversation` 时，Wrapper 首先只读执行一次 `status`；只有精确的 ChatGPT `/c/<id>` URL 满足前置条件。ChatGPT 根 URL、`/new`、其他域名、畸形路径或非精确 `/c/<id>` 路径必须在 `new` 和 `read` 前停止，保存 `test_result=BLOCKED_BEFORE_EXECUTION`、`stop_reason=EXISTING_CONVERSATION_PRECONDITION_NOT_MET`、`conversation_transition_verified=false`、`message_send_count=0`。实验 Agent 不得自行打开、搜索或制造旧对话，也不得覆盖 Wrapper 原始结果。未带该参数时保留普通空白环境准备的既有兼容行为。
 
-A2.1 在 Wrapper 内固定强制 `MAX_SEND_ATTEMPTS=0`、`MAX_RECOVERY_ATTEMPTS=0`、`MAX_DETAIL_CHECKS=0`、`MAX_EXTERNAL_COMMANDS=4`、`MAX_EXPERIMENT_SECONDS=60`。六十秒覆盖 Wrapper 启动及全部子命令和轮询；预算耗尽时停止后续命令并持久化 `stop_reason=BUDGET_EXHAUSTED`。Runtime 至少保存 `work_item_id`、`operation=PREPARE_NEW`、`pre_operation_url`、`pre_operation_conversation_id`、`pre_operation_mode`、`post_operation_url`、`conversation_transition_verified`、`blank_environment_verified`、`verification_result`、`read_result`、`message_send_count=0`、`external_command_count`、`started_at`、`stopped_at`、`elapsed_seconds`、`stop_reason` 和 `test_result`。起始为旧 `/c/<id>` 且最终进入根页面或 `/new` 时记录 `pre_operation_mode=EXISTING_CONVERSATION` 与 `conversation_transition_verified=true`；起始已为根页面或 `/new` 时记录 `pre_operation_mode=ALREADY_NEW` 与 `conversation_transition_verified=false`。只有读取为空才记录 `blank_environment_verified=true`。允许结果仅为 `PREPARED_NEW_CONVERSATION`、`BLOCKED_BEFORE_SEND`、`BUDGET_EXHAUSTED`、`TEST_PROTOCOL_VIOLATION`。
+前置条件通过后，A2.1 必须记录操作前 URL 与旧 Conversation ID，执行一次 `new`，证明最终 URL 已离开旧 `/c/<id>` 且为 ChatGPT 根页面或 `/new`，再执行一次只读 `read`。URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码精确为 `EMPTY_RESULT` 时，即使 CLI 返回非零退出码，也允许作为 `prepare-new` 的空页面证据；空 JSON 对象或数组同样为空。其他错误码、未知结构或不可解析输出必须以 `READ_UNPARSEABLE` 阻止发送；可识别的真实 ChatGPT 消息必须以 `READ_NOT_EMPTY` 阻止发送。本命令不得调用 `ask` 或 `send`、不得创建 Message ID。`PREPARED_NEW_CONVERSATION` 只表示 Wrapper 成功准备并验证了空白环境，不代表消息已投递或 A2.2 已通过；`BLOCKED_BEFORE_EXECUTION` 表示实验所需起始条件不存在且 Wrapper 未执行转换。
+
+A2.1 在 Wrapper 内固定强制 `MAX_SEND_ATTEMPTS=0`、`MAX_RECOVERY_ATTEMPTS=0`、`MAX_DETAIL_CHECKS=0`、`MAX_EXTERNAL_COMMANDS=4`、`MAX_EXPERIMENT_SECONDS=60`。六十秒覆盖 Wrapper 启动及全部子命令和轮询；预算耗尽时停止后续命令并持久化 `stop_reason=BUDGET_EXHAUSTED`。Runtime 至少保存 `work_item_id`、`operation=PREPARE_NEW`、`require_existing_conversation`、`precondition_checked`、`precondition_met`、`pre_operation_url`、`pre_operation_conversation_id`、`pre_operation_mode`、`new_command_called`、`post_operation_url`、`conversation_transition_verified`、`blank_environment_verified`、`verification_result`、`read_result`、`message_send_count=0`、`external_command_count`、`started_at`、`stopped_at`、`elapsed_seconds`、`stop_reason` 和 `test_result`。起始为旧 `/c/<id>` 且最终进入根页面或 `/new` 时记录 `pre_operation_mode=EXISTING_CONVERSATION` 与 `conversation_transition_verified=true`；起始已为根页面或 `/new` 时记录 `pre_operation_mode=ALREADY_NEW` 与 `conversation_transition_verified=false`。只有读取为空才记录 `blank_environment_verified=true`。允许结果仅为 `PREPARED_NEW_CONVERSATION`、`BLOCKED_BEFORE_EXECUTION`、`BLOCKED_BEFORE_SEND`、`BUDGET_EXHAUSTED`、`TEST_PROTOCOL_VIOLATION`。
 
 本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此独立创建后必须组合 URL 与空页面验证。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
 
@@ -200,7 +202,7 @@ A2.1 在 Wrapper 内固定强制 `MAX_SEND_ATTEMPTS=0`、`MAX_RECOVERY_ATTEMPTS=
 
 ### Experiment A2.1: Prepare new without send
 
-使用新的 Work Item ID 和 Runtime 目录调用公开 `prepare-new`，只验证新空白对话与正式 Runtime 状态。该实验不得发送消息，成功结果只为 `PREPARED_NEW_CONVERSATION`。
+从用户预先放置的旧 `/c/<id>` 页面开始，使用新的 Work Item ID 和 Runtime 目录调用公开 `prepare-new --require-existing-conversation`，只验证从该旧 Conversation 转换到新空白对话及正式 Runtime 状态。实验 Agent 不得自行打开或搜索旧对话。该实验不得发送消息；成功结果只为 `PREPARED_NEW_CONVERSATION`，起始条件不存在时必须为 `BLOCKED_BEFORE_EXECUTION`。
 
 ### Experiment A2.2: One-send transport
 

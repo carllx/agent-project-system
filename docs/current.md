@@ -9,35 +9,32 @@
 
 ## Active Work Item
 
-- **ID:** `TRANSPORT-A2P1-READ-COMPAT-007`
-- **Name:** 修复真实 Browser Read 空页识别
-- **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `432e907`
-- **Current objective:** 审查 `TRANSPORT-A2P1-006` 的指定原始证据，确认真实 OpenCLI `read` 误判原因，并补齐精确兼容性测试和最小修复。
+- **ID:** `TRANSPORT-A2P1-PRECONDITION-010`
+- **Name:** 机器强制 A2.1 起始条件
+- **Work Item state:** `IN_PROGRESS`
+- **Baseline commit:** `0ae60e4ed4a6be17014a999186b1c74696eee647`
+- **Current objective:** 为 `prepare-new` 增加机器强制的旧 Conversation 起始条件，避免从 `/new` 启动的无效转换实验。
 
 ## Acceptance criteria
 
-- 逐字核对本次指定的四份 Runtime 原始证据，不读取其他 Runtime、Browser 对话或 IDE 日志。
-- 精确兼容真实 stderr error envelope 中非零退出的 `EMPTY_RESULT`，但不放宽其他错误。
-- 区分 `READ_NOT_EMPTY` 与 `READ_UNPARSEABLE`，所有失败保持零发送。
-- 区分 `ALREADY_NEW` 与从旧 `/c/<id>` 成功进入 `/new`，独立记录空环境验证与 Conversation 转换验证。
-- 使用真实 `04-read-new.json` 的脱敏副本或等价精确结构覆盖要求的回归场景，并保留 A2.2/A3 发送回归。
-- 仅更新既有 Skill、Spec、Current 权威文档，版本升至 `0.4.2`。
-- 完成本地验证、Commit（不 push）、Lab Skill 全量同步及源/Lab 包哈希核验；不运行真实 Browser 实验。
+- 公开 `prepare-new --help` 暴露 `--require-existing-conversation`。
+- 正式 A2.1 从精确 ChatGPT `/c/<id>` 起始时继续执行 `new → status → read`，并兼容真实 `EMPTY_RESULT + exit code 66`。
+- 严格模式从 `/new`、根 URL、其他域名或无效 Conversation URL 起始时，只执行最小只读 `status`，在 `new` 和 `read` 前返回 `BLOCKED_BEFORE_EXECUTION`。
+- Runtime 保存前置条件、起始状态、`new` 调用、转换、空环境、停止原因和结果字段，所有场景保持 `message_send_count=0`。
+- 未带新参数的普通 `prepare-new` 行为保持兼容，A2.2/A3 发送测试无回归。
+- 只更新既有 Skill、Spec、Current 权威文档，版本升至 `0.4.3`。
+- 完成本地验证、Commit（不 push）、Lab Skill 全量同步及源/Lab 包哈希核验；保留历史 Runtime，不运行真实 Browser 实验。
 
 ## Completed
 
 - 已确认上一 Work Item 为 `ACHIEVED`、本项开始时工作区干净。
-- 已只读取 `TRANSPORT-A2P1-006/raw/` 下用户指定的四份证据；`04-read-new.json` 为 `returncode=66`、空 stdout、stderr 精确 `error.code=EMPTY_RESULT`。
-- 已确认旧 parser 只解析 stdout、要求零退出，并把真实空页误记为 `READ_NOT_EMPTY`。
-- 已加入真实结构 fixture、窄错误码解析、保守三态读取分类与起始模式/转换字段。
-- 已通过 21 项纯本地传输测试、文档检查、包检查、Skill Creator 校验和 whitespace 检查；发送回归只使用本地假 OpenCLI/Mock。
-- 已完整覆盖同步 Lab Skill；源与 Lab 均为八个文件，逐文件无差异，聚合哈希均为 `d0425eb92beef622527f50e9cfde5f62e415052d121b5ac35e973cebed344146`。
-- 已确认指定 `TRANSPORT-A2P1-006/raw/` 四个文件同步前后无差异；未修改其他 Lab Runtime，也未运行真实 Browser。
+- 已确认根因为 Wrapper 只记录 `ALREADY_NEW`，却没有机器阻止无效的 A2.1 转换实验继续执行 `new`。
+- 已实现严格起始闸门、所需 Runtime 字段和精确 Conversation URL 判断，并保留无参数兼容路径。
+- 已增加公开 CLI 覆盖及既有发送回归；未运行真实 Browser 或真实发送。
 
 ## In progress
 
-- None.
+- 完成全套验证、源 Commit、Lab 整包同步与一致性核验。
 
 ## Blockers
 
@@ -49,7 +46,7 @@
 
 ## Next action
 
-- 在新的独立 Work Item 中从旧 `/c/<id>` 起始运行 A2.1，验证真实 `EMPTY_RESULT` 兼容与 Conversation transition；继续保持零发送。
+- 运行全套本地验证并审查 Diff；通过后创建本地实现 Commit、同步 Lab，再记录最终证据。
 
 ## Files to read
 
@@ -63,17 +60,6 @@
 
 ## Last validation
 
-- **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 21 pure-local scenarios, including the real read shape, all required failure/mode cases, and five existing send regressions.
-- **Command:** `python scripts/check_docs.py`
-- **Result:** Passed.
-- **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed for version `0.4.2` and the exact eight-file package.
-- **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
-- **Result:** Passed.
-- **Command:** `git diff --check`
-- **Result:** Passed; only Git line-ending conversion warnings were emitted.
-- **Command:** source/Lab canonical aggregate hash and specified Runtime pre/post hash comparison
-- **Result:** Source/Lab paths and hashes equal; specified Runtime four files unchanged.
-- **Scope:** 指定原始证据审查与纯本地合成/Mock 验证；未运行真实 Browser 实验或真实发送。
+- **Status:** Pending final validation.
+- **Scope:** 源包与纯本地公开 CLI 假 OpenCLI/Mock 验证；不运行真实 Browser 实验或真实发送。
 - **Last verified:** 2026-08-05

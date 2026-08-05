@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import json
-import importlib.util
-import io
 import os
 import subprocess
 import sys
 import tempfile
-from contextlib import redirect_stdout
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 
-sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "skills" / "research-review-lead" / "scripts" / "opencli_transport.py"
 REAL_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p1-read-empty-result.json"
@@ -25,12 +19,6 @@ WORK_ITEM = "SYNTHETIC-A2P1-001"
 LEGACY_WORK_ITEM = "SYNTHETIC-TRANSPORT-001"
 LEGACY_MESSAGE_ID = f"{LEGACY_WORK_ITEM}-R0-SMOKE"
 NEW_ID = "new-conversation"
-
-SPEC = importlib.util.spec_from_file_location("opencli_transport", TRANSPORT)
-assert SPEC and SPEC.loader
-transport = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(transport)
-
 
 FAKE_OPENCLI = r'''import json, os, sys, time
 scenario_path = os.environ["OPENCLI_FAKE_SCENARIO"]
@@ -45,7 +33,7 @@ open(counter_path, "w", encoding="utf-8").write(str(index + 1))
 with open(log_path, "a", encoding="utf-8") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\n")
 item = scenario[index]
-time.sleep(item.get("sleep", 0))
+time.sleep(2 if item.get("timed_out") else item.get("sleep", 0))
 sys.stdout.write(item.get("stdout", ""))
 sys.stderr.write(item.get("stderr", ""))
 raise SystemExit(item.get("returncode", 0))
@@ -110,8 +98,19 @@ def test_help_exposes_prepare_new() -> None:
     assert "prepare-new" in completed.stdout
 
 
+def test_help_exposes_require_existing_conversation() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(TRANSPORT), "prepare-new", "--help"],
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert completed.returncode == 0
+    assert "--require-existing-conversation" in completed.stdout
+
+
 def test_old_conversation_to_new_and_empty_result() -> None:
-    completed, state, calls, runtime = run_prepare(success_sequence())
+    completed, state, calls, runtime = run_prepare(
+        success_sequence(), extra_args=["--require-existing-conversation"]
+    )
     assert completed.returncode == 0
     assert state["test_result"] == "PREPARED_NEW_CONVERSATION"
     assert state["pre_operation_conversation_id"] == OLD_ID
@@ -119,6 +118,10 @@ def test_old_conversation_to_new_and_empty_result() -> None:
     assert state["read_result"] == "EMPTY"
     assert state["verification_result"] == "NEW_BLANK_CONVERSATION_VERIFIED"
     assert state["pre_operation_mode"] == "EXISTING_CONVERSATION"
+    assert state["require_existing_conversation"] is True
+    assert state["precondition_checked"] is True
+    assert state["precondition_met"] is True
+    assert state["new_command_called"] is True
     assert state["conversation_transition_verified"] is True
     assert state["blank_environment_verified"] is True
     assert state["message_send_count"] == 0
@@ -159,6 +162,8 @@ def test_runtime_contains_required_a2p1_fields() -> None:
     _, state, _, _ = run_prepare(success_sequence())
     required = {
         "work_item_id", "operation", "pre_operation_url",
+        "require_existing_conversation", "precondition_checked",
+        "precondition_met", "new_command_called",
         "pre_operation_conversation_id", "post_operation_url",
         "pre_operation_mode", "conversation_transition_verified",
         "blank_environment_verified",
@@ -214,6 +219,66 @@ def test_already_new_reports_no_conversation_transition() -> None:
     assert state["pre_operation_mode"] == "ALREADY_NEW"
     assert state["conversation_transition_verified"] is False
     assert state["blank_environment_verified"] is True
+    assert_no_send(calls)
+
+
+def assert_precondition_blocked(pre_url: str) -> tuple[dict, list[list[str]]]:
+    completed, state, calls, _ = run_prepare(
+        [status(pre_url)], extra_args=["--require-existing-conversation"]
+    )
+    assert completed.returncode == 2
+    assert state["test_result"] == "BLOCKED_BEFORE_EXECUTION"
+    assert state["stop_reason"] == "EXISTING_CONVERSATION_PRECONDITION_NOT_MET"
+    assert state["require_existing_conversation"] is True
+    assert state["precondition_checked"] is True
+    assert state["precondition_met"] is False
+    assert state["new_command_called"] is False
+    assert state["conversation_transition_verified"] is False
+    assert state["blank_environment_verified"] is False
+    assert state["message_send_count"] == 0
+    assert state["external_command_count"] == 1
+    assert [call[1] for call in calls] == ["status"]
+    assert_no_send(calls)
+    return state, calls
+
+
+def test_required_existing_from_new_stops_before_new() -> None:
+    state, calls = assert_precondition_blocked("https://chatgpt.com/new")
+    assert state["pre_operation_mode"] == "ALREADY_NEW"
+    assert all(call[1] not in {"new", "read"} for call in calls)
+
+
+def test_required_existing_from_root_stops_before_new() -> None:
+    state, calls = assert_precondition_blocked("https://chatgpt.com/")
+    assert state["pre_operation_mode"] == "ALREADY_NEW"
+    assert all(call[1] not in {"new", "read"} for call in calls)
+
+
+def test_required_existing_rejects_invalid_conversation_url() -> None:
+    invalid_urls = [
+        "https://chatgpt.com/c/",
+        "https://chatgpt.com/c/not-valid/extra",
+        "https://example.com/c/not-a-chatgpt-conversation",
+    ]
+    for url in invalid_urls:
+        state, calls = assert_precondition_blocked(url)
+        assert state["pre_operation_mode"] == "UNKNOWN"
+        assert state["pre_operation_conversation_id"] is None
+        assert all(call[1] not in {"new", "read"} for call in calls)
+
+
+def test_prepare_without_requirement_remains_compatible() -> None:
+    completed, state, calls, _ = run_prepare(
+        success_sequence(pre_url="https://chatgpt.com/new")
+    )
+    assert completed.returncode == 0
+    assert state["test_result"] == "PREPARED_NEW_CONVERSATION"
+    assert state["require_existing_conversation"] is False
+    assert state["precondition_checked"] is True
+    assert state["precondition_met"] is False
+    assert state["new_command_called"] is True
+    assert state["message_send_count"] == 0
+    assert [call[1] for call in calls] == ["status", "new", "status", "read"]
     assert_no_send(calls)
 
 
@@ -283,27 +348,51 @@ def legacy_result(
     }
 
 
-def legacy_args(root: Path, *, max_external_commands: int = 8) -> SimpleNamespace:
+def send_cli_command(root: Path, *, max_external_commands: int = 8) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
-    return SimpleNamespace(
-        work_item_id=LEGACY_WORK_ITEM, message_id=LEGACY_MESSAGE_ID, round=0,
-        message_type="TRANSPORT_SMOKE", conversation=None, manual_new_url=None,
-        message_file=str(message_file), state_file=str(root / "state.json"),
-        command_wait_seconds=15, max_recovery_attempts=1, max_detail_checks=1,
-        max_external_commands=max_external_commands, max_experiment_seconds=60,
-        recent_candidate_limit=3,
-    )
+    return [
+        sys.executable, str(TRANSPORT), "send",
+        "--work-item-id", LEGACY_WORK_ITEM,
+        "--message-id", LEGACY_MESSAGE_ID,
+        "--round", "0",
+        "--message-type", "TRANSPORT_SMOKE",
+        "--message-file", str(message_file),
+        "--state-file", str(root / "state.json"),
+        "--command-wait-seconds", "1",
+        "--max-recovery-attempts", "1",
+        "--max-detail-checks", "1",
+        "--max-external-commands", str(max_external_commands),
+        "--max-experiment-seconds", "60",
+        "--recent-candidate-limit", "3",
+    ]
 
 
-def run_send_case(sequence: list[dict], *, max_external_commands: int = 8) -> tuple[int, dict]:
+def run_send_case(
+    sequence: list[dict], *, max_external_commands: int = 8
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
-    case_args = legacy_args(root, max_external_commands=max_external_commands)
-    with patch.object(transport, "run_opencli", side_effect=sequence) as mocked:
-        with redirect_stdout(io.StringIO()):
-            exit_code = transport.send_command(case_args)
-        assert mocked.call_count <= max_external_commands
-    return exit_code, json.loads(Path(case_args.state_file).read_text(encoding="utf-8"))
+    fake = root / "fake_opencli.py"
+    fake.write_text(FAKE_OPENCLI, encoding="utf-8")
+    scenario = root / "scenario.json"
+    scenario.write_text(json.dumps(sequence), encoding="utf-8")
+    counter = root / "counter.txt"
+    log = root / "calls.jsonl"
+    env = os.environ.copy()
+    env.update({
+        "OPENCLI_TRANSPORT_EXECUTABLE": str(fake),
+        "OPENCLI_FAKE_SCENARIO": str(scenario),
+        "OPENCLI_FAKE_COUNTER": str(counter),
+        "OPENCLI_FAKE_LOG": str(log),
+    })
+    command = send_cli_command(root, max_external_commands=max_external_commands)
+    completed = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) <= max_external_commands
+    return completed, state, calls, command, env
 
 
 def legacy_status(url: str) -> dict:
@@ -322,64 +411,65 @@ def legacy_detail(ready: bool = True) -> dict:
 
 
 def test_send_correct_new_conversation_regression() -> None:
-    exit_code, state = run_send_case([
+    completed, state, _, _, _ = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
     ])
-    assert exit_code == 0
+    assert completed.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["send_attempt_count"] == 1
 
 
 def test_send_timeout_recovery_regression() -> None:
-    exit_code, state = run_send_case([
+    completed, state, _, _, _ = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result(returncode=1, timed_out=True),
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"), legacy_detail(),
     ])
-    assert exit_code == 0
+    assert completed.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["recovery_attempt_count"] == 1
 
 
 def test_send_misroute_regression() -> None:
-    exit_code, state = run_send_case([
+    completed, state, _, _, _ = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
         legacy_result(returncode=1, stderr="navigated away"),
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_detail(),
     ])
-    assert exit_code == 2
+    assert completed.returncode == 2
     assert state["delivery_state"] == "MISROUTED_DELIVERY"
     assert state["official_response_eligible"] is False
 
 
 def test_send_same_message_id_rejected_regression() -> None:
-    root = Path(tempfile.mkdtemp(prefix="rr-resend-regression-"))
-    case_args = legacy_args(root)
-    stored = transport.new_state(case_args, Path(case_args.state_file))
-    stored["delivery_state"] = "MISROUTED_DELIVERY"
-    stored["send_attempt_count"] = 1
-    transport.write_json(Path(case_args.state_file), stored)
-    try:
-        transport.send_command(case_args)
-    except ValueError as error:
-        assert "same-ID resend is forbidden" in str(error)
-    else:
-        raise AssertionError("same Message ID was not rejected")
+    completed, _, calls, command, env = run_send_case([
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"), legacy_result([]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
+    ])
+    assert completed.returncode == 0
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    assert repeated.returncode == 1
+    assert "same-ID resend is forbidden" in repeated.stderr
+    assert len(calls) == 6
 
 
 def test_send_external_budget_regression() -> None:
-    exit_code, state = run_send_case([
+    completed, state, _, _, _ = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
     ], max_external_commands=3)
-    assert exit_code == 2
+    assert completed.returncode == 2
     assert state["send_attempt_count"] == 0
     assert state["external_command_count"] == 3
 
@@ -387,6 +477,7 @@ def test_send_external_budget_regression() -> None:
 def main() -> int:
     tests = [
         test_help_exposes_prepare_new,
+        test_help_exposes_require_existing_conversation,
         test_old_conversation_to_new_and_empty_result,
         test_real_empty_result_format_regression,
         test_nonzero_exact_empty_result_code_verifies_blank_page,
@@ -397,6 +488,10 @@ def main() -> int:
         test_unknown_error_code_is_unparseable,
         test_unparseable_output_blocks_before_send,
         test_already_new_reports_no_conversation_transition,
+        test_required_existing_from_new_stops_before_new,
+        test_required_existing_from_root_stops_before_new,
+        test_required_existing_rejects_invalid_conversation_url,
+        test_prepare_without_requirement_remains_compatible,
         test_old_conversation_reports_verified_transition,
         test_all_read_failures_remain_zero_send,
         test_sixty_second_budget_is_machine_enforced,

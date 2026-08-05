@@ -216,6 +216,19 @@ def conversation_id_from_url(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def existing_chatgpt_conversation_id(url: str | None) -> str | None:
+    """Return the ID only for an exact ChatGPT /c/<id> page."""
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}:
+        return None
+    match = re.fullmatch(r"/c/([A-Za-z0-9-]+)", parsed.path)
+    return match.group(1) if match else None
+
+
 def set_state(state: dict[str, Any], delivery_state: str, note: str) -> None:
     if delivery_state not in DELIVERY_STATES:
         raise ValueError(f"invalid delivery state: {delivery_state}")
@@ -299,12 +312,16 @@ def blank_new_url(url: str | None, old_id: str | None) -> bool:
 
 def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "work_item_id": args.work_item_id,
         "operation": "PREPARE_NEW",
+        "require_existing_conversation": bool(args.require_existing_conversation),
+        "precondition_checked": False,
+        "precondition_met": False,
         "pre_operation_url": None,
         "pre_operation_conversation_id": None,
         "pre_operation_mode": "UNKNOWN",
+        "new_command_called": False,
         "post_operation_url": None,
         "conversation_transition_verified": False,
         "blank_environment_verified": False,
@@ -383,10 +400,14 @@ def prepare_new_command(args: argparse.Namespace) -> int:
         ["chatgpt", "status", "-f", "json", "--window", "background"],
     )
     if pre_status is not None:
+        state["precondition_checked"] = True
         state["pre_operation_url"] = status_url(pre_status)
-        state["pre_operation_conversation_id"] = conversation_id_from_url(state["pre_operation_url"] or "")
+        state["pre_operation_conversation_id"] = existing_chatgpt_conversation_id(
+            state["pre_operation_url"]
+        )
         if state["pre_operation_conversation_id"]:
             state["pre_operation_mode"] = "EXISTING_CONVERSATION"
+            state["precondition_met"] = True
         elif blank_new_url(state["pre_operation_url"], None):
             state["pre_operation_mode"] = "ALREADY_NEW"
         persist_prepare(state, state_path)
@@ -396,10 +417,25 @@ def prepare_new_command(args: argparse.Namespace) -> int:
         finish_prepare(state, "BLOCKED_BEFORE_SEND", "PRE_OPERATION_STATUS_UNVERIFIED")
         persist_prepare(state, state_path)
         pre_status = None
+    if (
+        pre_status is not None
+        and state["require_existing_conversation"]
+        and not state["precondition_met"]
+    ):
+        finish_prepare(
+            state,
+            "BLOCKED_BEFORE_EXECUTION",
+            "EXISTING_CONVERSATION_PRECONDITION_NOT_MET",
+        )
+        persist_prepare(state, state_path)
+        pre_status = None
+    before_new_count = state["external_command_count"]
     created = None if pre_status is None else prepare_external_command(
         state, state_path, "new",
         ["chatgpt", "new", "-f", "json", "--window", "background"],
     )
+    state["new_command_called"] = state["external_command_count"] > before_new_count
+    persist_prepare(state, state_path)
     created_ok = bool(result_rows(created))
     post_status = None if not created_ok else prepare_external_command(
         state, state_path, "status-after-prepare",
@@ -689,6 +725,11 @@ def parser() -> argparse.ArgumentParser:
     )
     prepare.add_argument("--runtime-dir", required=True)
     prepare.add_argument("--work-item-id", required=True)
+    prepare.add_argument(
+        "--require-existing-conversation",
+        action="store_true",
+        help="stop before new unless the initial status is an exact ChatGPT /c/<id> page",
+    )
     prepare.add_argument("--command-wait-seconds", type=float, default=COMMAND_WAIT_SECONDS)
     prepare.add_argument("--max-external-commands", type=int, default=PREPARE_MAX_EXTERNAL_COMMANDS)
     prepare.add_argument("--max-experiment-seconds", type=float, default=MAX_EXPERIMENT_SECONDS)
