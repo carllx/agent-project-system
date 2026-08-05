@@ -25,7 +25,7 @@ Resolve these paths relative to this `SKILL.md`:
 - `assets/evidence-packet.md`: verified execution evidence;
 - `assets/decision-request.md`: genuine user decision gate;
 - `assets/handoff.md`: continuity handoff;
-- `scripts/opencli_transport.py`: bounded send, identity recovery, deduplication, polling, and machine-readable state.
+- `scripts/opencli_transport.py`: independent A2.1 preparation plus bounded send, identity recovery, deduplication, polling, and machine-readable state.
 
 Filled Packets, receipts, transport records, and Handoffs are temporary by default. Keep transport state and raw command output in the system temporary directory, record their paths, exclude credentials and unnecessary private content, and clean them after the loop. Do not depend on an IDE-private scratch directory. Prefer stdin; use a safely created temporary file only when stdin is unsuitable.
 
@@ -136,6 +136,25 @@ A CLI timeout moves to `DELIVERY_UNKNOWN`, not automatically to `FAILED`. Recove
 
 ## Create, verify, then send
 
+Treat preparation and delivery as separate public operations:
+
+```text
+prepare-new = A2.1: CREATE_NEW_CONVERSATION -> VERIFY_NEW_CONVERSATION -> PERSIST_RUNTIME_STATE -> STOP_WITHOUT_SEND
+send        = A2.2/A3: send a message only after the applicable target verification
+```
+
+Run A2.1 with a fresh Runtime directory:
+
+```powershell
+python <skill-dir>/scripts/opencli_transport.py prepare-new `
+  --runtime-dir <path> `
+  --work-item-id <id>
+```
+
+`prepare-new` records the pre-operation URL and old Conversation ID, runs one `new`, verifies the final URL is the ChatGPT root or `/new` and is no longer the old `/c/<id>`, then runs one read-only `read`. Interpret `EMPTY_RESULT` as successful empty-page evidence. Persist `operation=PREPARE_NEW`, `message_send_count=0`, timestamps, counters, verification, read result, stop reason, and test result, then stop. It must never call `ask` or `send`, create a Message ID, or claim message delivery or A2.2 success.
+
+Enforce A2.1 budgets inside the wrapper: zero send attempts, zero recovery attempts, zero detail checks, at most four external commands, and at most sixty seconds from wrapper start through all commands and polling. On exhaustion, stop subsequent commands and persist `stop_reason=BUDGET_EXHAUSTED` with `test_result=BUDGET_EXHAUSTED`.
+
 Use this transport flow:
 
 ```text
@@ -148,7 +167,7 @@ PREPARE_MESSAGE
 -> PARSE_RR_REVIEW
 ```
 
-For a new Work Item the wrapper first captures the active URL and a short recent-ID snapshot, runs `opencli chatgpt new` without a message, then requires all of the following before `ask`: current URL changed away from the old identity, current URL contains no `/c/<id>`, it is a ChatGPT blank root URL, and `read` returns no messages. The send then targets that verified current blank page without `--new`.
+For a new Work Item, complete `prepare-new` (A2.1) independently before any A2.2/A3 delivery experiment. The `send` path remains the message-delivery operation and must not treat `PREPARED_NEW_CONVERSATION` as delivery evidence.
 
 If OpenCLI cannot verify the blank page, stop before sending with `BLOCKED`. The fallback is: the user manually opens a blank ChatGPT root URL, copies that exact URL, and the Loop Driver reruns with `--manual-new-url <url>`; the wrapper still checks current `status` equals that URL and `read` is empty. A human assertion alone does not bypass verification.
 

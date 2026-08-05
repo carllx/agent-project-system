@@ -162,6 +162,21 @@ Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversatio
 
 默认实验预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=8`、`MAX_EXPERIMENT_SECONDS=60`。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
 
+### A2.1 preparation interface
+
+Wrapper 必须提供独立公开命令 `prepare-new --runtime-dir <path> --work-item-id <id>`。它只执行：
+
+```text
+CREATE_NEW_CONVERSATION
+→ VERIFY_NEW_CONVERSATION
+→ PERSIST_RUNTIME_STATE
+→ STOP_WITHOUT_SEND
+```
+
+`prepare-new` 是 A2.1，只创建并验证空白新对话；`send` 是 A2.2/A3，才负责发送消息。A2.1 必须记录操作前 URL 与旧 Conversation ID，执行一次 `new`，证明最终 URL 已离开旧 `/c/<id>` 且为 ChatGPT 根页面或 `/new`，再执行一次只读 `read`。本命令将 `EMPTY_RESULT` 解释为空页面验证成功，但不得调用 `ask` 或 `send`、不得创建 Message ID，且 `PREPARED_NEW_CONVERSATION` 不代表消息已投递或 A2.2 已通过。
+
+A2.1 在 Wrapper 内固定强制 `MAX_SEND_ATTEMPTS=0`、`MAX_RECOVERY_ATTEMPTS=0`、`MAX_DETAIL_CHECKS=0`、`MAX_EXTERNAL_COMMANDS=4`、`MAX_EXPERIMENT_SECONDS=60`。六十秒覆盖 Wrapper 启动及全部子命令和轮询；预算耗尽时停止后续命令并持久化 `stop_reason=BUDGET_EXHAUSTED`。Runtime 至少保存 `work_item_id`、`operation=PREPARE_NEW`、`pre_operation_url`、`pre_operation_conversation_id`、`post_operation_url`、`verification_result`、`read_result`、`message_send_count=0`、`external_command_count`、`started_at`、`stopped_at`、`elapsed_seconds`、`stop_reason` 和 `test_result`。允许结果仅为 `PREPARED_NEW_CONVERSATION`、`BLOCKED_BEFORE_SEND`、`BUDGET_EXHAUSTED`、`TEST_PROTOCOL_VIOLATION`。
+
 本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此独立创建后必须组合 URL 与空页面验证。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
 
 ### 实验 Agent 协议
@@ -183,9 +198,13 @@ Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversatio
 
 使用已知 Conversation ID 和已知 `MESSAGE_ID` 验证 wrapper 的 recover 分支可返回 `RESPONSE_READY`，且不发送消息。
 
-### Experiment A2: One-send transport
+### Experiment A2.1: Prepare new without send
 
-使用新的无副作用 Work Item、单一 `MESSAGE_ID` 和全新 Runtime 目录，验证 `CREATE_NEW_CONVERSATION → VERIFY_NEW_CONVERSATION → SEND_MESSAGE`、身份捕获或一次恢复及无重复投递。执行前需用户授权真实 Browser 写入；`TRANSPORT-RECOVERY-002` 不得用于判定通过。
+使用新的 Work Item ID 和 Runtime 目录调用公开 `prepare-new`，只验证新空白对话与正式 Runtime 状态。该实验不得发送消息，成功结果只为 `PREPARED_NEW_CONVERSATION`。
+
+### Experiment A2.2: One-send transport
+
+在 A2.1 独立通过后，使用新的无副作用 Work Item、单一 `MESSAGE_ID` 和全新 Runtime 目录验证 `SEND_MESSAGE`、身份捕获或一次恢复及无重复投递。执行前需用户授权真实 Browser 写入；`TRANSPORT-RECOVERY-002` 不得用于判定通过。
 
 ### Experiment A3: `send` candidate
 

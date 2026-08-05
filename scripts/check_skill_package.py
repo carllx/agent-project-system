@@ -36,6 +36,8 @@ REQUIRED_SKILL_MARKERS = {
     "PREPARE_MESSAGE",
     "CREATE_NEW_CONVERSATION",
     "VERIFY_NEW_CONVERSATION",
+    "PERSIST_RUNTIME_STATE",
+    "STOP_WITHOUT_SEND",
     "SEND_MESSAGE",
     "CAPTURE_OR_RECOVER_CONVERSATION_ID",
     "POLL_OR_READ_RESPONSE",
@@ -55,6 +57,8 @@ REQUIRED_SKILL_MARKERS = {
     "MAX_DETAIL_CHECKS",
     "MAX_EXTERNAL_COMMANDS",
     "MAX_EXPERIMENT_SECONDS",
+    "prepare-new",
+    "PREPARED_NEW_CONVERSATION",
     "HARD_FAILURE: TEST_PROTOCOL_VIOLATION",
     "Conversation ID",
     "WORK_ITEM_ID",
@@ -172,15 +176,28 @@ def main() -> int:
         except SyntaxError as error:
             errors.append(f"transport synthetic test has invalid Python syntax: {error}")
         for scenario in (
-            "test_correct_new_conversation",
-            "test_timeout_recovers_correct_new_conversation",
-            "test_message_misrouted_to_old_conversation",
-            "test_old_conversation_hit_never_promoted",
-            "test_same_message_id_second_send_rejected",
-            "test_experiment_budget_stops",
+            "test_help_exposes_prepare_new",
+            "test_old_conversation_to_new_and_empty_result",
+            "test_empty_json_also_verifies_blank_page",
+            "test_runtime_contains_required_a2p1_fields",
+            "test_old_conversation_still_active_fails",
+            "test_existing_messages_fail",
+            "test_sixty_second_budget_is_machine_enforced",
+            "test_prepare_never_calls_ask_or_send",
+            "test_external_command_budget_stops_before_next_command",
         ):
             if scenario not in test_text:
                 errors.append(f"transport synthetic test is missing scenario: {scenario}")
+
+        prepare_body = re.search(
+            r"def prepare_new_command\(.*?\n(?=def prepare_payload\()",
+            TRANSPORT_SCRIPT.read_text(encoding="utf-8") if TRANSPORT_SCRIPT.is_file() else "",
+            flags=re.DOTALL,
+        )
+        if not prepare_body:
+            errors.append("transport wrapper has no inspectable prepare_new_command")
+        elif re.search(r'\[\s*"chatgpt"\s*,\s*"(?:ask|send)"', prepare_body.group(0)):
+            errors.append("prepare_new_command contains a prohibited ask/send OpenCLI call")
 
     asset_dir = PACKAGE / "assets"
     actual_assets = (

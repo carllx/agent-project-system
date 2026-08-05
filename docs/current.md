@@ -9,39 +9,38 @@
 
 ## Active Work Item
 
-- **Name:** 修复新对话错投并收紧 Transport 实验纪律
-- **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `8a85927d52d12b85acc98f79b7b02d18063717a5`
-- **Current objective:** 增加 `MISROUTED_DELIVERY`，将新 Conversation 的创建、验证与发送拆开，限制恢复和实验预算，并用纯本地合成测试后重新发布 Lab 包。
+- **ID:** `TRANSPORT-A2P1-INTERFACE-004`
+- **Name:** 补齐 A2.1 可执行接口
+- **Work Item state:** `IN_PROGRESS`
+- **Baseline commit:** `b80072da113e119336fb8acd298ebf5456e66f09`
+- **Current objective:** 为 Transport Wrapper 增加正式、独立、零发送的 `prepare-new` 命令，以机器预算完成新对话创建、验证、Runtime 持久化和停止。
 
 ## Acceptance criteria
 
-- 只读取 `TRANSPORT-RECOVERY-002` 的 state、相关 raw 与最终缺陷结论，不再发送或扫描无关 Browser 对话。
-- 旧 Conversation 精确命中进入 `MISROUTED_DELIVERY`、阻止重发和正式 RR 输出并返回 `BLOCKED`。
-- 新发送遵循 `CREATE_NEW_CONVERSATION → VERIFY_NEW_CONVERSATION → SEND_MESSAGE`，未知页面状态不发送。
-- 恢复只检查当前活动 Conversation 与有限最近候选，只搜索精确 Work Item ID 和 Message ID。
-- Runtime 保存要求的身份、计数、时间、错投和停止字段。
-- Skill 与测试规范包含有限命令预算和实验 Agent 硬边界。
-- 六个纯本地合成场景、文档、包与 whitespace 验证通过。
-- 创建本地 Commit、不 push，并完整替换 Lab Skill，证明包一致、无额外文件、fixture 不变。
+- 公开 CLI `prepare-new --runtime-dir <path> --work-item-id <id>` 可独立执行 A2.1。
+- 记录操作前 URL、旧 Conversation ID、操作后 URL、验证与只读结果。
+- 一次 `new` 后必须离开旧 `/c/<id>`，停在允许的 ChatGPT 根页面或 `/new`，且 `read` 为空。
+- `EMPTY_RESULT` 在 A2.1 中作为空页面成功证据；不调用 `ask`、`send`，不创建 Message ID。
+- Wrapper 内强制零发送、零恢复、零 detail、最多四个外部命令和端到端六十秒。
+- Runtime 保存指定字段，预算耗尽时记录 `stop_reason=BUDGET_EXHAUSTED`。
+- 合成测试全部通过公开 CLI，覆盖帮助、成功、旧对话、已有消息、零发送、时间预算、持久化和命令预算。
+- Skill、Spec 和当前状态明确 `prepare-new=A2.1`、`send=A2.2/A3`，版本为 `0.4.1`。
+- 创建本地 Commit、不 push；完整覆盖同步 Lab Skill，证明源/Lab 包哈希一致且 fixture 不变。
 
 ## Completed
 
-- 确认旧 Wrapper 排除所有 pre-send Conversation，无法把旧对话中的已送达消息分类为错投。
-- 确认 OpenCLI `1.8.6` 的 `new` 只声明 `Status` 输出，而 `status` 可返回当前 URL、`read` 可核验空页面。
-- 源包升级为 `0.4.0`，拆分创建、验证、发送流程；真实 Work Item 不再使用 `ask --new`。
-- 增加 `MISROUTED_DELIVERY`、最少错投证据、正式回复隔离、同 Message ID 一次发送和有限恢复。
-- 默认预算为一次发送、一次恢复、一次 detail、八个外部命令和六十秒。
-- 增加六个纯本地合成场景和实验协议违规硬失败规则。
-- 保留原 Goal Contract；正式 Loop 继续要求 A2、A3 先通过、至少两个完整审查循环和全部验收条件 `MET`。
+- 已确认上一 Work Item 完成且工作区起始状态干净。
+- 已实现公开 `prepare-new`、独立 Runtime schema、`EMPTY_RESULT` 语义和零发送机器预算。
+- 已将合成测试改为通过 subprocess 调用公开 CLI，并使用纯本地假 OpenCLI，未运行真实 Browser 实验。
+- 已同步更新 Skill、RR Loop Spec、版本与包检查规则。
 
 ## In progress
 
-- None.
+- 完成验证、源 Commit、Lab 整包同步与哈希/fixture 核验。
 
 ## Blockers
 
-- 正式 Loop 仍被 Transport A2、A3 的真实 Browser 验证阻塞；本次被污染实验不能作为通过证据。
+- None.
 
 ## Decisions pending
 
@@ -49,7 +48,7 @@
 
 ## Next action
 
-- 使用新的 Work Item ID、Message ID 和 Runtime 目录运行一次严格受预算约束的 A2；如自动空白页验证失败，使用人工打开空白 ChatGPT 根 URL 的降级流程。A2 通过后再单独设计 A3。
+- 运行全套本地验证，修正发现的问题，然后提交并同步 Lab。
 
 ## Files to read
 
@@ -63,13 +62,6 @@
 
 ## Last validation
 
-- **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed six pure-local transport scenarios without Browser sends.
-- **Command:** `python scripts/check_docs.py`
-- **Result:** Passed.
-- **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed.
-- **Command:** `git diff --check`
-- **Result:** Passed.
-- **Scope:** Source and synthetic validation only; A2, A3 and formal Loop remain unverified.
+- **Status:** Pending final validation.
+- **Scope:** Source and pure-local public-CLI synthetic validation only; no real Browser experiment or message send.
 - **Last verified:** 2026-08-05

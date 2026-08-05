@@ -16,12 +16,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 
+PROCESS_MONOTONIC_STARTED = time.monotonic()
+PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 COMMAND_WAIT_SECONDS = 15
 POLL_INTERVAL_SECONDS = 5
 TOTAL_RESPONSE_WAIT_SECONDS = 30
@@ -30,6 +33,10 @@ MAX_RECOVERY_ATTEMPTS = 1
 MAX_DETAIL_CHECKS = 1
 MAX_EXTERNAL_COMMANDS = 8
 MAX_EXPERIMENT_SECONDS = 60
+PREPARE_MAX_SEND_ATTEMPTS = 0
+PREPARE_MAX_RECOVERY_ATTEMPTS = 0
+PREPARE_MAX_DETAIL_CHECKS = 0
+PREPARE_MAX_EXTERNAL_COMMANDS = 4
 RECENT_CANDIDATE_LIMIT = 3
 STABLE_SECONDS = 3
 
@@ -92,6 +99,9 @@ def save_raw(state: dict[str, Any], state_path: Path, label: str, result: dict[s
 
 
 def find_opencli() -> list[str]:
+    test_executable = os.environ.get("OPENCLI_TRANSPORT_EXECUTABLE")
+    if test_executable:
+        return [sys.executable, test_executable]
     for candidate in ("opencli.cmd", "opencli.exe", "opencli"):
         found = shutil.which(candidate)
         if found:
@@ -238,7 +248,141 @@ def blank_new_url(url: str | None, old_id: str | None) -> bool:
         return False
     if conversation_id_from_url(url) or (old_id and old_id in url):
         return False
-    return parsed.path in {"", "/"}
+    return parsed.path in {"", "/", "/new"}
+
+
+def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
+    return {
+        "schema_version": 3,
+        "work_item_id": args.work_item_id,
+        "operation": "PREPARE_NEW",
+        "pre_operation_url": None,
+        "pre_operation_conversation_id": None,
+        "post_operation_url": None,
+        "verification_result": "NOT_RUN",
+        "read_result": "NOT_RUN",
+        "message_send_count": 0,
+        "external_command_count": 0,
+        "started_at": PROCESS_STARTED_AT,
+        "stopped_at": None,
+        "elapsed_seconds": 0.0,
+        "stop_reason": None,
+        "test_result": None,
+        "state_file": str(state_path),
+        "raw_outputs": [],
+        "parameters": {
+            "max_send_attempts": PREPARE_MAX_SEND_ATTEMPTS,
+            "max_recovery_attempts": PREPARE_MAX_RECOVERY_ATTEMPTS,
+            "max_detail_checks": PREPARE_MAX_DETAIL_CHECKS,
+            "max_external_commands": min(max(args.max_external_commands, 0), PREPARE_MAX_EXTERNAL_COMMANDS),
+            "max_experiment_seconds": min(max(args.max_experiment_seconds, 0), MAX_EXPERIMENT_SECONDS),
+            "command_wait_seconds": args.command_wait_seconds,
+        },
+    }
+
+
+def finish_prepare(state: dict[str, Any], result: str, reason: str) -> None:
+    state["test_result"] = result
+    state["stop_reason"] = reason
+    state["stopped_at"] = utc_now()
+    state["elapsed_seconds"] = round(time.monotonic() - state["_monotonic_started"], 3)
+
+
+def persist_prepare(state: dict[str, Any], state_path: Path) -> None:
+    write_json(state_path, {key: value for key, value in state.items() if not key.startswith("_")})
+
+
+def prepare_external_command(
+    state: dict[str, Any], state_path: Path, label: str, args: list[str]
+) -> dict[str, Any] | None:
+    elapsed = time.monotonic() - state["_monotonic_started"]
+    remaining = state["parameters"]["max_experiment_seconds"] - elapsed
+    if state["external_command_count"] >= state["parameters"]["max_external_commands"] or remaining <= 0:
+        finish_prepare(state, "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
+        persist_prepare(state, state_path)
+        return None
+    state["external_command_count"] += 1
+    persist_prepare(state, state_path)
+    result = run_opencli(args, max(0.001, min(state["parameters"]["command_wait_seconds"], remaining)))
+    save_raw(state, state_path, label, result)
+    persist_prepare(state, state_path)
+    if result["timed_out"] or time.monotonic() - state["_monotonic_started"] >= state["parameters"]["max_experiment_seconds"]:
+        finish_prepare(state, "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
+        persist_prepare(state, state_path)
+        return None
+    return result
+
+
+def prepare_new_command(args: argparse.Namespace) -> int:
+    runtime_dir = Path(args.runtime_dir).resolve()
+    state_path = runtime_dir / "prepare-new-state.json"
+    if state_path.exists():
+        existing = read_json(state_path)
+        existing["test_result"] = "TEST_PROTOCOL_VIOLATION"
+        existing["stop_reason"] = "TEST_PROTOCOL_VIOLATION"
+        existing["stopped_at"] = utc_now()
+        existing["elapsed_seconds"] = round(time.monotonic() - PROCESS_MONOTONIC_STARTED, 3)
+        write_json(state_path, existing)
+        print(json.dumps(existing, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2
+    state = prepare_state(args, state_path)
+    state["_monotonic_started"] = PROCESS_MONOTONIC_STARTED
+    persist_prepare(state, state_path)
+
+    pre_status = prepare_external_command(
+        state, state_path, "status-before-prepare",
+        ["chatgpt", "status", "-f", "json", "--window", "background"],
+    )
+    if pre_status is not None:
+        state["pre_operation_url"] = status_url(pre_status)
+        state["pre_operation_conversation_id"] = conversation_id_from_url(state["pre_operation_url"] or "")
+        persist_prepare(state, state_path)
+    if pre_status is not None and (
+        pre_status["timed_out"] or pre_status["returncode"] != 0 or not state["pre_operation_url"]
+    ):
+        finish_prepare(state, "BLOCKED_BEFORE_SEND", "PRE_OPERATION_STATUS_UNVERIFIED")
+        persist_prepare(state, state_path)
+        pre_status = None
+    created = None if pre_status is None else prepare_external_command(
+        state, state_path, "new",
+        ["chatgpt", "new", "-f", "json", "--window", "background"],
+    )
+    created_ok = bool(result_rows(created))
+    post_status = None if not created_ok else prepare_external_command(
+        state, state_path, "status-after-prepare",
+        ["chatgpt", "status", "-f", "json", "--window", "background"],
+    )
+    if post_status is not None:
+        state["post_operation_url"] = status_url(post_status)
+        if blank_new_url(state["post_operation_url"], state["pre_operation_conversation_id"]):
+            state["verification_result"] = "NEW_BLANK_URL_VERIFIED"
+        else:
+            state["verification_result"] = "FAILED"
+        persist_prepare(state, state_path)
+    read = None
+    if state.get("test_result") is None and state["verification_result"] == "NEW_BLANK_URL_VERIFIED":
+        read = prepare_external_command(
+            state, state_path, "read-new",
+            ["chatgpt", "read", "-f", "json", "--window", "background"],
+        )
+    if read is not None:
+        parsed = parse_json(read["stdout"])
+        empty = read["returncode"] == 0 and not read["timed_out"] and (
+            str(read["stdout"]).strip() == "EMPTY_RESULT" or parsed == []
+        )
+        state["read_result"] = "EMPTY_RESULT" if empty else "NON_EMPTY_OR_UNRELIABLE"
+        if empty:
+            finish_prepare(state, "PREPARED_NEW_CONVERSATION", "STOP_WITHOUT_SEND")
+        else:
+            finish_prepare(state, "BLOCKED_BEFORE_SEND", "READ_NOT_EMPTY")
+    elif state.get("test_result") is None:
+        state["read_result"] = "NOT_RUN"
+        finish_prepare(state, "BLOCKED_BEFORE_SEND", "NEW_CONVERSATION_VERIFICATION_FAILED")
+
+    public_state = {key: value for key, value in state.items() if not key.startswith("_")}
+    persist_prepare(state, state_path)
+    print(json.dumps(public_state, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if public_state["test_result"] == "PREPARED_NEW_CONVERSATION" else 2
 
 
 def prepare_payload(args: argparse.Namespace, body: str) -> str:
@@ -480,6 +624,16 @@ def cleanup_command(args: argparse.Namespace) -> int:
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
+    prepare = sub.add_parser(
+        "prepare-new",
+        help="A2.1: create and verify a blank conversation, persist state, and stop without sending",
+    )
+    prepare.add_argument("--runtime-dir", required=True)
+    prepare.add_argument("--work-item-id", required=True)
+    prepare.add_argument("--command-wait-seconds", type=float, default=COMMAND_WAIT_SECONDS)
+    prepare.add_argument("--max-external-commands", type=int, default=PREPARE_MAX_EXTERNAL_COMMANDS)
+    prepare.add_argument("--max-experiment-seconds", type=float, default=MAX_EXPERIMENT_SECONDS)
+    prepare.set_defaults(handler=prepare_new_command)
     send = sub.add_parser("send", help="CREATE_NEW_CONVERSATION -> VERIFY_NEW_CONVERSATION -> SEND_MESSAGE")
     send.add_argument("--work-item-id", required=True)
     send.add_argument("--message-id", required=True)
