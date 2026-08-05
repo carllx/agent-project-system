@@ -211,6 +211,34 @@ Recovery checks the post-send active Conversation first, then at most the config
 
 Every experimental Agent Prompt must state that the Agent must not modify the Skill or wrapper; reset Runtime and retry; resend the same Message ID; send unplanned hello/test probes; read unrelated Browser conversations; repair code; or turn the test into open-ended development. Any violation is `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`; stop immediately and do not use that run to pass A2 or A3.
 
+Before any experimental action, validate every required value. Treat an empty string, `null`, `TODO`, `TBD`, `PLACEHOLDER`, `example.com`, any `<...>` token including `https://chatgpt.com/c/<id>`, and text beginning with or containing `请在这里...` as unresolved. Return `BLOCKED_BEFORE_EXECUTION: REQUIRED_VALUE_UNRESOLVED`, list the affected field names, and execute zero external commands. Never substitute a plausible value or run a status/precheck command to compensate for a missing value.
+
+Count every Shell command, `schedule`, `sleep`, timer, poll, file search, source search, and log search as an experiment action from the start of the run. Do not exclude pre-command discovery. Use these experiment defaults unless the current Work Order explicitly overrides them:
+
+```text
+MAX_IDLE_WAIT_SECONDS=0
+MAX_SCHEDULE_CALLS=0
+MAX_POLL_ATTEMPTS=0
+```
+
+A Shell result containing `exit code`, `stdout`, and `stderr` is synchronous and complete. If the Work Order authorizes only that command, immediately report and end in the current turn. Do not call `schedule`, `sleep`, a timer, `wait`, delayed polling, or notification waiting after it. Waiting is allowed only when the tool explicitly returns `RUNNING`, `PENDING`, `PROCESS_STILL_ACTIVE`, or `JOB_ID_WITH_INCOMPLETE_RESULT` and all three conditions also hold: the Work Order authorizes polling, the wait fits its explicit budget, and a verifiable background process or Job ID exists. A normal completed Shell result never satisfies this exception.
+
+Classify placeholder execution as `HARD_FAILURE: TEST_PROTOCOL_VIOLATION` with `UNRESOLVED_PLACEHOLDER_EXECUTION`; classify unauthorized scheduling, sleeping, timing, polling, or delayed waiting with `UNAUTHORIZED_IDLE_WAIT`. Never end an experiment report with `standing by`, `waiting for timer`, `I will report later`, or `等待下一次状态检测`; provide the final result in the current turn.
+
+Every experiment report must include:
+
+```text
+PLACEHOLDER_VALIDATION_PERFORMED
+UNRESOLVED_PLACEHOLDERS
+SCHEDULE_CALL_COUNT
+IDLE_WAIT_SECONDS
+POLL_ATTEMPT_COUNT
+SYNCHRONOUS_COMMAND_COMPLETED
+TERMINATED_IMMEDIATELY_AFTER_RESULT
+```
+
+Default the three wait counters to zero. Also report the external-command count, total experiment-action count, and per-action counts so discovery and waiting cannot disappear from the evidence.
+
 Transport A2 and A3 must both pass before the formal Loop starts. The formal Loop must contain at least two complete `IDE execution -> Evidence Packet -> RR Lead review` cycles, and may return `ACHIEVED` only when every original acceptance criterion is `MET`.
 
 ## Parse review and execute work

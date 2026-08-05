@@ -9,36 +9,32 @@
 
 ## Active Work Item
 
-- **ID:** `TRANSPORT-A2P1-PRECONDITION-010`
-- **Name:** 机器强制 A2.1 起始条件
-- **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `0ae60e4ed4a6be17014a999186b1c74696eee647`
-- **Current objective:** 为 `prepare-new` 增加机器强制的旧 Conversation 起始条件，避免从 `/new` 启动的无效转换实验。
+- **ID:** `EXPERIMENT-EXECUTION-DISCIPLINE-014`
+- **Name:** 禁止实验 Agent 无意义等待与占位符执行
+- **Work Item state:** `IN_PROGRESS`
+- **Baseline commit:** `b53615615956b18dce7e237ea52d39d27a347624`
+- **Current objective:** 阻止实验 Agent 使用未解析占位符执行命令，并禁止同步命令完成后的 schedule、sleep、timer 或无意义轮询。
 
 ## Acceptance criteria
 
-- 公开 `prepare-new --help` 暴露 `--require-existing-conversation`。
-- 正式 A2.1 从精确 ChatGPT `/c/<id>` 起始时继续执行 `new → status → read`，并兼容真实 `EMPTY_RESULT + exit code 66`。
-- 严格模式从 `/new`、根 URL、其他域名或无效 Conversation URL 起始时，只执行最小只读 `status`，在 `new` 和 `read` 前返回 `BLOCKED_BEFORE_EXECUTION`。
-- Runtime 保存前置条件、起始状态、`new` 调用、转换、空环境、停止原因和结果字段，所有场景保持 `message_send_count=0`。
-- 未带新参数的普通 `prepare-new` 行为保持兼容，A2.2/A3 发送测试无回归。
-- 只更新既有 Skill、Spec、Current 权威文档，版本升至 `0.4.3`。
-- 完成本地验证、Commit（不 push）、Lab Skill 全量同步及源/Lab 包哈希核验；保留历史 Runtime，不运行真实 Browser 实验。
+- 所有必填值在任何实验动作前验证；空值与已声明的占位符模式返回 `BLOCKED_BEFORE_EXECUTION: REQUIRED_VALUE_UNRESOLVED`，外部命令数为零。
+- 同步 Shell 结果包含 exit code、stdout、stderr 后立即报告和结束；之后 schedule、sleep、timer、wait 或无意义轮询判为 `UNAUTHORIZED_IDLE_WAIT`。
+- 只有明确异步未完成状态、可验证 Job ID、Work Order 轮询授权和预算同时存在时允许轮询。
+- 默认 `MAX_IDLE_WAIT_SECONDS=0`、`MAX_SCHEDULE_CALLS=0`、`MAX_POLL_ATTEMPTS=0`，禁止站立等待输出。
+- 实验动作和新增报告字段真实计数；纯本地测试覆盖用户要求的十类场景。
+- 只更新既有 Skill、初始化资产、Spec、Current、Wrapper 和验证脚本，版本升至 `0.4.4`。
+- 完成本地验证、Commit（不 push）、Lab Skill 整包覆盖同步及逐文件和包哈希核验；保留全部 Runtime，不运行真实 Browser 实验、不发送消息。
 
 ## Completed
 
-- 已确认上一 Work Item 为 `ACHIEVED`、本项开始时工作区干净。
-- 已确认根因为 Wrapper 只记录 `ALREADY_NEW`，却没有机器阻止无效的 A2.1 转换实验继续执行 `new`。
-- 已实现严格起始闸门、所需 Runtime 字段和精确 Conversation URL 判断，并保留无参数兼容路径。
-- 已通过 26 项纯本地公开 CLI 测试：21 项 `prepare-new` 场景和五项 A2.2/A3 `send` 回归；全部只驱动本地假 OpenCLI，未运行真实 Browser 或真实发送。
-- 已通过文档检查、包检查、Skill Creator `quick_validate.py` 和 whitespace 检查，版本为 `0.4.3`。
-- 已创建本地实现 Commit `64c51454a07e55855a865f9f11c4d918b15a1d53`，未 push。
-- 已完整覆盖同步 Lab Skill；源与 Lab 均为八个文件且逐文件一致，规范包聚合哈希均为 `47af48427c5cfb019935b4dd265a5b86f46626f7e2dc6eb98d00df95ff4ce222`。
-- 已核验 Lab 的 25 个历史 Runtime 文件同步前后清单与聚合哈希均为 `3e50ec6f166210082e8fdf4018a3c62df255ee996cd8656f185eb21fe3dde476`；业务 fixture 聚合哈希同步前后均为 `9c279be8baf45cc518bc12ce139dac1acb60e83726e8c0ab247e031fa604f867`。
+- 已确认上一 Work Item 为 `ACHIEVED`、本项开始时工作区干净，基线为 `b53615615956b18dce7e237ea52d39d27a347624`。
+- 已确认失败根因为实验协议没有在外部动作前强制验证占位符，也没有把同步 Shell 完成定义为立即终止条件。
+- 已开始把占位符闸门、零等待默认值、唯一轮询例外、动作计数和必填报告字段写入既有权威位置与纯本地协议判定。
 
 ## In progress
 
-- None.
+- 完成代码与测试审查，运行全套本地验证。
+- 创建本地实现 Commit、覆盖同步 Lab Skill、核验包一致性与 Runtime 保留，然后记录最终证据。
 
 ## Blockers
 
@@ -50,7 +46,7 @@
 
 ## Next action
 
-- 在新的独立 Work Item 中，由用户预先停留在一个旧 ChatGPT `/c/<id>` 页面，然后使用 `prepare-new --require-existing-conversation --max-external-commands 4 --max-experiment-seconds 60` 运行真实 A2.1；实验 Agent 不得自行打开或搜索旧对话。
+- 完成协议实现和纯本地测试后，执行要求的验证；不运行真实 Browser 实验。
 
 ## Files to read
 
@@ -64,17 +60,6 @@
 
 ## Last validation
 
-- **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 26 pure-local public-CLI scenarios: 21 `prepare-new` cases and five A2.2/A3 `send` regressions.
-- **Command:** `python scripts/check_docs.py`
-- **Result:** Passed.
-- **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed for version `0.4.3` and the exact eight-file package.
-- **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
-- **Result:** Passed.
-- **Command:** `git diff --check`
-- **Result:** Passed; only Git line-ending conversion warnings were emitted.
-- **Command:** source/Lab per-file manifest, canonical package hash, Runtime pre/post hash, and fixture pre/post hash comparison
-- **Result:** Source/Lab paths and hashes equal; all 25 historical Runtime files and all business fixtures unchanged.
-- **Scope:** 源包与纯本地公开 CLI 假 OpenCLI 验证；未运行真实 Browser 实验、未真实发送、未修改历史 Runtime。
+- **Status:** Pending final validation.
+- **Scope:** 只运行纯本地假 OpenCLI 与合成协议轨迹；不运行真实 Browser 实验、不发送消息。
 - **Last verified:** 2026-08-05

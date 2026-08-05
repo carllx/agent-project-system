@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import subprocess
 import sys
@@ -19,6 +20,11 @@ WORK_ITEM = "SYNTHETIC-A2P1-001"
 LEGACY_WORK_ITEM = "SYNTHETIC-TRANSPORT-001"
 LEGACY_MESSAGE_ID = f"{LEGACY_WORK_ITEM}-R0-SMOKE"
 NEW_ID = "new-conversation"
+
+TRANSPORT_SPEC = importlib.util.spec_from_file_location("rr_opencli_transport", TRANSPORT)
+assert TRANSPORT_SPEC and TRANSPORT_SPEC.loader
+TRANSPORT_MODULE = importlib.util.module_from_spec(TRANSPORT_SPEC)
+TRANSPORT_SPEC.loader.exec_module(TRANSPORT_MODULE)
 
 FAKE_OPENCLI = r'''import json, os, sys, time
 scenario_path = os.environ["OPENCLI_FAKE_SCENARIO"]
@@ -170,6 +176,9 @@ def test_runtime_contains_required_a2p1_fields() -> None:
         "verification_result", "read_result", "message_send_count",
         "external_command_count", "started_at", "stopped_at",
         "elapsed_seconds", "stop_reason", "test_result",
+        "placeholder_validation_performed", "unresolved_placeholders",
+        "schedule_call_count", "idle_wait_seconds", "poll_attempt_count",
+        "synchronous_command_completed", "terminated_immediately_after_result",
     }
     assert required <= state.keys()
     assert state["operation"] == "PREPARE_NEW"
@@ -177,6 +186,168 @@ def test_runtime_contains_required_a2p1_fields() -> None:
     assert state["external_command_count"] == 4
     assert state["parameters"]["max_recovery_attempts"] == 0
     assert state["parameters"]["max_detail_checks"] == 0
+    assert state["placeholder_validation_performed"] is True
+    assert state["unresolved_placeholders"] == []
+    assert state["schedule_call_count"] == 0
+    assert state["idle_wait_seconds"] == 0
+    assert state["poll_attempt_count"] == 0
+    assert state["synchronous_command_completed"] is True
+    assert state["terminated_immediately_after_result"] is True
+
+
+def protocol_report(
+    value: object,
+    events: list[dict[str, object]] | None = None,
+    **overrides: object,
+) -> dict:
+    return TRANSPORT_MODULE.assess_experiment_protocol(
+        {"EXPECTED_CONVERSATION_URL": value}, events or [], **overrides
+    )
+
+
+def synchronous_status_event() -> dict[str, object]:
+    return {
+        "action": "SHELL_COMMAND",
+        "result": {"exit_code": 0, "stdout": "Status: Connected", "stderr": ""},
+    }
+
+
+def test_real_conversation_url_can_execute() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/6a6c3b12-0064-4e2f-9ee1-123456789abc",
+        [synchronous_status_event()],
+    )
+    assert report["PROTOCOL_RESULT"] == "PASS"
+    assert report["UNRESOLVED_PLACEHOLDERS"] == []
+    assert report["EXTERNAL_COMMAND_COUNT"] == 1
+
+
+def test_angle_id_placeholder_is_rejected() -> None:
+    report = protocol_report("https://chatgpt.com/c/<id>")
+    assert report["PROTOCOL_RESULT"] == "BLOCKED_BEFORE_EXECUTION"
+    assert report["UNRESOLVED_PLACEHOLDERS"] == ["EXPECTED_CONVERSATION_URL"]
+
+
+def test_chinese_paste_placeholder_is_rejected() -> None:
+    report = protocol_report("请在这里粘贴 Conversation URL")
+    assert report["PROTOCOL_RESULT"] == "BLOCKED_BEFORE_EXECUTION"
+
+
+def test_empty_required_value_is_rejected() -> None:
+    for value in ("", "   ", None):
+        report = protocol_report(value)
+        assert report["PROTOCOL_RESULT"] == "BLOCKED_BEFORE_EXECUTION"
+
+
+def test_placeholder_failure_has_zero_external_commands() -> None:
+    for value in ("TODO", "TBD", "PLACEHOLDER", "https://example.com/value"):
+        report = protocol_report(value)
+        assert report["PLACEHOLDER_VALIDATION_PERFORMED"] is True
+        assert report["EXTERNAL_COMMAND_COUNT"] == 0
+        assert report["EXPERIMENT_ACTION_COUNT"] == 0
+
+
+def test_send_placeholder_is_blocked_before_opencli() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-placeholder-send-test-"))
+    fake = root / "fake_opencli.py"
+    fake.write_text(FAKE_OPENCLI, encoding="utf-8")
+    scenario = root / "scenario.json"
+    scenario.write_text("[]", encoding="utf-8")
+    log = root / "calls.jsonl"
+    message_file = root / "message.txt"
+    message_file.write_text("synthetic body", encoding="utf-8")
+    env = os.environ.copy()
+    env.update({
+        "OPENCLI_TRANSPORT_EXECUTABLE": str(fake),
+        "OPENCLI_FAKE_SCENARIO": str(scenario),
+        "OPENCLI_FAKE_COUNTER": str(root / "counter.txt"),
+        "OPENCLI_FAKE_LOG": str(log),
+    })
+    completed = subprocess.run(
+        [
+            sys.executable, str(TRANSPORT), "send",
+            "--work-item-id", "TODO",
+            "--message-id", "TODO",
+            "--round", "0",
+            "--message-type", "CONTEXT_PACKET",
+            "--message-file", str(message_file),
+        ],
+        capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    report = json.loads(completed.stdout)
+    assert completed.returncode == 2
+    assert report["test_result"] == "BLOCKED_BEFORE_EXECUTION"
+    assert report["EXTERNAL_COMMAND_COUNT"] == 0
+    assert not log.exists()
+
+
+def test_synchronous_status_terminates_immediately() -> None:
+    report = protocol_report("https://chatgpt.com/c/real-id", [synchronous_status_event()])
+    assert report["SYNCHRONOUS_COMMAND_COMPLETED"] is True
+    assert report["TERMINATED_IMMEDIATELY_AFTER_RESULT"] is True
+    assert report["SCHEDULE_CALL_COUNT"] == 0
+    assert report["IDLE_WAIT_SECONDS"] == 0
+    assert report["POLL_ATTEMPT_COUNT"] == 0
+
+
+def test_schedule_after_synchronous_result_is_protocol_violation() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [synchronous_status_event(), {"action": "SCHEDULE", "seconds": 300}],
+    )
+    assert report["PROTOCOL_RESULT"] == "TEST_PROTOCOL_VIOLATION"
+    assert "UNAUTHORIZED_IDLE_WAIT" in report["FAILURE_TYPES"]
+    assert report["SCHEDULE_CALL_COUNT"] == 1
+    assert report["IDLE_WAIT_SECONDS"] == 300
+    assert report["TERMINATED_IMMEDIATELY_AFTER_RESULT"] is False
+
+
+def test_unauthorized_sleep_is_protocol_violation() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id", [{"action": "SLEEP", "seconds": 2}]
+    )
+    assert report["PROTOCOL_RESULT"] == "TEST_PROTOCOL_VIOLATION"
+    assert "UNAUTHORIZED_IDLE_WAIT" in report["FAILURE_TYPES"]
+
+
+def test_poll_requires_authorized_running_job() -> None:
+    allowed = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [
+            {"action": "TOOL_RESULT", "status": "RUNNING", "job_id": "job-123"},
+            {"action": "POLL", "seconds": 1},
+        ],
+        polling_authorized=True,
+        max_idle_wait_seconds=1,
+        max_poll_attempts=1,
+    )
+    assert allowed["PROTOCOL_RESULT"] == "PASS"
+    assert allowed["POLL_ATTEMPT_COUNT"] == 1
+    for events in (
+        [{"action": "TOOL_RESULT", "status": "RUNNING"}, {"action": "POLL"}],
+        [{"action": "TOOL_RESULT", "status": "COMPLETE", "job_id": "job-123"}, {"action": "POLL"}],
+    ):
+        denied = protocol_report(
+            "https://chatgpt.com/c/real-id",
+            events,
+            polling_authorized=True,
+            max_poll_attempts=1,
+        )
+        assert denied["PROTOCOL_RESULT"] == "TEST_PROTOCOL_VIOLATION"
+
+
+def test_all_experiment_actions_are_counted() -> None:
+    actions = [
+        "SHELL_COMMAND", "SCHEDULE", "SLEEP", "TIMER", "POLL",
+        "FILE_SEARCH", "SOURCE_SEARCH", "LOG_SEARCH",
+    ]
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [{"action": action} for action in actions],
+        max_external_commands=1,
+    )
+    assert report["EXPERIMENT_ACTION_COUNT"] == len(actions)
+    assert all(report["ACTION_COUNTS"][action] == 1 for action in actions)
 
 
 def test_old_conversation_still_active_fails() -> None:
@@ -483,6 +654,17 @@ def main() -> int:
         test_nonzero_exact_empty_result_code_verifies_blank_page,
         test_empty_json_object_or_array_verifies_blank_page,
         test_runtime_contains_required_a2p1_fields,
+        test_real_conversation_url_can_execute,
+        test_angle_id_placeholder_is_rejected,
+        test_chinese_paste_placeholder_is_rejected,
+        test_empty_required_value_is_rejected,
+        test_placeholder_failure_has_zero_external_commands,
+        test_send_placeholder_is_blocked_before_opencli,
+        test_synchronous_status_terminates_immediately,
+        test_schedule_after_synchronous_result_is_protocol_violation,
+        test_unauthorized_sleep_is_protocol_violation,
+        test_poll_requires_authorized_running_job,
+        test_all_experiment_actions_are_counted,
         test_old_conversation_still_active_fails,
         test_existing_messages_fail,
         test_unknown_error_code_is_unparseable,

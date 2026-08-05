@@ -39,6 +39,32 @@ PREPARE_MAX_DETAIL_CHECKS = 0
 PREPARE_MAX_EXTERNAL_COMMANDS = 4
 RECENT_CANDIDATE_LIMIT = 3
 STABLE_SECONDS = 3
+MAX_IDLE_WAIT_SECONDS = 0
+MAX_SCHEDULE_CALLS = 0
+MAX_POLL_ATTEMPTS = 0
+
+EXPERIMENT_ACTION_TYPES = {
+    "SHELL_COMMAND",
+    "SCHEDULE",
+    "SLEEP",
+    "TIMER",
+    "POLL",
+    "FILE_SEARCH",
+    "SOURCE_SEARCH",
+    "LOG_SEARCH",
+}
+ASYNC_INCOMPLETE_STATES = {
+    "RUNNING",
+    "PENDING",
+    "PROCESS_STILL_ACTIVE",
+    "JOB_ID_WITH_INCOMPLETE_RESULT",
+}
+STANDING_WAIT_PATTERNS = (
+    "standing by",
+    "waiting for timer",
+    "i will report later",
+    "等待下一次状态检测",
+)
 
 DELIVERY_STATES = {
     "NOT_SENT",
@@ -54,6 +80,131 @@ DELIVERY_STATES = {
     "FAILED",
 }
 NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT"}
+
+
+def unresolved_required_values(required_values: dict[str, Any]) -> list[str]:
+    """Return required field names whose values are absent or placeholders."""
+    unresolved: list[str] = []
+    for name, value in required_values.items():
+        if value is None:
+            unresolved.append(name)
+            continue
+        text = str(value).strip()
+        lowered = text.lower()
+        if (
+            not text
+            or lowered in {"null", "todo", "tbd", "placeholder"}
+            or re.search(r"<[^>]*>", text)
+            or "请在这里" in text
+            or "example.com" in lowered
+        ):
+            unresolved.append(name)
+    return unresolved
+
+
+def assess_experiment_protocol(
+    required_values: dict[str, Any],
+    events: list[dict[str, Any]],
+    *,
+    max_external_commands: int = 1,
+    polling_authorized: bool = False,
+    max_idle_wait_seconds: float = MAX_IDLE_WAIT_SECONDS,
+    max_schedule_calls: int = MAX_SCHEDULE_CALLS,
+    max_poll_attempts: int = MAX_POLL_ATTEMPTS,
+    final_text: str = "",
+) -> dict[str, Any]:
+    """Audit a synthetic experiment trace without executing external commands."""
+    unresolved = unresolved_required_values(required_values)
+    counts = {action: 0 for action in EXPERIMENT_ACTION_TYPES}
+    failure_types: list[str] = []
+    idle_wait_seconds = 0.0
+    synchronous_command_completed = False
+    synchronous_completion_index: int | None = None
+    background_state: str | None = None
+    background_job_id: str | None = None
+
+    for index, event in enumerate(events):
+        action = str(event.get("action", "")).upper()
+        if action in counts:
+            counts[action] += 1
+        seconds = event.get("seconds", 0)
+        if action in {"SCHEDULE", "SLEEP", "TIMER", "POLL"}:
+            try:
+                idle_wait_seconds += max(float(seconds), 0.0)
+            except (TypeError, ValueError):
+                failure_types.append("INVALID_WAIT_DURATION")
+
+        if action == "TOOL_RESULT":
+            state = str(event.get("status", "")).upper()
+            background_state = state if state in ASYNC_INCOMPLETE_STATES else None
+            job_id = event.get("job_id")
+            background_job_id = str(job_id).strip() if job_id is not None else None
+            if not background_job_id:
+                background_job_id = None
+
+        if action == "SHELL_COMMAND":
+            result = event.get("result")
+            if isinstance(result, dict) and {"exit_code", "stdout", "stderr"} <= result.keys():
+                synchronous_command_completed = True
+                synchronous_completion_index = index
+                background_state = None
+                background_job_id = None
+
+        if action in {"SCHEDULE", "SLEEP", "TIMER", "POLL"}:
+            wait_allowed = (
+                polling_authorized
+                and background_state in ASYNC_INCOMPLETE_STATES
+                and background_job_id is not None
+                and idle_wait_seconds <= max_idle_wait_seconds
+                and (action != "SCHEDULE" or counts["SCHEDULE"] <= max_schedule_calls)
+                and (action != "POLL" or counts["POLL"] <= max_poll_attempts)
+            )
+            if not wait_allowed and "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
+                failure_types.append("UNAUTHORIZED_IDLE_WAIT")
+
+    if unresolved and events:
+        failure_types.append("UNRESOLVED_PLACEHOLDER_EXECUTION")
+    if counts["SHELL_COMMAND"] > max_external_commands:
+        failure_types.append("EXTERNAL_COMMAND_BUDGET_EXCEEDED")
+    if counts["SCHEDULE"] > max_schedule_calls:
+        if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
+            failure_types.append("UNAUTHORIZED_IDLE_WAIT")
+    if idle_wait_seconds > max_idle_wait_seconds:
+        if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
+            failure_types.append("UNAUTHORIZED_IDLE_WAIT")
+    if (
+        max_external_commands == 1
+        and synchronous_completion_index is not None
+        and synchronous_completion_index != len(events) - 1
+    ):
+        if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
+            failure_types.append("UNAUTHORIZED_IDLE_WAIT")
+    if any(pattern in final_text.lower() for pattern in STANDING_WAIT_PATTERNS):
+        failure_types.append("STANDING_WAIT_OUTPUT")
+
+    terminated_immediately = (
+        synchronous_completion_index is not None
+        and synchronous_completion_index == len(events) - 1
+    )
+    protocol_result = "PASS"
+    if unresolved:
+        protocol_result = "BLOCKED_BEFORE_EXECUTION"
+    if failure_types:
+        protocol_result = "TEST_PROTOCOL_VIOLATION"
+    return {
+        "PROTOCOL_RESULT": protocol_result,
+        "FAILURE_TYPES": list(dict.fromkeys(failure_types)),
+        "PLACEHOLDER_VALIDATION_PERFORMED": True,
+        "UNRESOLVED_PLACEHOLDERS": unresolved,
+        "EXTERNAL_COMMAND_COUNT": counts["SHELL_COMMAND"],
+        "EXPERIMENT_ACTION_COUNT": sum(counts.values()),
+        "ACTION_COUNTS": counts,
+        "SCHEDULE_CALL_COUNT": counts["SCHEDULE"],
+        "IDLE_WAIT_SECONDS": idle_wait_seconds,
+        "POLL_ATTEMPT_COUNT": counts["POLL"],
+        "SYNCHRONOUS_COMMAND_COMPLETED": synchronous_command_completed,
+        "TERMINATED_IMMEDIATELY_AFTER_RESULT": terminated_immediately,
+    }
 
 
 def utc_now() -> str:
@@ -312,7 +463,7 @@ def blank_new_url(url: str | None, old_id: str | None) -> bool:
 
 def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 5,
+        "schema_version": 6,
         "work_item_id": args.work_item_id,
         "operation": "PREPARE_NEW",
         "require_existing_conversation": bool(args.require_existing_conversation),
@@ -329,6 +480,13 @@ def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "read_result": "NOT_RUN",
         "message_send_count": 0,
         "external_command_count": 0,
+        "placeholder_validation_performed": True,
+        "unresolved_placeholders": [],
+        "schedule_call_count": 0,
+        "idle_wait_seconds": 0,
+        "poll_attempt_count": 0,
+        "synchronous_command_completed": False,
+        "terminated_immediately_after_result": False,
         "started_at": PROCESS_STARTED_AT,
         "stopped_at": None,
         "elapsed_seconds": 0.0,
@@ -367,10 +525,14 @@ def prepare_external_command(
         finish_prepare(state, "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
         persist_prepare(state, state_path)
         return None
+    state["terminated_immediately_after_result"] = False
     state["external_command_count"] += 1
     persist_prepare(state, state_path)
     result = run_opencli(args, max(0.001, min(state["parameters"]["command_wait_seconds"], remaining)))
     save_raw(state, state_path, label, result)
+    if not result["timed_out"] and {"returncode", "stdout", "stderr"} <= result.keys():
+        state["synchronous_command_completed"] = True
+        state["terminated_immediately_after_result"] = True
     persist_prepare(state, state_path)
     if result["timed_out"] or time.monotonic() - state["_monotonic_started"] >= state["parameters"]["max_experiment_seconds"]:
         finish_prepare(state, "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")
@@ -380,6 +542,22 @@ def prepare_external_command(
 
 
 def prepare_new_command(args: argparse.Namespace) -> int:
+    unresolved = unresolved_required_values({
+        "RUNTIME_DIR": args.runtime_dir,
+        "WORK_ITEM_ID": args.work_item_id,
+    })
+    if unresolved:
+        report = assess_experiment_protocol(
+            {"RUNTIME_DIR": args.runtime_dir, "WORK_ITEM_ID": args.work_item_id}, []
+        )
+        report.update({
+            "operation": "PREPARE_NEW",
+            "message_send_count": 0,
+            "stop_reason": "REQUIRED_VALUE_UNRESOLVED",
+            "test_result": "BLOCKED_BEFORE_EXECUTION",
+        })
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2
     runtime_dir = Path(args.runtime_dir).resolve()
     state_path = runtime_dir / "prepare-new-state.json"
     if state_path.exists():
@@ -622,6 +800,30 @@ def verify_new_conversation(state: dict[str, Any], state_path: Path, manual_url:
 
 
 def send_command(args: argparse.Namespace) -> int:
+    required_values = {
+        "WORK_ITEM_ID": args.work_item_id,
+        "MESSAGE_ID": args.message_id,
+        "MESSAGE_TYPE": args.message_type,
+    }
+    for name, value in (
+        ("CONVERSATION", args.conversation),
+        ("MANUAL_NEW_URL", args.manual_new_url),
+        ("MESSAGE_FILE", args.message_file),
+        ("STATE_FILE", args.state_file),
+    ):
+        if value is not None:
+            required_values[name] = value
+    unresolved = unresolved_required_values(required_values)
+    if unresolved:
+        report = assess_experiment_protocol(required_values, [])
+        report.update({
+            "operation": "SEND",
+            "send_attempt_count": 0,
+            "stop_reason": "REQUIRED_VALUE_UNRESOLVED",
+            "test_result": "BLOCKED_BEFORE_EXECUTION",
+        })
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2
     state_path = Path(args.state_file) if args.state_file else default_state_path(args.work_item_id, args.message_id)
     if state_path.exists():
         existing = read_json(state_path)
