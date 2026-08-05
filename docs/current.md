@@ -9,29 +9,31 @@
 
 ## Active Work Item
 
-- **Name:** 核验迁移落点并重构 RR Lead 自包含 Skill 包
+- **Name:** 在源仓库实现 OpenCLI 循环并重新发布实验包
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `4e3b61bb76628d5b4d1bc69ff0fe4c56aa76de05`
-- **Current objective:** 确认信息架构迁移的真实 Git 落点，并将 `research-review-lead` 重构为可部署、跨项目运行且不依赖源仓库的 Codex 源 Skill 包。
+- **Baseline commit:** `94741a489845155fe623db08b92fe3201719f0c1`
+- **Current objective:** 审查被污染的实验副本，在唯一源仓库实现角色分离、OpenCLI 真实循环契约、Conversation 身份和 Human-in-the-loop，再以受控整包替换方式重新同步实验包。
 
 ## Acceptance criteria
 
-- 信息架构迁移已确认安全存在于 Git 历史，且工作区来源清楚。
-- 源 Skill 包包含 `SKILL.md`、`VERSION` 和四个唯一模板资产。
-- Skill 不依赖源仓库 `docs/`、根目录 Packet 或目标项目固定结构。
-- Full Governance Mode 与 Compatibility Mode、通用证据模型和双角色 Handoff 已定义。
-- README、治理 Spec、RR Loop Spec、Index 和 ADR 与源包模型一致。
-- 文档检查、Skill 包检查和 Git whitespace 检查通过。
-- 不安装 Skill，不修改 Codex 配置，不 commit、不 push。
+- 污染实验包的变更、哈希、可采用设计和不可靠假设已由只读证据区分。
+- 源 Skill 明确 Builder IDE Agent、IDE-side Loop Driver 和真实 Browser RR Lead。
+- 源包包含五份唯一资产，版本为 `0.2.0`，且不运行时依赖源仓库。
+- Skill 包含完整 Loop 状态机、Conversation 身份、停止状态、HITL 暂停和恢复。
+- OpenCLI 帮助已核验的语法与尚未完成的 Browser E2E 语义明确分开。
+- 包检查、文档检查、Skill Creator 校验和 Git whitespace 检查通过。
+- 验证后创建一个授权的本地 Commit，不 push。
+- 新 Commit 后完整替换实验包，并证明源/实验哈希相同、无额外文件、业务 fixture 未变化。
 
 ## Completed
 
-- 已确认迁移前基线 `ccc8227` 是当前 HEAD 的祖先。
-- 已确认信息架构迁移提交为 `4e3b61b`，其包含新 Index、Current、Specs、ADR 和检查器，并移除了旧 Charter、Architecture、workflows、templates 与 state 路径。
-- 已确认本 Work Item 开始时 HEAD 与远端 `main` 一致，工作区和暂存区干净且无 stash。
-- 已将 Packet 模板迁入 RR Lead 源 Skill 包，并将 Change Packet 泛化为 Evidence Packet。
-- 已加入源包版本、两种运行模式、通用证据模型和自包含路径。
-- 已更新 README、治理 Specs、Index 和 ADR，并通过文档、源包、Skill frontmatter 与 Git whitespace 检查。
+- 已固定自包含源包基线 `94741a4`。
+- 已只读确认实验 Agent 只修改了实验包 `SKILL.md` 并新增 `assets/rr-lead-init.md`；其余六个原文件与源基线一致。
+- 已记录污染包和业务 fixture 的聚合哈希。
+- 已从本机 OpenCLI `1.8.6` 帮助确认 ChatGPT adapter 的命令名称、参数和声明输出字段，未运行 Browser 传输。
+- 已在源包重新实现角色分离、循环状态机、Conversation 身份和 HITL，并升级为 `0.2.0`。
+- 已增加 Browser RR Lead 初始化资产、五资产检查和四层测试规范。
+- 已通过文档、源包、Skill frontmatter 和 Git whitespace 静态验证；传输、循环与 HITL E2E 明确保留到下一阶段。
 
 ## In progress
 
@@ -47,26 +49,27 @@
 
 ## Next action
 
-- 用户审查当前未提交工作区；后续另开 Work Item 设计安装器和受控安装 dry-run。
+- 以新源 Commit 完整替换实验包，随后运行 Transport Smoke Test。
 
 ## Files to read
 
 - `AGENTS.md`
 - `README.md`
 - `docs/index.md`
-- `docs/specs/system-governance.md`
 - `docs/specs/research-review-loop.md`
 - `docs/adr/0002-self-contained-user-level-rr-lead-skill.md`
 - `skills/research-review-lead/SKILL.md`
+- `skills/research-review-lead/assets/rr-lead-init.md`
 
 ## Last validation
 
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; all long-term Markdown is registered and allowed.
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed; entry, version, four unique assets and portability rules are valid.
+- **Result:** Passed; version, five unique assets, portability and loop-contract markers are valid.
 - **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
 - **Result:** Passed; Skill frontmatter is valid.
 - **Command:** `git diff --check`
 - **Result:** Passed.
+- **Scope:** Static source-package validation only; OpenCLI transport, loop and HITL E2E remain unverified.
 - **Last verified:** 2026-08-05

@@ -89,3 +89,52 @@ RR Lead 每轮响应还应包含 `GOAL_CHECK`、`FINDINGS`、`BLOCKERS`、`DEBT`
 第一版只允许一个 Active Work Item；不开发多任务调度、自动通知、GitHub Issues/Projects 同步或图形界面。普通 Git 与远端仓库可用于保存历史。
 
 RR Lead 在具有项目权威入口时采用 Full Governance Mode，并服从目标项目自己的规则和状态源；没有完整治理结构时采用 Compatibility Mode，以用户请求和现有入口运行，不强制 Git、`docs/current.md` 或治理初始化。
+
+## OpenCLI runtime orchestration
+
+运行循环明确区分三类 Agent：Builder IDE Agent 只维护源包；IDE-side Loop Driver 在目标项目读取事实、交换 Packet 并执行 Work Order；Browser RR Lead 必须真实存在于 ChatGPT 浏览器对话中，负责外部调研、审查和推进。Loop Driver 不得冒充 Browser RR Lead，也不得用本地意见伪造浏览器回复。
+
+循环状态机为：
+
+```text
+PRECHECK
+→ CREATE_OR_RESUME_BROWSER_CONVERSATION
+→ SEND_CONTEXT_PACKET
+→ RECEIVE_RR_REVIEW
+→ EXECUTE_NEXT_WORK_ORDER
+→ BUILD_EVIDENCE_PACKET
+→ SEND_EVIDENCE_TO_SAME_CONVERSATION
+→ RECEIVE_NEXT_REVIEW
+→ CONTINUE_OR_STOP
+```
+
+Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最后成功读写时间和当前状态，不得只依赖当前浏览器标签页。只有状态为 `IN_PROGRESS`、不存在用户决策闸口且操作在授权范围内时才执行 `NEXT_WORK_ORDER`。
+
+当 Browser RR Lead 返回 `NEEDS_DECISION` 时，Loop Driver 停止执行并等待用户在同一 Browser 对话中回答。用户明确表示已回答后，Loop Driver 用记录的对话身份重新读取，核对 Work Item 和选择，形成 Decision Receipt，再恢复原循环；第一版不自动轮询。
+
+本机 OpenCLI 帮助可验证命令名称和参数形状，但不能替代真实传输证据。对话创建、ID 捕获、显式 ID 续聊和恢复在 Transport Smoke Test 通过前必须标记为 `UNVERIFIED`，不得因静态检查通过宣称循环有效。
+
+## Validation layers
+
+四层验证不得混用：
+
+1. **静态测试：** Skill 发现、五份 Asset 读取、模式识别、格式和包检查。
+2. **传输测试：** OpenCLI 状态、新建 Browser 对话、发送和读取、Conversation ID 捕获、显式 ID 同对话续聊。
+3. **循环测试：** Context Packet、Browser Work Order、IDE 执行、Evidence Packet、第二轮 Browser 审查和正确停止。
+4. **Human-in-the-loop 测试：** `NEEDS_DECISION`、IDE 停止、用户在 Browser 回答、同对话读取、Decision Receipt 和原循环恢复。
+
+静态测试通过只证明包结构和规则存在，不能证明传输、循环或人工决策恢复有效。
+
+### Experiment A: Transport Smoke Test
+
+只验证传输，不修改本地业务文件：核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认两次响应属于同一对话。
+
+### Experiment B: Two-round Loop
+
+使用备课 fixture：IDE 发送 Context Packet；Browser RR Lead 发出 `NEXT_WORK_ORDER`；IDE 创建实验教案并验证；生成 Evidence Packet；通过记录的 Conversation ID 发回；Browser RR Lead 完成第二轮审查并返回 `ACHIEVED` 或新的可验证下一步。
+
+### Experiment C: Human Decision Resume
+
+使用安全决策 fixture：Browser RR Lead 返回 `NEEDS_DECISION`；IDE 停止；用户在 Browser 选择；IDE 在用户确认后重新读取同一对话；核对决定并生成 Decision Receipt；只恢复被选择的路径。
+
+三个实验是设计中的下一阶段，本次源包修改不运行它们。

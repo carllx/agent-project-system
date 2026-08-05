@@ -17,3 +17,4 @@
 | `skills/research-review-lead/assets/evidence-packet.md` | 通用 Evidence Packet 可复用模板 | 向 RR Lead 返回跨项目执行或调研证据时 | Active | 2026-08-05 |
 | `skills/research-review-lead/assets/decision-request.md` | Decision Request 可复用模板 | 触发用户决策闸口时 | Active | 2026-08-05 |
 | `skills/research-review-lead/assets/handoff.md` | Handoff 可复用模板 | 对话不再可靠继续且需要接力时 | Active | 2026-08-05 |
+| `skills/research-review-lead/assets/rr-lead-init.md` | Browser RR Lead 初始化规则 | 通过 OpenCLI 创建真实 Browser RR Lead 对话时 | Active | 2026-08-05 |

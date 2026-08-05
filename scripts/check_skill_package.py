@@ -16,6 +16,30 @@ REQUIRED_ASSETS = {
     "evidence-packet.md",
     "decision-request.md",
     "handoff.md",
+    "rr-lead-init.md",
+}
+REQUIRED_SKILL_MARKERS = {
+    "Builder IDE Agent",
+    "IDE-side Loop Driver",
+    "Browser RR Lead",
+    "OpenCLI",
+    "PRECHECK",
+    "CREATE_OR_RESUME_BROWSER_CONVERSATION",
+    "SEND_CONTEXT_PACKET",
+    "RECEIVE_RR_REVIEW",
+    "EXECUTE_NEXT_WORK_ORDER",
+    "BUILD_EVIDENCE_PACKET",
+    "SEND_EVIDENCE_TO_SAME_CONVERSATION",
+    "RECEIVE_NEXT_REVIEW",
+    "CONTINUE_OR_STOP",
+    "Conversation ID",
+    "WORK_ITEM_ID",
+    "Context Packet",
+    "Evidence Packet",
+    "NEXT_WORK_ORDER",
+    "NEEDS_DECISION",
+    "Decision Receipt",
+    "UNVERIFIED",
 }
 FORBIDDEN_RUNTIME_PATTERNS = {
     "source-repository docs dependency": re.compile(
@@ -123,6 +147,15 @@ def main() -> int:
                 errors.append(f"{relative} contains forbidden {label}")
 
     if skill_text:
+        for marker in sorted(REQUIRED_SKILL_MARKERS):
+            if marker not in skill_text:
+                errors.append(f"SKILL.md is missing required loop marker: {marker}")
+        if not re.search(
+            r"must never impersonate the Browser RR Lead|不得冒充 Browser RR Lead",
+            skill_text,
+            flags=re.IGNORECASE,
+        ):
+            errors.append("SKILL.md does not prohibit IDE-side RR Lead impersonation")
         if not re.search(r"Git is not used|Git is not applicable", skill_text):
             errors.append("SKILL.md does not explicitly support projects without Git")
         if re.search(
@@ -163,7 +196,8 @@ def main() -> int:
     print(f"Skill package checks passed: {PACKAGE.relative_to(ROOT).as_posix()}")
     print("Entry: one valid SKILL.md with matching name and description.")
     print(f"Version: {VERSION.read_text(encoding='utf-8').strip()} (simple SemVer).")
-    print("Assets: four required templates, each with one authoritative copy.")
+    print("Assets: five required files, each with one authoritative copy.")
+    print("Loop contract: roles, state machine, conversation identity, HITL, and uncertainty markers exist.")
     print("Portability: referenced resources exist; no forbidden runtime dependencies found.")
     return 0
 
