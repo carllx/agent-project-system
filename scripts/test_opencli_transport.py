@@ -178,6 +178,9 @@ def test_runtime_contains_required_a2p1_fields() -> None:
         "elapsed_seconds", "stop_reason", "test_result",
         "placeholder_validation_performed", "unresolved_placeholders",
         "schedule_call_count", "idle_wait_seconds", "poll_attempt_count",
+        "background_result_check_count", "background_wait_seconds",
+        "background_process_handle_support", "supported_wait_or_result_method",
+        "completion_mode", "test_protocol_violation", "report_validation",
         "synchronous_command_completed", "terminated_immediately_after_result",
     }
     assert required <= state.keys()
@@ -193,6 +196,9 @@ def test_runtime_contains_required_a2p1_fields() -> None:
     assert state["poll_attempt_count"] == 0
     assert state["synchronous_command_completed"] is True
     assert state["terminated_immediately_after_result"] is True
+    assert state["completion_mode"] == "SYNCHRONOUS_COMPLETION"
+    assert state["background_result_check_count"] == 0
+    assert state["report_validation"] == "PASS"
 
 
 def protocol_report(
@@ -288,6 +294,23 @@ def test_synchronous_status_terminates_immediately() -> None:
     assert report["SCHEDULE_CALL_COUNT"] == 0
     assert report["IDLE_WAIT_SECONDS"] == 0
     assert report["POLL_ATTEMPT_COUNT"] == 0
+    assert report["COMPLETION_MODE"] == "SYNCHRONOUS_COMPLETION"
+
+
+def test_two_second_foreground_trace_is_synchronous() -> None:
+    event = synchronous_status_event()
+    event["foreground_return_seconds"] = 2
+    report = protocol_report("https://chatgpt.com/c/real-id", [event])
+    assert report["PROTOCOL_RESULT"] == "PASS"
+    assert report["COMPLETION_MODE"] == "SYNCHRONOUS_COMPLETION"
+
+
+def test_seven_second_foreground_trace_is_synchronous() -> None:
+    event = synchronous_status_event()
+    event["foreground_return_seconds"] = 7
+    report = protocol_report("https://chatgpt.com/c/real-id", [event])
+    assert report["PROTOCOL_RESULT"] == "PASS"
+    assert report["BACKGROUND_PROCESS_HANDLE_SUPPORT"] is False
 
 
 def test_schedule_after_synchronous_result_is_protocol_violation() -> None:
@@ -300,6 +323,108 @@ def test_schedule_after_synchronous_result_is_protocol_violation() -> None:
     assert report["SCHEDULE_CALL_COUNT"] == 1
     assert report["IDLE_WAIT_SECONDS"] == 300
     assert report["TERMINATED_IMMEDIATELY_AFTER_RESULT"] is False
+    assert report["WHO_INITIATED_SCHEDULE"] == "UNKNOWN"
+
+
+def test_background_wait_without_handle_is_rejected() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [
+            {"action": "TOOL_RESULT", "status": "RUNNING", "result_method": "wait"},
+            {"action": "BACKGROUND_RESULT_CHECK", "seconds": 7},
+        ],
+        polling_authorized=True,
+    )
+    assert report["PROTOCOL_RESULT"] == "TEST_PROTOCOL_VIOLATION"
+    assert "UNBOUND_OR_UNSUPPORTED_BACKGROUND_WAIT" in report["FAILURE_TYPES"]
+
+
+def test_bound_background_result_is_read_once_within_fifteen_seconds() -> None:
+    events = [
+        {
+            "action": "TOOL_RESULT", "status": "RUNNING",
+            "process_handle": "process-7s", "result_method": "wait_process",
+        },
+        {
+            "action": "BACKGROUND_RESULT_CHECK", "process_handle": "process-7s",
+            "seconds": 7,
+            "result": {"exit_code": 0, "stdout": "PROBE_7S_DONE", "stderr": ""},
+        },
+    ]
+    report = protocol_report("https://chatgpt.com/c/real-id", events, polling_authorized=True)
+    assert report["PROTOCOL_RESULT"] == "PASS"
+    assert report["BACKGROUND_RESULT_CHECK_COUNT"] == 1
+    assert report["BACKGROUND_WAIT_SECONDS"] == 7
+    assert report["SUPPORTED_WAIT_OR_RESULT_METHOD"] == "wait_process"
+
+    repeated = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        events + [{"action": "BACKGROUND_RESULT_CHECK", "process_handle": "process-7s"}],
+        polling_authorized=True,
+    )
+    assert repeated["PROTOCOL_RESULT"] == "TEST_PROTOCOL_VIOLATION"
+    assert "BACKGROUND_RESULT_CHECK_BUDGET_EXCEEDED" in repeated["FAILURE_TYPES"]
+
+
+def test_background_completion_is_not_synchronous_completion() -> None:
+    report = protocol_report(
+        "https://chatgpt.com/c/real-id",
+        [
+            {
+                "action": "TOOL_RESULT", "status": "RUNNING",
+                "process_handle": "process-7s", "result_method": "wait_process",
+            },
+            {
+                "action": "BACKGROUND_RESULT_CHECK", "process_handle": "process-7s",
+                "seconds": 7,
+                "result": {"exit_code": 0, "stdout": "done", "stderr": ""},
+            },
+        ],
+        polling_authorized=True,
+    )
+    assert report["COMMAND_COMPLETED"] is True
+    assert report["SYNCHRONOUS_COMMAND_COMPLETED"] is False
+    assert report["COMPLETION_MODE"] == "BACKGROUND_PROCESS_COMPLETION"
+
+
+def test_schedule_call_cannot_report_zero_wait() -> None:
+    report = TRANSPORT_MODULE.validate_experiment_report({
+        "SCHEDULE_CALL_COUNT": 1,
+        "IDLE_WAIT_SECONDS": 0,
+        "TERMINATED_IMMEDIATELY_AFTER_RESULT": False,
+        "TEST_PROTOCOL_VIOLATION": True,
+        "TEST_RESULT": "TEST_PROTOCOL_VIOLATION",
+    })
+    assert report["REPORT_VALIDATION"] == "REPORT_VALIDATION_FAILED"
+    assert "SCHEDULE_CALL_HAS_ZERO_IDLE_WAIT" in report["REPORT_VALIDATION_ERRORS"]
+
+
+def test_protocol_violation_cannot_return_pass() -> None:
+    report = TRANSPORT_MODULE.validate_experiment_report({
+        "SCHEDULE_CALL_COUNT": 0,
+        "IDLE_WAIT_SECONDS": 0,
+        "TERMINATED_IMMEDIATELY_AFTER_RESULT": False,
+        "TEST_PROTOCOL_VIOLATION": True,
+        "TEST_RESULT": "PASS",
+    })
+    assert report["TEST_RESULT"] == "REPORT_VALIDATION_FAILED"
+    assert "PROTOCOL_VIOLATION_CANNOT_PASS" in report["REPORT_VALIDATION_ERRORS"]
+
+
+def test_contradictory_report_fails_validation() -> None:
+    report = TRANSPORT_MODULE.validate_experiment_report({
+        "SCHEDULE_CALL_COUNT": 1,
+        "IDLE_WAIT_SECONDS": 300,
+        "TERMINATED_IMMEDIATELY_AFTER_RESULT": True,
+        "SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN": False,
+        "COMMAND_COMPLETED": True,
+        "SYNCHRONOUS_COMMAND_COMPLETED": False,
+        "COMPLETION_MODE": "SYNCHRONOUS_COMPLETION",
+        "TEST_PROTOCOL_VIOLATION": False,
+        "TEST_RESULT": "PASS",
+    })
+    assert report["PROTOCOL_RESULT"] == "REPORT_VALIDATION_FAILED"
+    assert len(report["REPORT_VALIDATION_ERRORS"]) == 2
 
 
 def test_unauthorized_sleep_is_protocol_violation() -> None:
@@ -314,15 +439,21 @@ def test_poll_requires_authorized_running_job() -> None:
     allowed = protocol_report(
         "https://chatgpt.com/c/real-id",
         [
-            {"action": "TOOL_RESULT", "status": "RUNNING", "job_id": "job-123"},
-            {"action": "POLL", "seconds": 1},
+            {
+                "action": "TOOL_RESULT", "status": "RUNNING", "job_id": "job-123",
+                "result_method": "read_job_result",
+            },
+            {
+                "action": "BACKGROUND_RESULT_CHECK", "job_id": "job-123", "seconds": 1,
+                "result": {"exit_code": 0, "stdout": "done", "stderr": ""},
+            },
         ],
         polling_authorized=True,
         max_idle_wait_seconds=1,
         max_poll_attempts=1,
     )
     assert allowed["PROTOCOL_RESULT"] == "PASS"
-    assert allowed["POLL_ATTEMPT_COUNT"] == 1
+    assert allowed["BACKGROUND_RESULT_CHECK_COUNT"] == 1
     for events in (
         [{"action": "TOOL_RESULT", "status": "RUNNING"}, {"action": "POLL"}],
         [{"action": "TOOL_RESULT", "status": "COMPLETE", "job_id": "job-123"}, {"action": "POLL"}],
@@ -661,7 +792,15 @@ def main() -> int:
         test_placeholder_failure_has_zero_external_commands,
         test_send_placeholder_is_blocked_before_opencli,
         test_synchronous_status_terminates_immediately,
+        test_two_second_foreground_trace_is_synchronous,
+        test_seven_second_foreground_trace_is_synchronous,
         test_schedule_after_synchronous_result_is_protocol_violation,
+        test_background_wait_without_handle_is_rejected,
+        test_bound_background_result_is_read_once_within_fifteen_seconds,
+        test_background_completion_is_not_synchronous_completion,
+        test_schedule_call_cannot_report_zero_wait,
+        test_protocol_violation_cannot_return_pass,
+        test_contradictory_report_fails_validation,
         test_unauthorized_sleep_is_protocol_violation,
         test_poll_requires_authorized_running_job,
         test_all_experiment_actions_are_counted,

@@ -42,6 +42,8 @@ STABLE_SECONDS = 3
 MAX_IDLE_WAIT_SECONDS = 0
 MAX_SCHEDULE_CALLS = 0
 MAX_POLL_ATTEMPTS = 0
+MAX_BACKGROUND_RESULT_CHECKS = 1
+MAX_BACKGROUND_WAIT_SECONDS = 15
 
 EXPERIMENT_ACTION_TYPES = {
     "SHELL_COMMAND",
@@ -52,6 +54,7 @@ EXPERIMENT_ACTION_TYPES = {
     "FILE_SEARCH",
     "SOURCE_SEARCH",
     "LOG_SEARCH",
+    "BACKGROUND_RESULT_CHECK",
 }
 ASYNC_INCOMPLETE_STATES = {
     "RUNNING",
@@ -111,6 +114,8 @@ def assess_experiment_protocol(
     max_idle_wait_seconds: float = MAX_IDLE_WAIT_SECONDS,
     max_schedule_calls: int = MAX_SCHEDULE_CALLS,
     max_poll_attempts: int = MAX_POLL_ATTEMPTS,
+    max_background_result_checks: int = MAX_BACKGROUND_RESULT_CHECKS,
+    max_background_wait_seconds: float = MAX_BACKGROUND_WAIT_SECONDS,
     final_text: str = "",
 ) -> dict[str, Any]:
     """Audit a synthetic experiment trace without executing external commands."""
@@ -119,16 +124,22 @@ def assess_experiment_protocol(
     failure_types: list[str] = []
     idle_wait_seconds = 0.0
     synchronous_command_completed = False
-    synchronous_completion_index: int | None = None
     background_state: str | None = None
-    background_job_id: str | None = None
+    background_process_handle: str | None = None
+    supported_result_method: str | None = None
+    background_wait_seconds = 0.0
+    completion_mode = "NONE"
+    command_completed = False
+    result_available_index: int | None = None
+    schedules_proven_before_result = 0
+    schedule_initiators: set[str] = set()
 
     for index, event in enumerate(events):
         action = str(event.get("action", "")).upper()
         if action in counts:
             counts[action] += 1
         seconds = event.get("seconds", 0)
-        if action in {"SCHEDULE", "SLEEP", "TIMER", "POLL"}:
+        if action in {"SCHEDULE", "SLEEP", "TIMER"}:
             try:
                 idle_wait_seconds += max(float(seconds), 0.0)
             except (TypeError, ValueError):
@@ -137,29 +148,66 @@ def assess_experiment_protocol(
         if action == "TOOL_RESULT":
             state = str(event.get("status", "")).upper()
             background_state = state if state in ASYNC_INCOMPLETE_STATES else None
-            job_id = event.get("job_id")
-            background_job_id = str(job_id).strip() if job_id is not None else None
-            if not background_job_id:
-                background_job_id = None
+            handle = event.get("process_handle", event.get("job_id"))
+            background_process_handle = str(handle).strip() if handle is not None else None
+            if not background_process_handle:
+                background_process_handle = None
+            method = event.get("result_method")
+            supported_result_method = str(method).strip() if method is not None else None
+            if not supported_result_method:
+                supported_result_method = None
 
         if action == "SHELL_COMMAND":
             result = event.get("result")
             if isinstance(result, dict) and {"exit_code", "stdout", "stderr"} <= result.keys():
                 synchronous_command_completed = True
-                synchronous_completion_index = index
+                result_available_index = index
+                command_completed = True
+                completion_mode = "SYNCHRONOUS_COMPLETION"
                 background_state = None
-                background_job_id = None
+                background_process_handle = None
+                supported_result_method = None
 
-        if action in {"SCHEDULE", "SLEEP", "TIMER", "POLL"}:
-            wait_allowed = (
+        if action == "BACKGROUND_RESULT_CHECK":
+            seconds = event.get("seconds", 0)
+            try:
+                background_wait_seconds += max(float(seconds), 0.0)
+            except (TypeError, ValueError):
+                failure_types.append("INVALID_WAIT_DURATION")
+            check_handle = event.get("process_handle", event.get("job_id"))
+            check_handle = str(check_handle).strip() if check_handle is not None else None
+            result = event.get("result")
+            check_allowed = (
                 polling_authorized
                 and background_state in ASYNC_INCOMPLETE_STATES
-                and background_job_id is not None
-                and idle_wait_seconds <= max_idle_wait_seconds
-                and (action != "SCHEDULE" or counts["SCHEDULE"] <= max_schedule_calls)
-                and (action != "POLL" or counts["POLL"] <= max_poll_attempts)
+                and background_process_handle is not None
+                and check_handle == background_process_handle
+                and supported_result_method is not None
+                and counts["BACKGROUND_RESULT_CHECK"] <= max_background_result_checks
+                and background_wait_seconds <= max_background_wait_seconds
             )
-            if not wait_allowed and "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
+            if not check_allowed:
+                failure_types.append("UNBOUND_OR_UNSUPPORTED_BACKGROUND_WAIT")
+            elif isinstance(result, dict) and {"exit_code", "stdout", "stderr"} <= result.keys():
+                command_completed = True
+                completion_mode = "BACKGROUND_PROCESS_COMPLETION"
+                result_available_index = index
+                background_state = None
+
+        if action == "POLL":
+            failure_types.append("UNBOUND_OR_UNSUPPORTED_BACKGROUND_WAIT")
+
+        if action in {"SCHEDULE", "SLEEP", "TIMER"}:
+            if action == "SCHEDULE" and event.get("completed_before_command_result") is True:
+                schedules_proven_before_result += 1
+            if action == "SCHEDULE":
+                initiator = str(event.get("initiated_by", "UNKNOWN")).upper()
+                if initiator not in {
+                    "MODEL_INITIATED", "PLATFORM_REQUIRED", "PLATFORM_AUTO_INSERTED"
+                }:
+                    initiator = "UNKNOWN"
+                schedule_initiators.add(initiator)
+            if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
                 failure_types.append("UNAUTHORIZED_IDLE_WAIT")
 
     if unresolved and events:
@@ -172,27 +220,34 @@ def assess_experiment_protocol(
     if idle_wait_seconds > max_idle_wait_seconds:
         if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
             failure_types.append("UNAUTHORIZED_IDLE_WAIT")
-    if (
-        max_external_commands == 1
-        and synchronous_completion_index is not None
-        and synchronous_completion_index != len(events) - 1
-    ):
+    if counts["BACKGROUND_RESULT_CHECK"] > max_background_result_checks:
+        failure_types.append("BACKGROUND_RESULT_CHECK_BUDGET_EXCEEDED")
+    if background_wait_seconds > max_background_wait_seconds:
+        failure_types.append("BACKGROUND_WAIT_BUDGET_EXCEEDED")
+    if max_external_commands == 1 and result_available_index is not None and result_available_index != len(events) - 1:
         if "UNAUTHORIZED_IDLE_WAIT" not in failure_types:
             failure_types.append("UNAUTHORIZED_IDLE_WAIT")
     if any(pattern in final_text.lower() for pattern in STANDING_WAIT_PATTERNS):
         failure_types.append("STANDING_WAIT_OUTPUT")
 
-    terminated_immediately = (
-        synchronous_completion_index is not None
-        and synchronous_completion_index == len(events) - 1
+    schedule_before_result_proven = (
+        counts["SCHEDULE"] > 0
+        and schedules_proven_before_result == counts["SCHEDULE"]
     )
+    terminated_immediately = result_available_index is not None and result_available_index == len(events) - 1
+    if counts["SCHEDULE"] and not schedule_before_result_proven:
+        terminated_immediately = False
+    if not command_completed and counts["SCHEDULE"]:
+        completion_mode = "IDLE_TIMER_WAIT"
     protocol_result = "PASS"
     if unresolved:
         protocol_result = "BLOCKED_BEFORE_EXECUTION"
     if failure_types:
         protocol_result = "TEST_PROTOCOL_VIOLATION"
-    return {
+    report = {
         "PROTOCOL_RESULT": protocol_result,
+        "TEST_RESULT": protocol_result,
+        "TEST_PROTOCOL_VIOLATION": bool(failure_types),
         "FAILURE_TYPES": list(dict.fromkeys(failure_types)),
         "PLACEHOLDER_VALIDATION_PERFORMED": True,
         "UNRESOLVED_PLACEHOLDERS": unresolved,
@@ -200,11 +255,66 @@ def assess_experiment_protocol(
         "EXPERIMENT_ACTION_COUNT": sum(counts.values()),
         "ACTION_COUNTS": counts,
         "SCHEDULE_CALL_COUNT": counts["SCHEDULE"],
+        "WHO_INITIATED_SCHEDULE": (
+            next(iter(schedule_initiators)) if len(schedule_initiators) == 1 else
+            "NONE" if not schedule_initiators else "UNKNOWN"
+        ),
         "IDLE_WAIT_SECONDS": idle_wait_seconds,
         "POLL_ATTEMPT_COUNT": counts["POLL"],
+        "BACKGROUND_RESULT_CHECK_COUNT": counts["BACKGROUND_RESULT_CHECK"],
+        "BACKGROUND_WAIT_SECONDS": background_wait_seconds,
+        "BACKGROUND_PROCESS_HANDLE_SUPPORT": background_process_handle is not None,
+        "SUPPORTED_WAIT_OR_RESULT_METHOD": supported_result_method or "NONE",
+        "COMMAND_COMPLETED": command_completed,
+        "COMPLETION_MODE": completion_mode,
         "SYNCHRONOUS_COMMAND_COMPLETED": synchronous_command_completed,
         "TERMINATED_IMMEDIATELY_AFTER_RESULT": terminated_immediately,
+        "SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN": schedule_before_result_proven,
     }
+    return validate_experiment_report(report)
+
+
+def validate_experiment_report(report: dict[str, Any]) -> dict[str, Any]:
+    """Fail a report whose completion, waiting, or result claims conflict."""
+    validated = dict(report)
+    failures: list[str] = []
+    if (
+        int(validated.get("SCHEDULE_CALL_COUNT", 0)) > 0
+        and float(validated.get("IDLE_WAIT_SECONDS", 0)) <= 0
+    ):
+        failures.append("SCHEDULE_CALL_HAS_ZERO_IDLE_WAIT")
+    if (
+        int(validated.get("SCHEDULE_CALL_COUNT", 0)) > 0
+        and validated.get("TERMINATED_IMMEDIATELY_AFTER_RESULT") is True
+        and validated.get("SCHEDULE_COMPLETED_BEFORE_COMMAND_RESULT_PROVEN") is not True
+    ):
+        failures.append("SCHEDULE_CONTRADICTS_IMMEDIATE_TERMINATION")
+    if (
+        validated.get("COMMAND_COMPLETED") is True
+        and validated.get("SYNCHRONOUS_COMMAND_COMPLETED") is False
+        and validated.get("COMPLETION_MODE") != "BACKGROUND_PROCESS_COMPLETION"
+    ):
+        failures.append("NONSYNCHRONOUS_COMPLETION_HAS_NO_BACKGROUND_PROCESS")
+    if (
+        validated.get("COMPLETION_MODE") == "BACKGROUND_PROCESS_COMPLETION"
+        and (
+            validated.get("BACKGROUND_PROCESS_HANDLE_SUPPORT") is not True
+            or validated.get("SUPPORTED_WAIT_OR_RESULT_METHOD") in {None, "", "NONE"}
+        )
+    ):
+        failures.append("BACKGROUND_COMPLETION_HAS_NO_BOUND_RESULT_METHOD")
+    if (
+        validated.get("TEST_PROTOCOL_VIOLATION") is True
+        and validated.get("TEST_RESULT") == "PASS"
+    ):
+        failures.append("PROTOCOL_VIOLATION_CANNOT_PASS")
+
+    validated["REPORT_VALIDATION_ERRORS"] = failures
+    validated["REPORT_VALIDATION"] = "PASS" if not failures else "REPORT_VALIDATION_FAILED"
+    if failures:
+        validated["PROTOCOL_RESULT"] = "REPORT_VALIDATION_FAILED"
+        validated["TEST_RESULT"] = "REPORT_VALIDATION_FAILED"
+    return validated
 
 
 def utc_now() -> str:
@@ -463,7 +573,7 @@ def blank_new_url(url: str | None, old_id: str | None) -> bool:
 
 def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 6,
+        "schema_version": 7,
         "work_item_id": args.work_item_id,
         "operation": "PREPARE_NEW",
         "require_existing_conversation": bool(args.require_existing_conversation),
@@ -485,8 +595,15 @@ def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "schedule_call_count": 0,
         "idle_wait_seconds": 0,
         "poll_attempt_count": 0,
+        "background_result_check_count": 0,
+        "background_wait_seconds": 0,
+        "background_process_handle_support": False,
+        "supported_wait_or_result_method": "NONE",
+        "completion_mode": "NONE",
         "synchronous_command_completed": False,
         "terminated_immediately_after_result": False,
+        "test_protocol_violation": False,
+        "report_validation": "PASS",
         "started_at": PROCESS_STARTED_AT,
         "stopped_at": None,
         "elapsed_seconds": 0.0,
@@ -533,6 +650,7 @@ def prepare_external_command(
     if not result["timed_out"] and {"returncode", "stdout", "stderr"} <= result.keys():
         state["synchronous_command_completed"] = True
         state["terminated_immediately_after_result"] = True
+        state["completion_mode"] = "SYNCHRONOUS_COMPLETION"
     persist_prepare(state, state_path)
     if result["timed_out"] or time.monotonic() - state["_monotonic_started"] >= state["parameters"]["max_experiment_seconds"]:
         finish_prepare(state, "BUDGET_EXHAUSTED", "BUDGET_EXHAUSTED")

@@ -201,6 +201,9 @@ MAX_RECOVERY_ATTEMPTS=1
 MAX_DETAIL_CHECKS=1
 MAX_EXTERNAL_COMMANDS=8
 MAX_EXPERIMENT_SECONDS=60
+MAX_BACKGROUND_RESULT_CHECKS=1
+MAX_BACKGROUND_WAIT_SECONDS=15
+FIXED_SCHEDULE_TIMER_ALLOWED=false
 ```
 
 Keep each command wait short, impose a total response bound, and never use unlimited technical retries. At the bound, preserve the Conversation ID and Handoff and enter `BLOCKED` or `STALLED` as appropriate.
@@ -221,9 +224,11 @@ MAX_SCHEDULE_CALLS=0
 MAX_POLL_ATTEMPTS=0
 ```
 
-A Shell result containing `exit code`, `stdout`, and `stderr` is synchronous and complete. If the Work Order authorizes only that command, immediately report and end in the current turn. Do not call `schedule`, `sleep`, a timer, `wait`, delayed polling, or notification waiting after it. Waiting is allowed only when the tool explicitly returns `RUNNING`, `PENDING`, `PROCESS_STILL_ACTIVE`, or `JOB_ID_WITH_INCOMPLETE_RESULT` and all three conditions also hold: the Work Order authorizes polling, the wait fits its explicit budget, and a verifiable background process or Job ID exists. A normal completed Shell result never satisfies this exception.
+A Shell call that returns `exit code`, `stdout`, and `stderr` directly within `COMMAND_WAIT_SECONDS=15` is `SYNCHRONOUS_COMPLETION`. If it is the only authorized command, immediately report and end in the current turn. If the Shell first returns `RUNNING`, `PENDING`, `PROCESS_STILL_ACTIVE`, or `JOB_ID_WITH_INCOMPLETE_RESULT`, classify completion as asynchronous only when the same tool event provides a verifiable process handle or Job ID and names a handle-bound result method. Use that method at most once, wait at most 15 seconds, return as soon as the process completes, and report `BACKGROUND_PROCESS_COMPLETION`; never relabel it as synchronous. Without both the handle and its result method, return `EXECUTOR_RESULT: ASYNC_UNSUPPORTED_FOR_CONTROLLED_EXPERIMENT` before running a command expected to exceed the foreground limit.
 
-Classify placeholder execution as `HARD_FAILURE: TEST_PROTOCOL_VIOLATION` with `UNRESOLVED_PLACEHOLDER_EXECUTION`; classify unauthorized scheduling, sleeping, timing, polling, or delayed waiting with `UNAUTHORIZED_IDLE_WAIT`. Never end an experiment report with `standing by`, `waiting for timer`, `I will report later`, or `等待下一次状态检测`; provide the final result in the current turn.
+Treat `schedule`, sleep, a timer, notification waiting, and any wait not bound to the returned process as `IDLE_TIMER_WAIT`. Default-prohibit it even when a Work Order permits a real background-result check. Never use a fixed 300-second schedule as command-result retrieval. Record who initiated every schedule only from the tool event provenance: `MODEL_INITIATED`, `PLATFORM_REQUIRED`, `PLATFORM_AUTO_INSERTED`, or `UNKNOWN`; do not infer platform behavior from an Agent explanation.
+
+Classify placeholder execution as `HARD_FAILURE: TEST_PROTOCOL_VIOLATION` with `UNRESOLVED_PLACEHOLDER_EXECUTION`; classify `IDLE_TIMER_WAIT`, an unbound result read, a second background-result check, or a background wait over 15 seconds as `UNAUTHORIZED_IDLE_WAIT` and a protocol violation. Never end an experiment report with `standing by`, `waiting for timer`, `I will report later`, or `等待下一次状态检测`; provide the final result in the current turn.
 
 Every experiment report must include:
 
@@ -231,13 +236,22 @@ Every experiment report must include:
 PLACEHOLDER_VALIDATION_PERFORMED
 UNRESOLVED_PLACEHOLDERS
 SCHEDULE_CALL_COUNT
+WHO_INITIATED_SCHEDULE
 IDLE_WAIT_SECONDS
 POLL_ATTEMPT_COUNT
+BACKGROUND_RESULT_CHECK_COUNT
+BACKGROUND_WAIT_SECONDS
+BACKGROUND_PROCESS_HANDLE_SUPPORT
+SUPPORTED_WAIT_OR_RESULT_METHOD
+COMPLETION_MODE
 SYNCHRONOUS_COMMAND_COMPLETED
 TERMINATED_IMMEDIATELY_AFTER_RESULT
+TEST_PROTOCOL_VIOLATION
+TEST_RESULT
+REPORT_VALIDATION
 ```
 
-Default the three wait counters to zero. Also report the external-command count, total experiment-action count, and per-action counts so discovery and waiting cannot disappear from the evidence.
+Default idle, schedule, poll, and background-result-check counters to zero. Also report the external-command count, total experiment-action count, per-action counts, and schedule initiator so discovery and waiting cannot disappear from the evidence. Enforce these report invariants: `SCHEDULE_CALL_COUNT > 0` forbids `TERMINATED_IMMEDIATELY_AFTER_RESULT=true` unless the event trace proves that schedule completed before the command result existed; a schedule call cannot report zero idle-wait time; a completed command with `SYNCHRONOUS_COMMAND_COMPLETED=false` must identify a real handle-bound `BACKGROUND_PROCESS_COMPLETION`; and `TEST_PROTOCOL_VIOLATION=true` forbids `TEST_RESULT=PASS`. Return `REPORT_VALIDATION_FAILED` when any report fields conflict.
 
 Transport A2 and A3 must both pass before the formal Loop starts. The formal Loop must contain at least two complete `IDE execution -> Evidence Packet -> RR Lead review` cycles, and may return `ACHIEVED` only when every original acceptance criterion is `MET`.
 
