@@ -9,33 +9,31 @@
 
 ## Active Work Item
 
-- **Name:** 修正 OpenCLI 传输等待机制并建立共同目标循环
+- **Name:** 修复新对话错投并收紧 Transport 实验纪律
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `1e30fb6543dc62a032fd4bb5aab859eef57beff5`
-- **Current objective:** 从 `TRANSPORT-SMOKE-001` 的只读取证修正 timeout、投递恢复、消息幂等、有限等待与共同验收循环，并发布可重新同步到实验项目的自包含 Skill 包。
+- **Baseline commit:** `8a85927d52d12b85acc98f79b7b02d18063717a5`
+- **Current objective:** 增加 `MISROUTED_DELIVERY`，将新 Conversation 的创建、验证与发送拆开，限制恢复和实验预算，并用纯本地合成测试后重新发布 Lab 包。
 
 ## Acceptance criteria
 
-- 两次 timeout 对应的对话数量、身份、回复状态、重复情况和可恢复性由只读 history/detail 证据确认。
-- Skill 使用明确的 Delivery State，不把 timeout 自动当作失败或触发重发。
-- 每条 Browser 消息携带 Work Item、Message ID、Round 和 Message Type，并在发送前后去重。
-- 发送与读取拆成单次发送、身份捕获或恢复、有限轮询和回复解析。
-- Context、Evidence 与 Browser 初始化规则共享同一 Goal Contract 和逐项验收状态。
-- 正式 transport wrapper 不保存凭据、不无限等待、不依赖 IDE 私有 scratch 路径。
-- 文档、包检查、Skill 校验和 Git whitespace 验证通过。
-- 验证后创建本地 Commit，不 push；随后完整替换实验包并证明包哈希一致、无额外文件、fixture 不变。
+- 只读取 `TRANSPORT-RECOVERY-002` 的 state、相关 raw 与最终缺陷结论，不再发送或扫描无关 Browser 对话。
+- 旧 Conversation 精确命中进入 `MISROUTED_DELIVERY`、阻止重发和正式 RR 输出并返回 `BLOCKED`。
+- 新发送遵循 `CREATE_NEW_CONVERSATION → VERIFY_NEW_CONVERSATION → SEND_MESSAGE`，未知页面状态不发送。
+- 恢复只检查当前活动 Conversation 与有限最近候选，只搜索精确 Work Item ID 和 Message ID。
+- Runtime 保存要求的身份、计数、时间、错投和停止字段。
+- Skill 与测试规范包含有限命令预算和实验 Agent 硬边界。
+- 六个纯本地合成场景、文档、包与 whitespace 验证通过。
+- 创建本地 Commit、不 push，并完整替换 Lab Skill，证明包一致、无额外文件、fixture 不变。
 
 ## Completed
 
-- 已从 OpenCLI `1.8.6` 本机帮助确认 history、detail、ask 和 send 的参数形状。
-- 已只读定位两个 `TRANSPORT-SMOKE-001` 对话；两个消息和 Browser 回复均存在且已完成，显式 ID detail 均可恢复。
-- 已确认重试创建一个额外重复对话；timeout 发生在已创建、已投递之后的等待完成检测或结果返回边界。
-- 已确认 CLI detail/history 不提供本次消息和回复的精确时间戳，不虚构时刻。
-- 已实现 Skill `0.3.0` 的 Delivery State、Message ID 去重、Goal Contract、有限等待和 transport wrapper。
-- 已用不发送消息的合成测试确认回复稳定阈值和状态转换，并通过全部源包静态验证。
-- 已创建本地源 Commit `de1dd6d6f051e75e770c53fbdc62959c2d9e51f2`，未 push。
-- 已删除旧 Lab 包并从新源 Commit 整包复制；源与 Lab 均为八个文件、版本 `0.3.0`，路径和字节一致。
-- 已确认源/实验包聚合哈希均为 `c494e14df9a21b6770fb03d6b4cc087345c9f10228d7138dc9f1c059d10bb9c4`，十个业务 fixture 同步前后聚合哈希均为 `ae3421e00eb49289cfe6c901ad66804180b6f21500bdacddba5f734f44025de6`。
+- 确认旧 Wrapper 排除所有 pre-send Conversation，无法把旧对话中的已送达消息分类为错投。
+- 确认 OpenCLI `1.8.6` 的 `new` 只声明 `Status` 输出，而 `status` 可返回当前 URL、`read` 可核验空页面。
+- 源包升级为 `0.4.0`，拆分创建、验证、发送流程；真实 Work Item 不再使用 `ask --new`。
+- 增加 `MISROUTED_DELIVERY`、最少错投证据、正式回复隔离、同 Message ID 一次发送和有限恢复。
+- 默认预算为一次发送、一次恢复、一次 detail、八个外部命令和六十秒。
+- 增加六个纯本地合成场景和实验协议违规硬失败规则。
+- 保留原 Goal Contract；正式 Loop 继续要求 A2、A3 先通过、至少两个完整审查循环和全部验收条件 `MET`。
 
 ## In progress
 
@@ -43,7 +41,7 @@
 
 ## Blockers
 
-- None.
+- 正式 Loop 仍被 Transport A2、A3 的真实 Browser 验证阻塞；本次被污染实验不能作为通过证据。
 
 ## Decisions pending
 
@@ -51,7 +49,7 @@
 
 ## Next action
 
-- 在用户授权后运行单一新 `MESSAGE_ID` 的 one-send Transport Smoke Test；先不测试仍为 `UNVERIFIED` 的 `opencli chatgpt send` 候选。
+- 使用新的 Work Item ID、Message ID 和 Runtime 目录运行一次严格受预算约束的 A2；如自动空白页验证失败，使用人工打开空白 ChatGPT 根 URL 的降级流程。A2 通过后再单独设计 A3。
 
 ## Files to read
 
@@ -61,22 +59,17 @@
 - `docs/specs/research-review-loop.md`
 - `skills/research-review-lead/SKILL.md`
 - `skills/research-review-lead/scripts/opencli_transport.py`
+- `scripts/test_opencli_transport.py`
 
 ## Last validation
 
+- **Command:** `python scripts/test_opencli_transport.py`
+- **Result:** Passed six pure-local transport scenarios without Browser sends.
 - **Command:** `python scripts/check_docs.py`
-- **Result:** Passed; 14 registered Markdown files and repository layout valid.
-- **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed; exact eight-file package, five assets, wrapper syntax, portability and loop markers valid.
-- **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
 - **Result:** Passed.
-- **Command:** synthetic transport assertions
-- **Result:** Passed; Message ID response classification, three-second stability threshold and state transitions valid without sending Browser messages.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed.
 - **Command:** `git diff --check`
 - **Result:** Passed.
-- **Command:** source/Lab package byte comparison and canonical aggregate hash
-- **Result:** Passed; eight paths and all bytes equal, no extra files, both hashes `c494e14df9a21b6770fb03d6b4cc087345c9f10228d7138dc9f1c059d10bb9c4`.
-- **Command:** Lab fixture pre/post aggregate comparison
-- **Result:** Passed; ten files, unchanged hash `ae3421e00eb49289cfe6c901ad66804180b6f21500bdacddba5f734f44025de6`.
-- **Scope:** Source and non-mutating synthetic validation; the new one-send write path and `send` candidate remain unverified pending an authorized experiment.
+- **Scope:** Source and synthetic validation only; A2, A3 and formal Loop remain unverified.
 - **Last verified:** 2026-08-05

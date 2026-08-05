@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Bounded, idempotent OpenCLI transport for the RR Lead loop.
+"""Bounded OpenCLI transport for the RR Lead loop.
 
-The script stores identifiers and command evidence, never browser credentials.
-It sends a MESSAGE_ID at most once, then recovers and polls without resending.
+New-conversation delivery is deliberately split into create, verify, and send.
+The wrapper never sends a MESSAGE_ID more than once and never treats a message
+found in a pre-existing conversation as a successful RR Lead delivery.
 """
 
 from __future__ import annotations
@@ -15,30 +16,37 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 
-COMMAND_WAIT_SECONDS = 25
+COMMAND_WAIT_SECONDS = 15
 POLL_INTERVAL_SECONDS = 5
-TOTAL_RESPONSE_WAIT_SECONDS = 120
-MAX_RECOVERY_ATTEMPTS = 3
+TOTAL_RESPONSE_WAIT_SECONDS = 30
+MAX_SEND_ATTEMPTS_PER_MESSAGE = 1
+MAX_RECOVERY_ATTEMPTS = 1
+MAX_DETAIL_CHECKS = 1
+MAX_EXTERNAL_COMMANDS = 8
+MAX_EXPERIMENT_SECONDS = 60
+RECENT_CANDIDATE_LIMIT = 3
 STABLE_SECONDS = 3
-HISTORY_LIMIT = 100
 
 DELIVERY_STATES = {
     "NOT_SENT",
+    "CREATING_CONVERSATION",
+    "VERIFYING_CONVERSATION",
     "SENDING",
     "SENT",
     "DELIVERY_UNKNOWN",
+    "MISROUTED_DELIVERY",
     "DELIVERED",
     "RESPONSE_PENDING",
     "RESPONSE_READY",
     "FAILED",
 }
-NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT", "FAILED"}
+NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT"}
 
 
 def utc_now() -> str:
@@ -53,8 +61,7 @@ def safe_name(value: str) -> str:
 
 
 def default_state_path(work_item_id: str, message_id: str) -> Path:
-    root = Path(tempfile.gettempdir()) / "research-review-lead"
-    return root / safe_name(work_item_id) / f"{safe_name(message_id)}.json"
+    return Path(tempfile.gettempdir()) / "research-review-lead" / safe_name(work_item_id) / f"{safe_name(message_id)}.json"
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -74,64 +81,42 @@ def write_json(path: Path, value: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
-def save_raw(state: dict[str, Any], state_path: Path, label: str, result: dict[str, Any]) -> None:
+def save_raw(state: dict[str, Any], state_path: Path, label: str, result: dict[str, Any]) -> str:
     raw_dir = state_path.parent / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     sequence = len(state.setdefault("raw_outputs", [])) + 1
     path = raw_dir / f"{sequence:02d}-{safe_name(label)}.json"
     write_json(path, result)
     state["raw_outputs"].append(str(path))
+    return str(path)
 
 
 def find_opencli() -> list[str]:
-    candidates = ["opencli.cmd", "opencli.exe", "opencli"]
-    for candidate in candidates:
+    for candidate in ("opencli.cmd", "opencli.exe", "opencli"):
         found = shutil.which(candidate)
         if found:
-            if found.lower().endswith(".ps1"):
-                return ["powershell", "-NoProfile", "-File", found]
-            return [found]
+            return ["powershell", "-NoProfile", "-File", found] if found.lower().endswith(".ps1") else [found]
     raise RuntimeError("opencli was not found on PATH")
 
 
 def run_opencli(args: list[str], timeout: int) -> dict[str, Any]:
-    command = [*find_opencli(), *args]
     started = utc_now()
     try:
         completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-            check=False,
+            [*find_opencli(), *args], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout, check=False,
         )
-        return {
-            "started_at": started,
-            "finished_at": utc_now(),
-            "timed_out": False,
-            "returncode": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-        }
+        return {"started_at": started, "finished_at": utc_now(), "timed_out": False,
+                "returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
     except subprocess.TimeoutExpired as error:
-        return {
-            "started_at": started,
-            "finished_at": utc_now(),
-            "timed_out": True,
-            "returncode": None,
-            "stdout": _decode_timeout_stream(error.stdout),
-            "stderr": _decode_timeout_stream(error.stderr),
-        }
+        return {"started_at": started, "finished_at": utc_now(), "timed_out": True,
+                "returncode": None, "stdout": _decode(error.stdout), "stderr": _decode(error.stderr)}
 
 
-def _decode_timeout_stream(value: bytes | str | None) -> str:
+def _decode(value: bytes | str | None) -> str:
     if value is None:
         return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
+    return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value
 
 
 def parse_json(text: str) -> Any:
@@ -141,11 +126,11 @@ def parse_json(text: str) -> Any:
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
-        starts = [position for token in ("[", "{") if (position := stripped.find(token)) >= 0]
+        starts = [i for token in ("[", "{") if (i := stripped.find(token)) >= 0]
         if not starts:
             return None
         try:
-            return json.loads(stripped[min(starts) :])
+            return json.loads(stripped[min(starts):])
         except json.JSONDecodeError:
             return None
 
@@ -153,9 +138,7 @@ def parse_json(text: str) -> Any:
 def rows(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [row for row in value if isinstance(row, dict)]
-    if isinstance(value, dict):
-        return [value]
-    return []
+    return [value] if isinstance(value, dict) else []
 
 
 def pick(row: dict[str, Any], *names: str) -> Any:
@@ -167,63 +150,78 @@ def pick(row: dict[str, Any], *names: str) -> Any:
 
 
 def conversation_identity(row: dict[str, Any]) -> tuple[str | None, str | None]:
-    conversation_id = pick(row, "Id", "conversationId", "ConversationId")
+    identity = pick(row, "Id", "conversationId", "ConversationId")
     url = pick(row, "Url", "conversationUrl", "ConversationUrl")
-    return (
-        str(conversation_id) if conversation_id else None,
-        str(url) if url else None,
-    )
+    return (str(identity) if identity else conversation_id_from_url(str(url or "")), str(url) if url else None)
 
 
-def history(state: dict[str, Any], state_path: Path, timeout: int) -> list[dict[str, Any]]:
-    result = run_opencli(
-        ["chatgpt", "history", "--limit", str(HISTORY_LIMIT), "-f", "json", "--window", "background"],
-        timeout,
-    )
-    save_raw(state, state_path, "history", result)
-    if result["timed_out"] or result["returncode"] != 0:
+def conversation_id_from_url(url: str) -> str | None:
+    match = re.search(r"(?:https?://[^/]+)?/c/([A-Za-z0-9-]+)", url)
+    return match.group(1) if match else None
+
+
+def set_state(state: dict[str, Any], delivery_state: str, note: str) -> None:
+    if delivery_state not in DELIVERY_STATES:
+        raise ValueError(f"invalid delivery state: {delivery_state}")
+    state["delivery_state"] = delivery_state
+    state["updated_at"] = utc_now()
+    state.setdefault("transitions", []).append({"at": state["updated_at"], "state": delivery_state, "note": note})
+
+
+def stop(state: dict[str, Any], reason: str, work_item_state: str = "BLOCKED") -> None:
+    state["work_item_state"] = work_item_state
+    state["stopped_at"] = utc_now()
+    state["stop_reason"] = reason
+
+
+def command(state: dict[str, Any], state_path: Path, label: str, args: list[str], timeout: int) -> dict[str, Any] | None:
+    if state["external_command_count"] >= state["parameters"]["max_external_commands"]:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXTERNAL_COMMANDS")
+        return None
+    started = datetime.fromisoformat(state["started_at"])
+    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    if elapsed >= state["parameters"]["max_experiment_seconds"]:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXPERIMENT_SECONDS")
+        return None
+    state["external_command_count"] += 1
+    result = run_opencli(args, min(timeout, max(1, int(state["parameters"]["max_experiment_seconds"] - elapsed))))
+    save_raw(state, state_path, label, result)
+    return result
+
+
+def result_rows(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not result or result["timed_out"] or result["returncode"] != 0:
         return []
     return rows(parse_json(result["stdout"]))
 
 
-def detail(
-    state: dict[str, Any], state_path: Path, identity: str, timeout: int
-) -> list[dict[str, Any]]:
-    result = run_opencli(
-        ["chatgpt", "detail", identity, "-f", "json", "--window", "background"],
-        timeout,
-    )
-    save_raw(state, state_path, "detail", result)
-    if result["timed_out"] or result["returncode"] != 0:
-        return []
-    return rows(parse_json(result["stdout"]))
+def status_url(result: dict[str, Any] | None) -> str | None:
+    for row in result_rows(result):
+        url = pick(row, "Url")
+        if url:
+            return str(url)
+    return None
 
 
 def marker(message_id: str) -> str:
     return f"MESSAGE_ID: {message_id}"
 
 
-def inspect_messages(messages: list[dict[str, Any]], message_id: str) -> tuple[bool, bool, bool]:
+def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_id: str) -> tuple[bool, bool, bool]:
     user_index: int | None = None
     for index, message in enumerate(messages):
         role = str(pick(message, "Role") or "").lower()
         text = str(pick(message, "Text") or "")
-        if role == "user" and marker(message_id) in text:
+        if role == "user" and marker(message_id) in text and f"WORK_ITEM_ID: {work_item_id}" in text:
             user_index = index
     if user_index is None:
         return False, False, False
-
-    assistant_messages = []
-    for message in messages[user_index + 1 :]:
-        if str(pick(message, "Role") or "").lower() == "assistant":
-            assistant_messages.append(message)
-    if not assistant_messages:
+    assistants = [message for message in messages[user_index + 1:] if str(pick(message, "Role") or "").lower() == "assistant"]
+    if not assistants:
         return True, False, False
-
-    latest = assistant_messages[-1]
+    latest = assistants[-1]
     text = str(pick(latest, "Text") or "").strip()
-    generating_value = pick(latest, "Generating")
-    generating = str(generating_value).lower() == "true" if generating_value is not None else False
+    generating = str(pick(latest, "Generating") or "false").lower() == "true"
     stable_value = pick(latest, "StableSeconds")
     try:
         stable = float(stable_value) >= STABLE_SECONDS if stable_value is not None else not generating
@@ -232,94 +230,22 @@ def inspect_messages(messages: list[dict[str, Any]], message_id: str) -> tuple[b
     return True, bool(text), bool(text) and not generating and stable
 
 
-def set_state(state: dict[str, Any], delivery_state: str, note: str) -> None:
-    if delivery_state not in DELIVERY_STATES:
-        raise ValueError(f"invalid delivery state: {delivery_state}")
-    state["delivery_state"] = delivery_state
-    state["updated_at"] = utc_now()
-    state.setdefault("transitions", []).append(
-        {"at": state["updated_at"], "state": delivery_state, "note": note}
-    )
-
-
-def identity_from_success(result: dict[str, Any]) -> tuple[str | None, str | None]:
-    for row in rows(parse_json(result.get("stdout", ""))):
-        conversation_id, url = conversation_identity(row)
-        if conversation_id or url:
-            return conversation_id, url
-    return None, None
-
-
-def recover_identity(
-    state: dict[str, Any], state_path: Path, command_wait: int, attempts: int
-) -> bool:
-    known = state.get("conversation_id") or state.get("conversation_url")
-    if known:
-        messages = detail(state, state_path, str(known), command_wait)
-        delivered, response_exists, ready = inspect_messages(messages, state["message_id"])
-        if delivered:
-            set_state(state, "RESPONSE_READY" if ready else "RESPONSE_PENDING", "matching MESSAGE_ID found in recorded conversation")
-            state["last_successful_read_at"] = utc_now()
-            if response_exists:
-                state["response_observed"] = True
-            return True
+def blank_new_url(url: str | None, old_id: str | None) -> bool:
+    if not url:
         return False
-
-    before = set(state.get("pre_send_conversation_ids", []))
-    for _ in range(attempts):
-        candidates: list[tuple[str, str | None]] = []
-        for row in history(state, state_path, command_wait):
-            conversation_id, url = conversation_identity(row)
-            identity = conversation_id or url
-            if identity and (not conversation_id or conversation_id not in before):
-                candidates.append((identity, url))
-
-        matches: list[tuple[str, str | None, bool]] = []
-        for identity, url in candidates:
-            messages = detail(state, state_path, identity, command_wait)
-            delivered, _, ready = inspect_messages(messages, state["message_id"])
-            if delivered:
-                matches.append((identity, url, ready))
-
-        if len(matches) == 1:
-            identity, url, ready = matches[0]
-            state["conversation_id"] = identity
-            state["conversation_url"] = url
-            state["last_successful_read_at"] = utc_now()
-            set_state(state, "RESPONSE_READY" if ready else "RESPONSE_PENDING", "recovered one conversation by MESSAGE_ID")
-            return True
-        if len(matches) > 1:
-            state["duplicate_conversation_ids"] = [identity for identity, _, _ in matches]
-            set_state(state, "DELIVERY_UNKNOWN", "multiple conversations contain the same MESSAGE_ID; do not resend")
-            return False
-    return False
+    parsed = urlparse(url)
+    if parsed.hostname not in {"chatgpt.com", "www.chatgpt.com"}:
+        return False
+    if conversation_id_from_url(url) or (old_id and old_id in url):
+        return False
+    return parsed.path in {"", "/"}
 
 
-def poll_response(
-    state: dict[str, Any],
-    state_path: Path,
-    command_wait: int,
-    poll_interval: int,
-    total_wait: int,
-) -> None:
-    identity = state.get("conversation_id") or state.get("conversation_url")
-    if not identity:
-        return
-    deadline = time.monotonic() + total_wait
-    while time.monotonic() <= deadline:
-        messages = detail(state, state_path, str(identity), command_wait)
-        delivered, _, ready = inspect_messages(messages, state["message_id"])
-        if delivered and ready:
-            state["last_successful_read_at"] = utc_now()
-            set_state(state, "RESPONSE_READY", "stable assistant response observed")
-            return
-        if delivered:
-            state["last_successful_read_at"] = utc_now()
-            set_state(state, "RESPONSE_PENDING", "message delivered; response not yet stable")
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-        time.sleep(min(poll_interval, remaining))
+def prepare_payload(args: argparse.Namespace, body: str) -> str:
+    if marker(args.message_id) in body:
+        raise ValueError("message body already contains MESSAGE_ID; provide body without transport headers")
+    return (f"WORK_ITEM_ID: {args.work_item_id}\nMESSAGE_ID: {args.message_id}\n"
+            f"ROUND: {args.round}\nMESSAGE_TYPE: {args.message_type}\n\n" + body.lstrip("\ufeff"))
 
 
 def read_payload(args: argparse.Namespace) -> str:
@@ -330,49 +256,130 @@ def read_payload(args: argparse.Namespace) -> str:
     return sys.stdin.read()
 
 
-def prepare_payload(args: argparse.Namespace, body: str) -> str:
-    if marker(args.message_id) in body:
-        raise ValueError("message body already contains MESSAGE_ID; provide body without transport headers")
-    header = (
-        f"WORK_ITEM_ID: {args.work_item_id}\n"
-        f"MESSAGE_ID: {args.message_id}\n"
-        f"ROUND: {args.round}\n"
-        f"MESSAGE_TYPE: {args.message_type}\n\n"
-    )
-    return header + body.lstrip("\ufeff")
-
-
 def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 1,
-        "work_item_id": args.work_item_id,
-        "message_id": args.message_id,
-        "round": args.round,
-        "message_type": args.message_type,
-        "conversation_id": args.conversation,
-        "conversation_url": None,
-        "delivery_state": "NOT_SENT",
-        "created_at": utc_now(),
-        "updated_at": utc_now(),
-        "state_file": str(state_path),
-        "raw_outputs": [],
+        "schema_version": 2, "work_item_id": args.work_item_id, "message_id": args.message_id,
+        "round": args.round, "message_type": args.message_type,
+        "expected_conversation_mode": "EXISTING" if args.conversation else "NEW",
+        "pre_send_active_conversation_id": None, "verified_target_conversation_id": args.conversation,
+        "actual_delivery_conversation_id": None, "verified_target_url": None,
+        "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
+        "send_attempt_count": 0, "recovery_attempt_count": 0, "detail_check_count": 0,
+        "external_command_count": 0, "misroute_detected": False,
+        "official_response_eligible": False, "started_at": utc_now(), "stopped_at": None,
+        "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
+        "raw_outputs": [], "transitions": [],
         "parameters": {
             "command_wait_seconds": args.command_wait_seconds,
-            "poll_interval_seconds": args.poll_interval_seconds,
-            "total_response_wait_seconds": args.total_response_wait_seconds,
+            "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
             "max_recovery_attempts": args.max_recovery_attempts,
+            "max_detail_checks": args.max_detail_checks,
+            "max_external_commands": args.max_external_commands,
+            "max_experiment_seconds": args.max_experiment_seconds,
+            "recent_candidate_limit": args.recent_candidate_limit,
         },
-        "transitions": [],
     }
 
 
-def output_state(state: dict[str, Any]) -> int:
-    print(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
-    if state["delivery_state"] == "RESPONSE_READY":
-        return 0
-    if state["delivery_state"] == "FAILED":
-        return 1
-    return 2
+def history(state: dict[str, Any], state_path: Path) -> list[dict[str, Any]]:
+    result = command(state, state_path, "history", ["chatgpt", "history", "--limit", str(state["parameters"]["recent_candidate_limit"]), "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    return result_rows(result)
+
+
+def detail(state: dict[str, Any], state_path: Path, identity: str) -> tuple[list[dict[str, Any]], str | None]:
+    if state["detail_check_count"] >= state["parameters"]["max_detail_checks"]:
+        return [], None
+    state["detail_check_count"] += 1
+    result = command(state, state_path, "detail", ["chatgpt", "detail", identity, "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    raw = state["raw_outputs"][-1] if result is not None else None
+    return result_rows(result), raw
+
+
+def mark_misroute(state: dict[str, Any], identity: str, raw_path: str | None) -> None:
+    state["actual_delivery_conversation_id"] = identity
+    state["misroute_detected"] = True
+    state["official_response_eligible"] = False
+    state["misroute_evidence"] = {"conversation_id": identity, "raw_path": raw_path,
+                                  "matched_work_item_id": state["work_item_id"], "matched_message_id": state["message_id"]}
+    set_state(state, "MISROUTED_DELIVERY", "exact Work Item ID and Message ID found in a pre-send conversation")
+    stop(state, "MISROUTED_DELIVERY: repair new-conversation creation before retrying")
+
+
+def pre_send_ids(state: dict[str, Any]) -> set[str]:
+    identities = set(state.get("pre_send_recent_conversation_ids", []))
+    if state.get("pre_send_active_conversation_id"):
+        identities.add(state["pre_send_active_conversation_id"])
+    return identities
+
+
+def accept_delivery(state: dict[str, Any], identity: str, ready: bool, response_exists: bool) -> None:
+    state["actual_delivery_conversation_id"] = identity
+    state["verified_target_conversation_id"] = identity
+    state["official_response_eligible"] = True
+    set_state(state, "RESPONSE_READY" if ready else ("RESPONSE_PENDING" if response_exists else "DELIVERED"), "exact identifiers found in verified new conversation")
+    stop(state, "RESPONSE_READY" if ready else "BOUNDED_WAIT_COMPLETE", "ACHIEVED" if ready else "IN_PROGRESS")
+
+
+def recover_delivery(state: dict[str, Any], state_path: Path, returned_identity: str | None = None) -> bool:
+    if state["recovery_attempt_count"] >= state["parameters"]["max_recovery_attempts"]:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_RECOVERY_ATTEMPTS")
+        return False
+    state["recovery_attempt_count"] += 1
+    candidates: list[str] = []
+    status = command(state, state_path, "status-after-send", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    current_url = status_url(status)
+    current_id = conversation_id_from_url(current_url or "")
+    if current_id:
+        candidates.append(current_id)
+    if returned_identity and returned_identity not in candidates:
+        candidates.append(returned_identity)
+    if not candidates and state["external_command_count"] < state["parameters"]["max_external_commands"]:
+        for row in history(state, state_path):
+            identity, _ = conversation_identity(row)
+            if identity and identity not in candidates:
+                candidates.append(identity)
+    for identity in candidates[:state["parameters"]["recent_candidate_limit"]]:
+        messages, raw_path = detail(state, state_path, identity)
+        delivered, response_exists, ready = inspect_messages(messages, state["work_item_id"], state["message_id"])
+        if not delivered:
+            continue
+        if identity in pre_send_ids(state):
+            mark_misroute(state, identity, raw_path)
+        else:
+            accept_delivery(state, identity, ready, response_exists)
+        return True
+    if not state.get("stopped_at"):
+        set_state(state, "DELIVERY_UNKNOWN", "bounded exact-ID recovery found no delivery")
+        stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID")
+    return False
+
+
+def verify_new_conversation(state: dict[str, Any], state_path: Path, manual_url: str | None) -> bool:
+    set_state(state, "CREATING_CONVERSATION", "create a blank conversation without sending")
+    if not manual_url:
+        created = command(state, state_path, "new", ["chatgpt", "new", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+        if not result_rows(created):
+            stop(state, "CREATE_NEW_CONVERSATION_UNVERIFIED: use a manually opened blank ChatGPT URL")
+            return False
+    set_state(state, "VERIFYING_CONVERSATION", "verify URL changed and blank page has no messages")
+    status = command(state, state_path, "status-new", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    if status is None:
+        return False
+    url = status_url(status)
+    if manual_url and url != manual_url:
+        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: current URL does not match manual blank URL")
+        return False
+    if not blank_new_url(url, state["pre_send_active_conversation_id"]):
+        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: still on an old /c/<id> page or URL is not a blank ChatGPT page")
+        return False
+    read_result = command(state, state_path, "read-new", ["chatgpt", "read", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    if read_result is None:
+        return False
+    if read_result is None or read_result["timed_out"] or read_result["returncode"] != 0 or result_rows(read_result):
+        stop(state, "VERIFY_NEW_CONVERSATION_FAILED: blank-page read was not empty and reliable")
+        return False
+    state["verified_target_url"] = url
+    return True
 
 
 def send_command(args: argparse.Namespace) -> int:
@@ -381,76 +388,61 @@ def send_command(args: argparse.Namespace) -> int:
         existing = read_json(state_path)
         if existing.get("message_id") != args.message_id:
             raise ValueError("existing state file belongs to another MESSAGE_ID")
-        if existing.get("delivery_state") in NO_RESEND_STATES:
-            raise ValueError(
-                f"MESSAGE_ID already has state {existing['delivery_state']}; use recover, never resend"
-            )
-
-    payload = prepare_payload(args, read_payload(args))
+        if existing.get("delivery_state") in NO_RESEND_STATES or existing.get("send_attempt_count", 0) >= 1:
+            raise ValueError(f"MESSAGE_ID already has state {existing.get('delivery_state')}; same-ID resend is forbidden")
     state = new_state(args, state_path)
-    if not args.conversation:
-        state["pre_send_conversation_ids"] = [
-            conversation_id
-            for row in history(state, state_path, args.command_wait_seconds)
-            if (conversation_id := conversation_identity(row)[0])
-        ]
-    else:
-        messages = detail(state, state_path, args.conversation, args.command_wait_seconds)
-        delivered, _, ready = inspect_messages(messages, args.message_id)
-        if delivered:
-            set_state(state, "RESPONSE_READY" if ready else "RESPONSE_PENDING", "MESSAGE_ID already exists in target conversation; send skipped")
+    payload = prepare_payload(args, read_payload(args))
+    pre_status = command(state, state_path, "status-before-send", ["chatgpt", "status", "-f", "json", "--window", "background"], args.command_wait_seconds)
+    pre_url = status_url(pre_status)
+    state["pre_send_active_conversation_id"] = conversation_id_from_url(pre_url or "")
+    pre_rows = history(state, state_path)
+    state["pre_send_recent_conversation_ids"] = [identity for row in pre_rows if (identity := conversation_identity(row)[0])]
+    write_json(state_path, state)
+    if args.conversation:
+        if args.conversation not in state["pre_send_recent_conversation_ids"] and args.conversation != state["pre_send_active_conversation_id"]:
+            stop(state, "VERIFY_EXISTING_CONVERSATION_FAILED: explicit target was not observed in bounded pre-send evidence")
             write_json(state_path, state)
             return output_state(state)
-
-    set_state(state, "SENDING", "one ask command started")
-    write_json(state_path, state)
-    target = ["--conversation", args.conversation] if args.conversation else ["--new"]
-    result = run_opencli(
-        [
-            "chatgpt",
-            "ask",
-            payload,
-            *target,
-            "--timeout",
-            str(args.command_wait_seconds),
-            "-f",
-            "json",
-            "--window",
-            "background",
-        ],
-        args.command_wait_seconds + 10,
-    )
-    save_raw(state, state_path, "ask", result)
-    if result["timed_out"] or result["returncode"] != 0:
-        set_state(state, "DELIVERY_UNKNOWN", "ask timed out or returned nonzero; recovery required before any resend")
+        target = ["--conversation", args.conversation]
     else:
-        set_state(state, "SENT", "ask returned successfully")
-        state["last_successful_write_at"] = utc_now()
-        conversation_id, url = identity_from_success(result)
-        state["conversation_id"] = conversation_id or state.get("conversation_id")
-        state["conversation_url"] = url or state.get("conversation_url")
+        if not verify_new_conversation(state, state_path, args.manual_new_url):
+            write_json(state_path, state)
+            return output_state(state)
+        target = []
+    if state["send_attempt_count"] >= state["parameters"]["max_send_attempts_per_message"]:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_SEND_ATTEMPTS_PER_MESSAGE")
+        write_json(state_path, state)
+        return output_state(state)
+    state["send_attempt_count"] += 1
+    set_state(state, "SENDING", "single ask on verified target")
+    # Persist the one permitted send attempt before invoking the write command.
+    # A process crash during ask must still make a same-ID retry impossible.
     write_json(state_path, state)
-
-    recovered = recover_identity(
-        state, state_path, args.command_wait_seconds, args.max_recovery_attempts
-    )
-    if recovered and state["delivery_state"] != "RESPONSE_READY":
-        poll_response(
-            state,
-            state_path,
-            args.command_wait_seconds,
-            args.poll_interval_seconds,
-            args.total_response_wait_seconds,
-        )
-    elif not recovered and state["delivery_state"] == "SENT" and state.get("conversation_id"):
-        set_state(state, "DELIVERED", "ask returned conversation identity; response not yet observed")
-        poll_response(
-            state,
-            state_path,
-            args.command_wait_seconds,
-            args.poll_interval_seconds,
-            args.total_response_wait_seconds,
-        )
+    result = command(state, state_path, "ask", ["chatgpt", "ask", payload, *target, "--timeout", str(args.command_wait_seconds), "-f", "json", "--window", "background"], args.command_wait_seconds + 5)
+    if result is None:
+        write_json(state_path, state)
+        return output_state(state)
+    returned_id, returned_url = (None, None)
+    for row in result_rows(result):
+        returned_id, returned_url = conversation_identity(row)
+        if returned_id or returned_url:
+            break
+    returned_id = returned_id or conversation_id_from_url(returned_url or "")
+    if result["timed_out"] or result["returncode"] != 0:
+        set_state(state, "DELIVERY_UNKNOWN", "ask timed out or returned nonzero; one bounded recovery only")
+        recover_delivery(state, state_path, returned_id)
+    elif returned_id and returned_id in pre_send_ids(state) and not args.conversation:
+        mark_misroute(state, returned_id, state["raw_outputs"][-1])
+    elif returned_id:
+        state["actual_delivery_conversation_id"] = returned_id
+        state["verified_target_conversation_id"] = returned_id
+        state["official_response_eligible"] = True
+        response = next((pick(row, "response") for row in result_rows(result) if pick(row, "response")), None)
+        set_state(state, "RESPONSE_READY" if response else "DELIVERED", "ask returned verified new conversation identity")
+        stop(state, "RESPONSE_READY" if response else "BOUNDED_WAIT_COMPLETE", "ACHIEVED" if response else "IN_PROGRESS")
+    else:
+        set_state(state, "DELIVERY_UNKNOWN", "ask returned without conversation identity")
+        recover_delivery(state, state_path)
     write_json(state_path, state)
     return output_state(state)
 
@@ -458,20 +450,16 @@ def send_command(args: argparse.Namespace) -> int:
 def recover_command(args: argparse.Namespace) -> int:
     state_path = Path(args.state_file)
     state = read_json(state_path)
-    parameters = state.get("parameters", {})
-    command_wait = args.command_wait_seconds or parameters.get("command_wait_seconds", COMMAND_WAIT_SECONDS)
-    poll_interval = args.poll_interval_seconds or parameters.get("poll_interval_seconds", POLL_INTERVAL_SECONDS)
-    total_wait = args.total_response_wait_seconds or parameters.get("total_response_wait_seconds", TOTAL_RESPONSE_WAIT_SECONDS)
-    attempts = args.max_recovery_attempts or parameters.get("max_recovery_attempts", MAX_RECOVERY_ATTEMPTS)
-    if state.get("delivery_state") == "FAILED":
+    if state.get("delivery_state") == "MISROUTED_DELIVERY":
         return output_state(state)
-    recovered = recover_identity(state, state_path, command_wait, attempts)
-    if recovered and state["delivery_state"] != "RESPONSE_READY":
-        poll_response(state, state_path, command_wait, poll_interval, total_wait)
-    if not recovered and state["delivery_state"] != "DELIVERY_UNKNOWN":
-        set_state(state, "DELIVERY_UNKNOWN", "bounded recovery could not establish delivery; do not resend")
+    recover_delivery(state, state_path, state.get("actual_delivery_conversation_id"))
     write_json(state_path, state)
     return output_state(state)
+
+
+def output_state(state: dict[str, Any]) -> int:
+    print(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True))
+    return 0 if state["delivery_state"] == "RESPONSE_READY" else (1 if state["delivery_state"] == "FAILED" else 2)
 
 
 def cleanup_command(args: argparse.Namespace) -> int:
@@ -491,31 +479,27 @@ def cleanup_command(args: argparse.Namespace) -> int:
 
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
-    subparsers = root.add_subparsers(dest="command", required=True)
-
-    send = subparsers.add_parser("send", help="send one MESSAGE_ID once, then recover and poll")
+    sub = root.add_subparsers(dest="command", required=True)
+    send = sub.add_parser("send", help="CREATE_NEW_CONVERSATION -> VERIFY_NEW_CONVERSATION -> SEND_MESSAGE")
     send.add_argument("--work-item-id", required=True)
     send.add_argument("--message-id", required=True)
     send.add_argument("--round", required=True, type=int)
     send.add_argument("--message-type", required=True)
-    send.add_argument("--conversation", help="recorded conversation ID or /c/ URL for continuation")
-    send.add_argument("--message-file", help="UTF-8 body file; stdin is preferred")
-    send.add_argument("--state-file", help="state path; defaults to the system temp directory")
+    send.add_argument("--conversation", help="explicit existing Conversation ID for a continuation")
+    send.add_argument("--manual-new-url", help="current manually opened blank ChatGPT URL; must match status")
+    send.add_argument("--message-file")
+    send.add_argument("--state-file")
     send.add_argument("--command-wait-seconds", type=int, default=COMMAND_WAIT_SECONDS)
-    send.add_argument("--poll-interval-seconds", type=int, default=POLL_INTERVAL_SECONDS)
-    send.add_argument("--total-response-wait-seconds", type=int, default=TOTAL_RESPONSE_WAIT_SECONDS)
     send.add_argument("--max-recovery-attempts", type=int, default=MAX_RECOVERY_ATTEMPTS)
+    send.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
+    send.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
+    send.add_argument("--max-experiment-seconds", type=int, default=MAX_EXPERIMENT_SECONDS)
+    send.add_argument("--recent-candidate-limit", type=int, default=RECENT_CANDIDATE_LIMIT)
     send.set_defaults(handler=send_command)
-
-    recover = subparsers.add_parser("recover", help="recover and poll without sending")
+    recover = sub.add_parser("recover", help="one bounded exact-ID recovery without sending")
     recover.add_argument("--state-file", required=True)
-    recover.add_argument("--command-wait-seconds", type=int)
-    recover.add_argument("--poll-interval-seconds", type=int)
-    recover.add_argument("--total-response-wait-seconds", type=int)
-    recover.add_argument("--max-recovery-attempts", type=int)
     recover.set_defaults(handler=recover_command)
-
-    cleanup = subparsers.add_parser("cleanup", help="remove this message's system-temp evidence")
+    cleanup = sub.add_parser("cleanup")
     cleanup.add_argument("--state-file", required=True)
     cleanup.set_defaults(handler=cleanup_command)
     return root

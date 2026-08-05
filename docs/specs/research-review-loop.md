@@ -120,36 +120,53 @@ Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最�
 
 故障发生在创建和投递之后的等待完成检测或结果返回边界，而不是已证实的发送失败。history 的观测顺序不能当作 newest-first 合约；恢复必须比较发送前后的 ID 集合，再以唯一 `MESSAGE_ID` 核验候选对话。
 
+`TRANSPORT-RECOVERY-002` 又证明 `ask --new` 可能在两个发送前已存在的 Conversation 之间错投：命令报告目标 Conversation 与最终页面 URL 不同，Runtime 只记录 `DELIVERY_UNKNOWN`，而旧恢复逻辑排除了所有发送前 ID，导致已送达消息不可恢复。该实验随后发生计划外发送和探针污染，因此不得作为 A2 通过证据。
+
 ### Delivery state and identity
 
 每个 Browser 消息必须包含 `WORK_ITEM_ID`、唯一 `MESSAGE_ID`、`ROUND` 和 `MESSAGE_TYPE`。同一个 `MESSAGE_ID` 在确认失败前不得重发。传输维护：
 
 ```text
 NOT_SENT
+CREATING_CONVERSATION
+VERIFYING_CONVERSATION
 SENDING
 SENT
 DELIVERY_UNKNOWN
+MISROUTED_DELIVERY
 DELIVERED
 RESPONSE_PENDING
 RESPONSE_READY
 FAILED
 ```
 
-CLI timeout 首先进入 `DELIVERY_UNKNOWN`，然后只读 history/detail 恢复；发现消息进入 `DELIVERED`，回复未稳定时进入 `RESPONSE_PENDING`，稳定完整时进入 `RESPONSE_READY`。只有已证实未创建消息或终止错误且恢复确认缺失时才使用 `FAILED`；无法判定时停止为 Work Item `BLOCKED` 或 `STALLED`，不得立即重发。
+CLI timeout 首先进入 `DELIVERY_UNKNOWN`。`MISROUTED_DELIVERY` 表示消息已确认送达，但进入发送前已存在且不是当前 Work Item 目标的 Conversation。进入后必须禁止相同 Message ID 重发、禁止继续使用错误 Conversation、禁止把其回复作为正式 RR Lead 输出，只记录错误 Conversation ID 与精确 Work Item/Message ID 命中的最少证据，并返回 Work Item `BLOCKED` 请求修复创建流程。旧 Conversation 命中永远不得晋升为 `DELIVERED`。
 
 传输拆成：
 
 ```text
 PREPARE_MESSAGE
-→ SEND_ONCE
+→ CREATE_NEW_CONVERSATION
+→ VERIFY_NEW_CONVERSATION
+→ SEND_MESSAGE
 → CAPTURE_OR_RECOVER_CONVERSATION_ID
 → POLL_OR_READ_RESPONSE
 → PARSE_RR_REVIEW
 ```
 
-源包的 `scripts/opencli_transport.py` 统一注入消息标识、短时单次发送、超时恢复、去重、有限轮询、原始命令输出和 Conversation 身份持久化。默认可调参数为 `COMMAND_WAIT_SECONDS=25`、`POLL_INTERVAL_SECONDS=5`、`TOTAL_RESPONSE_WAIT_SECONDS=120`、`MAX_RECOVERY_ATTEMPTS=3`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
+新 Conversation 发送前先记录活动 URL 和有限最近 ID，单独执行 `opencli chatgpt new`，再用 `status` 证明 URL 已变化且不在任何旧 `/c/<id>` 页面，并用 `read` 证明当前页面为空。只有这些条件全部满足才在当前已验证空白页执行一次 `ask`，不得再用 `ask --new` 承载真实 Work Item。OpenCLI 自动验证失败时，降级为用户人工打开空白 ChatGPT 根 URL 并提供 URL；Wrapper 仍必须核对当前 URL 完全一致且页面为空，不允许口头确认绕过验证。
 
-本机 OpenCLI `1.8.6` help 已确认 `history`、`detail`、`ask` 和 `send` 的参数形状。本次真实事故已确认 `ask --new` 可能在 CLI timeout 时实际完成投递、history 可找回 ID/URL、显式 ID detail 可恢复完整回复。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
+正常恢复不得扫描全部 pre-send Conversation。只允许优先检查发送后当前活动 Conversation，再检查配置限定的少量最近候选；只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，命中立即停止，不保存无关正文。
+
+Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversation_mode`、`pre_send_active_conversation_id`、`verified_target_conversation_id`、`actual_delivery_conversation_id`、`delivery_state`、`send_attempt_count`、`recovery_attempt_count`、`misroute_detected`、`started_at`、`stopped_at` 和 `stop_reason`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
+
+默认实验预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=8`、`MAX_EXPERIMENT_SECONDS=60`。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
+
+本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此独立创建后必须组合 URL 与空页面验证。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
+
+### 实验 Agent 协议
+
+每条 Transport 或 Loop 实验 Prompt 都必须明确禁止实验 Agent：修改 Skill、修改 Wrapper、重置 Runtime 后重试、重发相同 Message ID、发送计划外 hello/test 探针、阅读无关 Browser 对话、自行修复代码、把测试转化成开放式研发任务。任一违反立即记为 `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`，停止并废弃该轮通过结论。
 
 ## Validation layers
 
@@ -168,7 +185,7 @@ PREPARE_MESSAGE
 
 ### Experiment A2: One-send transport
 
-使用新的无副作用 Work Item 和单一 `MESSAGE_ID`，验证一次短等待 `ask`、Conversation 身份捕获或恢复、回复轮询和无重复投递。执行前需用户授权真实 Browser 写入。
+使用新的无副作用 Work Item、单一 `MESSAGE_ID` 和全新 Runtime 目录，验证 `CREATE_NEW_CONVERSATION → VERIFY_NEW_CONVERSATION → SEND_MESSAGE`、身份捕获或一次恢复及无重复投递。执行前需用户授权真实 Browser 写入；`TRANSPORT-RECOVERY-002` 不得用于判定通过。
 
 ### Experiment A3: `send` candidate
 
@@ -176,9 +193,9 @@ PREPARE_MESSAGE
 
 ### Experiment B: Two-round Loop
 
-只验证传输，不修改本地业务文件：核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认两次响应属于同一对话。
+只有 A2 与 A3 都通过后才开始正式 Loop。核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认响应属于同一目标对话。
 
-使用备课 fixture：IDE 发送 Context Packet；Browser RR Lead 发出 `NEXT_WORK_ORDER`；IDE 创建实验教案并验证；生成 Evidence Packet；通过记录的 Conversation ID 发回；Browser RR Lead 完成第二轮审查并返回 `ACHIEVED` 或新的可验证下一步。
+使用备课 fixture，至少执行两个完整的 `IDE 执行 → Evidence Packet → RR Lead 审查` 循环。验收标准未全部 `MET` 时不得返回 `ACHIEVED`。
 
 ### Experiment C: Human Decision Resume
 

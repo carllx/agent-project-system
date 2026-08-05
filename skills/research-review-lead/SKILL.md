@@ -61,14 +61,19 @@ Continue only while `WORK_ITEM_STATE: IN_PROGRESS`, an executable `NEXT_WORK_ORD
 Maintain:
 
 ```text
-WORK_ITEM_ID
-CONVERSATION_ID_OR_URL
-CURRENT_ROUND
-LAST_SUCCESSFUL_READ_AT
-LAST_SUCCESSFUL_WRITE_AT
-CURRENT_STATE
-DELIVERY_STATE
-LAST_MESSAGE_ID
+work_item_id
+message_id
+expected_conversation_mode
+pre_send_active_conversation_id
+verified_target_conversation_id
+actual_delivery_conversation_id
+delivery_state
+send_attempt_count
+recovery_attempt_count
+misroute_detected
+started_at
+stopped_at
+stop_reason
 ```
 
 Never rely on the active browser tab.
@@ -84,15 +89,16 @@ opencli chatgpt status -f yaml
 
 Stop without credential recovery when OpenCLI is missing, Browser Bridge is disconnected, ChatGPT is logged out, or the conversation cannot be read reliably. Never inspect cookies, tokens, API keys, or browser credentials.
 
-Local OpenCLI `1.8.6` help and the `TRANSPORT-SMOKE-001` incident established:
+Local OpenCLI `1.8.6` help and the Transport Smoke incidents established:
 
 - `history --limit <n> -f json` returns conversation IDs, titles, and URLs;
 - `detail <id-or-url> --wait --timeout <seconds> --stable <seconds> -f json` returns roles, text, generation state, and stability;
-- `ask --new` can create and deliver a message even when the CLI later times out without returning identity;
+- `ask --new` can deliver into a conversation that existed before the send, then report a page-navigation error;
 - explicit-ID `detail` can recover both observed timed-out conversations and their completed replies;
-- history ordering is not a reliable newest-first contract, so compare pre-send and post-send ID sets rather than selecting the first row.
+- `new` is a separate read-class command but reports only `Status`; `status` reports the current URL and `read` reports current-page messages;
+- history ordering is not a reliable newest-first contract, and scanning every pre-send conversation is prohibited.
 
-`opencli chatgpt send` exists according to help and appears non-waiting, but its creation, targeting, identity capture, and delivery behavior remain `UNVERIFIED`. Do not use it as the trusted runtime path before a separate no-side-effect Transport Smoke Test.
+`opencli chatgpt send` exists according to help and appears non-waiting, but its creation, targeting, identity capture, and delivery behavior remain `UNVERIFIED`. Do not use it as the trusted runtime path before Experiment A3 passes. Never use `ask --new` to send a real Work Item from an unknown page state.
 
 ## Identify every Browser message
 
@@ -105,35 +111,46 @@ ROUND: <number>
 MESSAGE_TYPE: CONTEXT_PACKET / EVIDENCE_PACKET / DECISION_RECEIPT / HANDOFF
 ```
 
-Before sending and after any timeout, check `MESSAGE_ID`. Never resend the same `MESSAGE_ID` while its state is `SENDING`, `SENT`, `DELIVERY_UNKNOWN`, `DELIVERED`, `RESPONSE_PENDING`, or `RESPONSE_READY`. A new attempt requires confirmed failure and a new user-authorized recovery plan; ordinary timeout is not confirmed failure.
+Before sending and after any timeout, check `MESSAGE_ID`. `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`: after the first attempt, never resend the same `MESSAGE_ID`, including after `DELIVERY_UNKNOWN`, `MISROUTED_DELIVERY`, or `FAILED`. A new experiment uses a new Work Item ID, Message ID, and Runtime directory.
 
 ## Use the delivery state model
 
 ```text
 DELIVERY_STATE:
 NOT_SENT
+CREATING_CONVERSATION
+VERIFYING_CONVERSATION
 SENDING
 SENT
 DELIVERY_UNKNOWN
+MISROUTED_DELIVERY
 DELIVERED
 RESPONSE_PENDING
 RESPONSE_READY
 FAILED
 ```
 
-A CLI timeout moves to `DELIVERY_UNKNOWN`, not automatically to `FAILED`. Run history/detail recovery. A found matching message is `DELIVERED`; if its response is incomplete, use `RESPONSE_PENDING`; when the assistant text is non-empty, `Generating` is false, and the reported stability reaches the configured threshold, use `RESPONSE_READY`. Use `FAILED` only after evidence confirms no conversation/message was created or the transport returned a terminal error and recovery confirms absence. If bounded recovery cannot establish delivery either way, preserve state and enter Work Item `BLOCKED` or `STALLED` rather than resending.
+A CLI timeout moves to `DELIVERY_UNKNOWN`, not automatically to `FAILED`. Recovery searches exact `WORK_ITEM_ID` and `MESSAGE_ID` only. A matching message in the verified new Conversation may become `DELIVERED`, `RESPONSE_PENDING`, or `RESPONSE_READY`.
 
-## Split sending from reading
+`MISROUTED_DELIVERY` means the exact message is confirmed delivered into a Conversation that existed before the send and was not the Work Item target. Immediately set the Work Item to `BLOCKED`, record only the wrong Conversation ID and minimal exact-ID evidence, prohibit same-ID resend and further use of that Conversation, and set its response as ineligible for formal RR Lead output. Request repair of the new-conversation creation path. Never promote an old-Conversation hit to `DELIVERED`.
+
+## Create, verify, then send
 
 Use this transport flow:
 
 ```text
 PREPARE_MESSAGE
--> SEND_ONCE
+-> CREATE_NEW_CONVERSATION
+-> VERIFY_NEW_CONVERSATION
+-> SEND_MESSAGE
 -> CAPTURE_OR_RECOVER_CONVERSATION_ID
 -> POLL_OR_READ_RESPONSE
 -> PARSE_RR_REVIEW
 ```
+
+For a new Work Item the wrapper first captures the active URL and a short recent-ID snapshot, runs `opencli chatgpt new` without a message, then requires all of the following before `ask`: current URL changed away from the old identity, current URL contains no `/c/<id>`, it is a ChatGPT blank root URL, and `read` returns no messages. The send then targets that verified current blank page without `--new`.
+
+If OpenCLI cannot verify the blank page, stop before sending with `BLOCKED`. The fallback is: the user manually opens a blank ChatGPT root URL, copies that exact URL, and the Loop Driver reruns with `--manual-new-url <url>`; the wrapper still checks current `status` equals that URL and `read` is empty. A human assertion alone does not bypass verification.
 
 Use the wrapper from the target project without copying it:
 
@@ -145,18 +162,30 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send `
 python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
 ```
 
-For subsequent rounds add `--conversation <recorded-id-or-url>`. The wrapper uses one short `ask`, then switches to recovery and polling; it does not repeat `ask`. Review its JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`.
+For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Review its JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false.
 
 Default adjustable parameters are:
 
 ```text
-COMMAND_WAIT_SECONDS=25
+COMMAND_WAIT_SECONDS=15
 POLL_INTERVAL_SECONDS=5
-TOTAL_RESPONSE_WAIT_SECONDS=120
-MAX_RECOVERY_ATTEMPTS=3
+TOTAL_RESPONSE_WAIT_SECONDS=30
+MAX_SEND_ATTEMPTS_PER_MESSAGE=1
+MAX_RECOVERY_ATTEMPTS=1
+MAX_DETAIL_CHECKS=1
+MAX_EXTERNAL_COMMANDS=8
+MAX_EXPERIMENT_SECONDS=60
 ```
 
 Keep each command wait short, impose a total response bound, and never use unlimited technical retries. At the bound, preserve the Conversation ID and Handoff and enter `BLOCKED` or `STALLED` as appropriate.
+
+## Bound recovery and experiments
+
+Recovery checks the post-send active Conversation first, then at most the configured small number of recent candidates. Search only exact Work Item ID and Message ID, stop on the first hit, and retain no unrelated conversation body. Never scan all pre-send Conversations as a normal recovery path.
+
+Every experimental Agent Prompt must state that the Agent must not modify the Skill or wrapper; reset Runtime and retry; resend the same Message ID; send unplanned hello/test probes; read unrelated Browser conversations; repair code; or turn the test into open-ended development. Any violation is `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`; stop immediately and do not use that run to pass A2 or A3.
+
+Transport A2 and A3 must both pass before the formal Loop starts. The formal Loop must contain at least two complete `IDE execution -> Evidence Packet -> RR Lead review` cycles, and may return `ACHIEVED` only when every original acceptance criterion is `MET`.
 
 ## Parse review and execute work
 

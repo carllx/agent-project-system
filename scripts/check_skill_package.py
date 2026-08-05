@@ -13,6 +13,7 @@ PACKAGE = ROOT / "skills" / "research-review-lead"
 ENTRY = PACKAGE / "SKILL.md"
 VERSION = PACKAGE / "VERSION"
 TRANSPORT_SCRIPT = PACKAGE / "scripts" / "opencli_transport.py"
+TRANSPORT_TEST = ROOT / "scripts" / "test_opencli_transport.py"
 REQUIRED_ASSETS = {
     "context-packet.md",
     "evidence-packet.md",
@@ -33,12 +34,15 @@ REQUIRED_SKILL_MARKERS = {
     "OpenCLI",
     "PRECHECK",
     "PREPARE_MESSAGE",
-    "SEND_ONCE",
+    "CREATE_NEW_CONVERSATION",
+    "VERIFY_NEW_CONVERSATION",
+    "SEND_MESSAGE",
     "CAPTURE_OR_RECOVER_CONVERSATION_ID",
     "POLL_OR_READ_RESPONSE",
     "PARSE_RR_REVIEW",
     "DELIVERY_STATE",
     "DELIVERY_UNKNOWN",
+    "MISROUTED_DELIVERY",
     "RESPONSE_PENDING",
     "RESPONSE_READY",
     "MESSAGE_ID",
@@ -47,6 +51,11 @@ REQUIRED_SKILL_MARKERS = {
     "EVIDENCE_REQUIRED",
     "COMMAND_WAIT_SECONDS",
     "MAX_RECOVERY_ATTEMPTS",
+    "MAX_SEND_ATTEMPTS_PER_MESSAGE",
+    "MAX_DETAIL_CHECKS",
+    "MAX_EXTERNAL_COMMANDS",
+    "MAX_EXPERIMENT_SECONDS",
+    "HARD_FAILURE: TEST_PROTOCOL_VIOLATION",
     "Conversation ID",
     "WORK_ITEM_ID",
     "Context Packet",
@@ -153,6 +162,25 @@ def main() -> int:
             ast.parse(TRANSPORT_SCRIPT.read_text(encoding="utf-8"))
         except SyntaxError as error:
             errors.append(f"transport wrapper has invalid Python syntax: {error}")
+
+    if not TRANSPORT_TEST.is_file():
+        errors.append("required pure-local transport test does not exist: scripts/test_opencli_transport.py")
+    else:
+        test_text = TRANSPORT_TEST.read_text(encoding="utf-8")
+        try:
+            ast.parse(test_text)
+        except SyntaxError as error:
+            errors.append(f"transport synthetic test has invalid Python syntax: {error}")
+        for scenario in (
+            "test_correct_new_conversation",
+            "test_timeout_recovers_correct_new_conversation",
+            "test_message_misrouted_to_old_conversation",
+            "test_old_conversation_hit_never_promoted",
+            "test_same_message_id_second_send_rejected",
+            "test_experiment_budget_stops",
+        ):
+            if scenario not in test_text:
+                errors.append(f"transport synthetic test is missing scenario: {scenario}")
 
     asset_dir = PACKAGE / "assets"
     actual_assets = (

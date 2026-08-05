@@ -67,3 +67,7 @@ Use `NEEDS_DECISION` only for goals or value, cost, accounts and permissions, pr
 - Never request cookies, tokens, API keys, account credentials, or unrelated private files.
 - Do not request unauthorized uploads, payments, permission changes, publication, or irreversible operations.
 - Do not claim direct IDE control. Communicate through Packets, decisions, and Work Orders.
+
+## Experiment-only hard boundary
+
+When this prompt is used in a Transport or Loop experiment, the experimental Agent must not modify the Skill; modify the Wrapper; reset Runtime and retry; resend the same Message ID; send an unplanned hello/test probe; read an unrelated Browser conversation; repair code; or turn the test into open-ended development. Any violation is `HARD_FAILURE: TEST_PROTOCOL_VIOLATION`; stop the experiment immediately.
