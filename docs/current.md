@@ -11,7 +11,7 @@
 
 - **ID:** `TRANSPORT-SEND-READ-COMPAT-024`
 - **Name:** 统一 send 与 prepare-new 的空页面解析
-- **Work Item state:** `IN_PROGRESS`
+- **Work Item state:** `ACHIEVED`
 - **Baseline commit:** `e42d21c13203f1162aad4681d32aed36c8bc09af`
 - **Current objective:** 让 `send` 与 `prepare-new` 共享真实 OpenCLI `EMPTY_RESULT` 解析逻辑，并修正 manual-new-url 的调用和副作用语义。
 
@@ -34,13 +34,17 @@
 
 ## In progress
 
-- 已实现共享 `classify_chatgpt_read_result`、manual-new-url 有界序列、发送计数调用边界和 Browser 副作用字段。
-- 已加入真实 A2.2 `EMPTY_RESULT + exit 66` 脱敏精确结构 fixture 与 send 回归。
-- 待完成全部治理/包/Skill Creator 校验、本地提交、Lab 整包同步与最终哈希核验。
+- None.
 
 ## Completed
 
 - 50 项纯本地 Transport 测试首轮全部通过；原 45 项与新增 5 项均通过。
+- 已实现唯一共享 `classify_chatgpt_read_result`、manual-new-url 有界序列、发送计数调用边界和 Browser 副作用字段。
+- 已加入与真实 A2.2 `raw/04-read-new.json` 逐字节相同的 `EMPTY_RESULT + exit 66` 回归 fixture；文件 SHA-256 均为 `c99007ba1f1b43467af27f886f7a1cb39ef5c49047907a7d0c17681f02ddf97d`。
+- 已通过 50 项 Transport、文档治理、0.4.6 包检查、源/Lab Skill Creator 和 whitespace 校验。
+- 已创建本地实现 Commit `a15b74e4145715ec5bd37c3ed01c9e05e99dd601`，未 push。
+- 已逐文件覆盖同步权威源包到 `E:\PROJECTS\rr-lead-skill-lab\.agents\skills\research-review-lead`；源/Lab 均为 0.4.6、各 8 文件、路径差异和字节差异均为 0，规范包哈希均为 `65b146f6091ecb005715fbbee60b3c2b8d2476f004004cc38e779ff2b1a9e121`。
+- 同步操作未以 `.runtime` 为目标；在禁止扫描其他 Runtime 的边界内，指定 `TRANSPORT-A2P2-023` 的 6 文件路径和逐文件 SHA-256 与同步前完全一致。
 
 ## Blockers
 
@@ -52,7 +56,7 @@
 
 ## Next action
 
-- 运行完整校验，审查 Diff，创建本地实现 Commit；随后整包同步到 Lab 并核验源/Lab 与指定 Runtime。
+- 使用新的 Work Item ID、Message ID 和 Runtime 目录重跑正式 A2.2：由用户预先打开 `https://chatgpt.com/new`，调用 `send --manual-new-url https://chatgpt.com/new`，验证单次真实发送和身份恢复；不得复用或修改 `TRANSPORT-A2P2-023`。
 
 ## Files to read
 
@@ -76,5 +80,9 @@
 - **Result:** Passed.
 - **Command:** `git diff --check`
 - **Result:** Passed; only Git line-ending conversion warnings were emitted.
+- **Command:** source/Lab relative-path manifest, per-file SHA-256 comparison, and canonical package hash
+- **Result:** Source/Lab versions are `0.4.6`; both contain 8 files; path and byte diff counts are zero; both canonical hashes are `65b146f6091ecb005715fbbee60b3c2b8d2476f004004cc38e779ff2b1a9e121`.
+- **Command:** authorized `TRANSPORT-A2P2-023` relative-path and per-file SHA-256 comparison before/after sync
+- **Result:** All 6 authorized Runtime files are unchanged; path and content diff counts are zero.
 - **Scope:** 仅使用指定 Runtime 的脱敏 fixture 与假 OpenCLI；未运行 OpenCLI、真实 Browser 实验或发送消息。
 - **Last verified:** 2026-08-05
