@@ -20,7 +20,9 @@ graph TD
 
 RR Lead 监督方向和质量；IDE Agent 用本地事实监督并纠正纸面判断。真实文件、测试输出和 Git Diff 优先于未验证的外部推测。
 
-## Information exchange
+## Goal Contract and information exchange
+
+Context Packet 必须定义所有参与者共同使用且不会被 RR Lead 静默扩大的 Goal Contract：`WORK_ITEM_ID`、`SHARED_OBJECTIVE`、`ACCEPTANCE_CRITERIA`、`SCOPE`、`CONSTRAINTS`、`EVIDENCE_REQUIRED` 和 `STOP_CONDITIONS`。新发现但不阻塞本目标的改进进入 Debt；改变验收条件必须由用户明确决定。
 
 - Context Packet：首次同步目标、验收标准与必要背景。
 - Change Packet：返回变更摘要、关键 Diff、验证命令、退出码和必要输出。
@@ -39,6 +41,8 @@ Evidence Packet 使用通用核心，将目标、范围、产物、验证、来�
 4. RR Lead 分别给出本轮审查结论和整个任务状态，区分 Blocker 与 Debt，并给出下一步。
 5. 达到验收标准时任务进入 `ACHIEVED`；需要用户决定时进入 `NEEDS_DECISION`；否则继续推进。
 
+只要 Work Item 为 `IN_PROGRESS`、存在可执行的 `NEXT_WORK_ORDER`、没有用户决定或安全风险，并且存在新增证据或合理新路径，循环就继续。协议不使用“无限循环”：`ACHIEVED`、`BLOCKED`、`NEEDS_DECISION`、`STALLED` 和 `UNSAFE` 都会停止本地执行。
+
 ## Review decision and work item state
 
 两个字段不得混用：
@@ -53,7 +57,7 @@ IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 
 例如 `REVIEW_DECISION: PASS_WITH_DEBT` 与 `WORK_ITEM_STATE: IN_PROGRESS` 表示本轮实现通过但整个任务仍需继续。
 
-RR Lead 每轮响应还应包含 `GOAL_CHECK`、`FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成。
+RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、`MET / NOT_MET / UNVERIFIED`、Evidence，并包含 `FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成；只有所有原验收条件都有充分证据且为 `MET` 才能进入 `ACHIEVED`。
 
 ## Sixth-round health checkpoint
 
@@ -94,25 +98,58 @@ RR Lead 在具有项目权威入口时采用 Full Governance Mode，并服从目
 
 运行循环明确区分三类 Agent：Builder IDE Agent 只维护源包；IDE-side Loop Driver 在目标项目读取事实、交换 Packet 并执行 Work Order；Browser RR Lead 必须真实存在于 ChatGPT 浏览器对话中，负责外部调研、审查和推进。Loop Driver 不得冒充 Browser RR Lead，也不得用本地意见伪造浏览器回复。
 
-循环状态机为：
+目标循环为：
 
 ```text
-PRECHECK
-→ CREATE_OR_RESUME_BROWSER_CONVERSATION
-→ SEND_CONTEXT_PACKET
-→ RECEIVE_RR_REVIEW
-→ EXECUTE_NEXT_WORK_ORDER
-→ BUILD_EVIDENCE_PACKET
-→ SEND_EVIDENCE_TO_SAME_CONVERSATION
-→ RECEIVE_NEXT_REVIEW
-→ CONTINUE_OR_STOP
+共同目标
+→ IDE 执行
+→ IDE 提交证据
+→ RR Lead 按验收标准审查
+→ 未达到则给修复指令
+→ IDE 修复并重新提交证据
+→ 全部达到则 ACHIEVED
 ```
 
 Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最后成功读写时间和当前状态，不得只依赖当前浏览器标签页。只有状态为 `IN_PROGRESS`、不存在用户决策闸口且操作在授权范围内时才执行 `NEXT_WORK_ORDER`。
 
 当 Browser RR Lead 返回 `NEEDS_DECISION` 时，Loop Driver 停止执行并等待用户在同一 Browser 对话中回答。用户明确表示已回答后，Loop Driver 用记录的对话身份重新读取，核对 Work Item 和选择，形成 Decision Receipt，再恢复原循环；第一版不自动轮询。
 
-本机 OpenCLI 帮助可验证命令名称和参数形状，但不能替代真实传输证据。对话创建、ID 捕获、显式 ID 续聊和恢复在 Transport Smoke Test 通过前必须标记为 `UNVERIFIED`，不得因静态检查通过宣称循环有效。
+### Transport Smoke 取证事实
+
+2026-08-05 的 `TRANSPORT-SMOKE-001` 产生了两次 `ask --new` 超时。只读 history/detail 恢复确认两个命令分别建立了一个对话，两个用户消息均已投递，两个 Browser 回复均已完成；同一 Work Item 因超时后重发而出现一个额外重复对话。显式 Conversation ID detail 对两个对话均可稳定恢复。OpenCLI 输出不含消息时间戳，因此本次无法从 CLI 精确证明消息和回复时刻。
+
+故障发生在创建和投递之后的等待完成检测或结果返回边界，而不是已证实的发送失败。history 的观测顺序不能当作 newest-first 合约；恢复必须比较发送前后的 ID 集合，再以唯一 `MESSAGE_ID` 核验候选对话。
+
+### Delivery state and identity
+
+每个 Browser 消息必须包含 `WORK_ITEM_ID`、唯一 `MESSAGE_ID`、`ROUND` 和 `MESSAGE_TYPE`。同一个 `MESSAGE_ID` 在确认失败前不得重发。传输维护：
+
+```text
+NOT_SENT
+SENDING
+SENT
+DELIVERY_UNKNOWN
+DELIVERED
+RESPONSE_PENDING
+RESPONSE_READY
+FAILED
+```
+
+CLI timeout 首先进入 `DELIVERY_UNKNOWN`，然后只读 history/detail 恢复；发现消息进入 `DELIVERED`，回复未稳定时进入 `RESPONSE_PENDING`，稳定完整时进入 `RESPONSE_READY`。只有已证实未创建消息或终止错误且恢复确认缺失时才使用 `FAILED`；无法判定时停止为 Work Item `BLOCKED` 或 `STALLED`，不得立即重发。
+
+传输拆成：
+
+```text
+PREPARE_MESSAGE
+→ SEND_ONCE
+→ CAPTURE_OR_RECOVER_CONVERSATION_ID
+→ POLL_OR_READ_RESPONSE
+→ PARSE_RR_REVIEW
+```
+
+源包的 `scripts/opencli_transport.py` 统一注入消息标识、短时单次发送、超时恢复、去重、有限轮询、原始命令输出和 Conversation 身份持久化。默认可调参数为 `COMMAND_WAIT_SECONDS=25`、`POLL_INTERVAL_SECONDS=5`、`TOTAL_RESPONSE_WAIT_SECONDS=120`、`MAX_RECOVERY_ATTEMPTS=3`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
+
+本机 OpenCLI `1.8.6` help 已确认 `history`、`detail`、`ask` 和 `send` 的参数形状。本次真实事故已确认 `ask --new` 可能在 CLI timeout 时实际完成投递、history 可找回 ID/URL、显式 ID detail 可恢复完整回复。`send` 的创建、目标绑定、身份返回和实际投递行为仍为 `UNVERIFIED`，正式脚本不依赖它。
 
 ## Validation layers
 
@@ -125,11 +162,21 @@ Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最�
 
 静态测试通过只证明包结构和规则存在，不能证明传输、循环或人工决策恢复有效。
 
-### Experiment A: Transport Smoke Test
+### Experiment A1: Non-mutating recovery regression
 
-只验证传输，不修改本地业务文件：核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认两次响应属于同一对话。
+使用已知 Conversation ID 和已知 `MESSAGE_ID` 验证 wrapper 的 recover 分支可返回 `RESPONSE_READY`，且不发送消息。
+
+### Experiment A2: One-send transport
+
+使用新的无副作用 Work Item 和单一 `MESSAGE_ID`，验证一次短等待 `ask`、Conversation 身份捕获或恢复、回复轮询和无重复投递。执行前需用户授权真实 Browser 写入。
+
+### Experiment A3: `send` candidate
+
+在隔离对话中验证 `send` 是否要求先创建或打开对话、如何绑定明确 Conversation ID、是否只发送不等待，以及如何证明发往正确对话。通过前保持 `UNVERIFIED`。
 
 ### Experiment B: Two-round Loop
+
+只验证传输，不修改本地业务文件：核验 OpenCLI 和 Browser Bridge 状态；创建真实 Browser RR Lead 对话；发送初始化规则与 Context Packet；取得固定格式回复；捕获 Conversation ID/URL；使用显式身份重新读取并发送一条无副作用验证消息；确认两次响应属于同一对话。
 
 使用备课 fixture：IDE 发送 Context Packet；Browser RR Lead 发出 `NEXT_WORK_ORDER`；IDE 创建实验教案并验证；生成 Evidence Packet；通过记录的 Conversation ID 发回；Browser RR Lead 完成第二轮审查并返回 `ACHIEVED` 或新的可验证下一步。
 
@@ -137,4 +184,4 @@ Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最�
 
 使用安全决策 fixture：Browser RR Lead 返回 `NEEDS_DECISION`；IDE 停止；用户在 Browser 选择；IDE 在用户确认后重新读取同一对话；核对决定并生成 Decision Receipt；只恢复被选择的路径。
 
-三个实验是设计中的下一阶段，本次源包修改不运行它们。
+写入型实验是下一阶段；本次源包修改只执行只读恢复取证和本地静态验证。

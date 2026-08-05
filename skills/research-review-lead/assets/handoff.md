@@ -4,9 +4,16 @@
 
 Fill the Common Core and only the extension for the role handing off.
 
+## MESSAGE IDENTITY
+
+- **WORK_ITEM_ID:** [stable identifier]
+- **MESSAGE_ID:** [WORK_ITEM_ID-Rn-HANDOFF]
+- **ROUND:** [number]
+- **MESSAGE_TYPE:** HANDOFF
+
 ## COMMON CORE
 
-- **Work Item:** [identifier and name]
+- **Work Item:** [identifier and name; must match WORK_ITEM_ID]
 - **Conversation ID:** [if available]
 - **Handoff reason:** [why continuity is no longer reliable]
 - **Current objective:** [user-confirmed objective]

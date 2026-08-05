@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "skills" / "research-review-lead"
 ENTRY = PACKAGE / "SKILL.md"
 VERSION = PACKAGE / "VERSION"
+TRANSPORT_SCRIPT = PACKAGE / "scripts" / "opencli_transport.py"
 REQUIRED_ASSETS = {
     "context-packet.md",
     "evidence-packet.md",
@@ -18,20 +20,33 @@ REQUIRED_ASSETS = {
     "handoff.md",
     "rr-lead-init.md",
 }
+EXPECTED_PACKAGE_FILES = {
+    "SKILL.md",
+    "VERSION",
+    "scripts/opencli_transport.py",
+    *(f"assets/{name}" for name in REQUIRED_ASSETS),
+}
 REQUIRED_SKILL_MARKERS = {
     "Builder IDE Agent",
     "IDE-side Loop Driver",
     "Browser RR Lead",
     "OpenCLI",
     "PRECHECK",
-    "CREATE_OR_RESUME_BROWSER_CONVERSATION",
-    "SEND_CONTEXT_PACKET",
-    "RECEIVE_RR_REVIEW",
-    "EXECUTE_NEXT_WORK_ORDER",
-    "BUILD_EVIDENCE_PACKET",
-    "SEND_EVIDENCE_TO_SAME_CONVERSATION",
-    "RECEIVE_NEXT_REVIEW",
-    "CONTINUE_OR_STOP",
+    "PREPARE_MESSAGE",
+    "SEND_ONCE",
+    "CAPTURE_OR_RECOVER_CONVERSATION_ID",
+    "POLL_OR_READ_RESPONSE",
+    "PARSE_RR_REVIEW",
+    "DELIVERY_STATE",
+    "DELIVERY_UNKNOWN",
+    "RESPONSE_PENDING",
+    "RESPONSE_READY",
+    "MESSAGE_ID",
+    "SHARED_OBJECTIVE",
+    "ACCEPTANCE_CRITERIA",
+    "EVIDENCE_REQUIRED",
+    "COMMAND_WAIT_SECONDS",
+    "MAX_RECOVERY_ATTEMPTS",
     "Conversation ID",
     "WORK_ITEM_ID",
     "Context Packet",
@@ -75,7 +90,7 @@ def package_text_files() -> list[Path]:
     return sorted(
         path
         for path in PACKAGE.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".md", ".txt", ""}
+        if path.is_file() and path.suffix.lower() in {".md", ".py", ".txt", ""}
     )
 
 
@@ -88,6 +103,15 @@ def main() -> int:
         entries = list(PACKAGE.rglob("SKILL.md"))
         if len(entries) != 1:
             errors.append(f"expected exactly one SKILL.md, found {len(entries)}")
+        actual_package_files = {
+            path.relative_to(PACKAGE).as_posix()
+            for path in PACKAGE.rglob("*")
+            if path.is_file()
+        }
+        for relative in sorted(EXPECTED_PACKAGE_FILES - actual_package_files):
+            errors.append(f"expected package file does not exist: {relative}")
+        for relative in sorted(actual_package_files - EXPECTED_PACKAGE_FILES):
+            errors.append(f"unexpected package file: {relative}")
 
     skill_text = ""
     if ENTRY.is_file():
@@ -121,6 +145,14 @@ def main() -> int:
             version_text,
         ):
             errors.append(f"VERSION is not simple SemVer: {version_text!r}")
+
+    if not TRANSPORT_SCRIPT.is_file():
+        errors.append("required transport wrapper does not exist: scripts/opencli_transport.py")
+    else:
+        try:
+            ast.parse(TRANSPORT_SCRIPT.read_text(encoding="utf-8"))
+        except SyntaxError as error:
+            errors.append(f"transport wrapper has invalid Python syntax: {error}")
 
     asset_dir = PACKAGE / "assets"
     actual_assets = (
@@ -187,6 +219,17 @@ def main() -> int:
     for path in ds_store:
         errors.append(f"package contains .DS_Store: {path.relative_to(PACKAGE)}")
 
+    generated_python = [
+        path
+        for path in PACKAGE.rglob("*")
+        if path.is_file()
+        and (path.suffix.lower() in {".pyc", ".pyo"} or "__pycache__" in path.parts)
+    ] if PACKAGE.is_dir() else []
+    for path in generated_python:
+        errors.append(
+            f"package contains generated Python cache: {path.relative_to(PACKAGE)}"
+        )
+
     if errors:
         print("Skill package checks failed:")
         for error in errors:
@@ -197,7 +240,8 @@ def main() -> int:
     print("Entry: one valid SKILL.md with matching name and description.")
     print(f"Version: {VERSION.read_text(encoding='utf-8').strip()} (simple SemVer).")
     print("Assets: five required files, each with one authoritative copy.")
-    print("Loop contract: roles, state machine, conversation identity, HITL, and uncertainty markers exist.")
+    print("Transport: one syntax-valid wrapper with delivery, recovery, deduplication, and wait markers.")
+    print("Loop contract: roles, Goal Contract, delivery state, conversation identity, and HITL markers exist.")
     print("Portability: referenced resources exist; no forbidden runtime dependencies found.")
     return 0
 

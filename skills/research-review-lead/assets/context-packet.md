@@ -1,37 +1,42 @@
 # Context Packet Template
 
-> Reusable template. A filled Packet is a temporary message by default, not a project file.
+> Reusable temporary message. Do not commit a filled Packet unless project rules require it.
 
-Use this for the first synchronization of a Work Item. Include only context needed for the next judgment. Git, a branch, and governance files are optional.
+## MESSAGE_IDENTITY
 
-## Objective
+- **WORK_ITEM_ID:** [stable identifier]
+- **MESSAGE_ID:** [WORK_ITEM_ID-R0-CONTEXT]
+- **ROUND:** 0
+- **MESSAGE_TYPE:** CONTEXT_PACKET
 
-- **Work Item:** [identifier or short name]
-- **Objective:** [user-confirmed outcome]
+## GOAL_CONTRACT
+
+- **SHARED_OBJECTIVE:** [user-confirmed outcome]
+- **ACCEPTANCE_CRITERIA:** [numbered observable criteria]
+- **SCOPE:** [allowed files, systems, sources, and actions]
+- **CONSTRAINTS:** [permissions, privacy, time, environment, or None]
+- **EVIDENCE_REQUIRED:** [evidence required per criterion]
+- **STOP_CONDITIONS:** ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
+
+The Browser RR Lead must judge this contract as written. A newly discovered non-blocking improvement belongs in `DEBT`, not in the acceptance criteria.
+
+## PROJECT_CONTEXT
+
 - **Project type:** [code / interactive product / teaching / document / research / non-Git / other]
-- **Acceptance criteria:** [observable completion conditions]
-
-## Available context
-
-- **Authority or guidance entry points:** [AGENTS.md, current-state file, user request, or None]
+- **Authority or guidance entry points:** [paths or None]
 - **Relevant materials:** [files, artifacts, sources, or messages]
-- **Current state:** [known progress or unknown]
-
-## Local facts
-
+- **Current state:** [verified progress or unknown]
 - **Project location:** [path or not applicable]
 - **Git / branch:** [verified values or not applicable]
-- **Observed facts:** [facts supported by local evidence]
 
-## Scope and permissions
+## VERIFIED_LOCAL_FACTS
 
-- **Allowed actions and reading scope:** [explicit scope]
-- **Prohibited actions or data:** [explicit boundaries]
+[Facts supported by local artifacts, commands, or observations.]
 
-## Known constraints
+## PROHIBITED_ACTIONS_OR_DATA
 
-[Environment, time, dependency, privacy, or process constraints; otherwise None.]
+[Explicit boundaries, including credentials and unrelated private material.]
 
-## Questions requiring RR Lead judgment
+## RR_LEAD_QUESTION
 
-[Research, review, decision, or next-step question; otherwise None.]
+[Judgment or next-work-order request; otherwise None.]

@@ -2,6 +2,13 @@
 
 > Use only for a genuine decision gate. A filled request is a temporary message by default.
 
+## Message identity
+
+- **WORK_ITEM_ID:** [stable identifier]
+- **MESSAGE_ID:** [WORK_ITEM_ID-Rn-DECISION]
+- **ROUND:** [number]
+- **MESSAGE_TYPE:** DECISION_REQUEST
+
 ## What happened?
 
 [Explain the verified facts in plain language.]

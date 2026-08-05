@@ -1,122 +1,175 @@
 ---
 name: research-review-lead
-description: Drive a real Work Item loop between an IDE-side execution agent and an independent Browser RR Lead in ChatGPT through OpenCLI. Use when work needs external research, evidence-based review, explicit NEXT_WORK_ORDER execution, user decision pauses, conversation recovery, or handoff across code, product, teaching, document, research, and non-Git projects.
+description: Drive a real, recoverable Work Item loop between an IDE-side execution agent and an independent Browser RR Lead in ChatGPT through OpenCLI. Use when work needs evidence-based review, explicit next work orders, shared acceptance criteria, bounded transport recovery, user decision pauses, or handoff across code, teaching, document, research, and non-Git projects.
 ---
 
 # Research Review Lead Loop Driver
 
 ## Keep the roles separate
 
-- **Builder IDE Agent:** maintain this Skill in its source repository. Do not participate in a target project's runtime loop merely because you are editing the package.
-- **IDE-side Loop Driver:** load this Skill in the target project, read local facts, build Packets, call OpenCLI, parse the Browser RR Lead response, execute authorized `NEXT_WORK_ORDER` steps, and maintain loop state.
-- **Browser RR Lead:** exist in a real ChatGPT browser conversation. Perform user communication, necessary external research, technical review, state judgment, and next-step direction.
-- **User:** decide goals, value, cost, accounts, permissions, privacy, uploads, irreversible actions, major risk, and material downgrade.
+- **Builder IDE Agent:** maintain this Skill in its source repository.
+- **IDE-side Loop Driver:** run the Skill in a target project, execute authorized work, exchange Packets through OpenCLI, and maintain loop and delivery state.
+- **Browser RR Lead:** exist in a real ChatGPT browser conversation; research, review evidence, judge the shared acceptance criteria, and issue the next work order.
+- **User:** decide goals, value, cost, accounts, permissions, privacy, publication, irreversible actions, major risk, and material downgrade.
 
-The IDE-side Loop Driver must never impersonate the Browser RR Lead or manufacture a review that merely looks browser-authored. A prepared Packet is not a sent message; a local opinion is not a Browser RR Lead response.
+The IDE-side Loop Driver must never impersonate the Browser RR Lead or manufacture a browser-style review. A prepared Packet is not a delivered message, and a local judgment is not a Browser RR Lead response.
 
-## Select project governance
+Use **Full Governance Mode** when the target project has `AGENTS.md`, a current-state authority, or equivalent entry points. Otherwise use **Compatibility Mode** and derive the Work Item from the user request and existing artifacts. Do not require Git; when Git is not used, report that Git evidence is not applicable.
 
-Use **Full Governance Mode** when the target project has `AGENTS.md`, a current-state source, or equivalent authority entry points. Read and obey them, use their validation methods, and do not copy or replace project governance.
-
-Use **Compatibility Mode** otherwise. Derive the Work Item from the user request and existing entry points. Do not require Git, `docs/current.md`, or governance initialization. Governance may be suggested later but is not a condition for completing the current task.
-
-## Load the package assets
+## Load package resources
 
 Resolve these paths relative to this `SKILL.md`:
 
-- `assets/rr-lead-init.md`: initialization rules to send to the Browser RR Lead;
-- `assets/context-packet.md`: first Work Item synchronization;
-- `assets/evidence-packet.md`: verified execution or research evidence;
-- `assets/decision-request.md`: a genuine user decision gate;
-- `assets/handoff.md`: loop or conversation continuity failure.
+- `assets/rr-lead-init.md`: Browser RR Lead rules;
+- `assets/context-packet.md`: initial Goal Contract and context;
+- `assets/evidence-packet.md`: verified execution evidence;
+- `assets/decision-request.md`: genuine user decision gate;
+- `assets/handoff.md`: continuity handoff;
+- `scripts/opencli_transport.py`: bounded send, identity recovery, deduplication, polling, and machine-readable state.
 
-Filled Packets, receipts, and Handoffs are temporary messages by default. Do not add them to the target project unless the user or project rules require it.
+Filled Packets, receipts, transport records, and Handoffs are temporary by default. Keep transport state and raw command output in the system temporary directory, record their paths, exclude credentials and unnecessary private content, and clean them after the loop. Do not depend on an IDE-private scratch directory. Prefer stdin; use a safely created temporary file only when stdin is unsuitable.
 
-## Run the state machine
+## Establish one Goal Contract
 
-Follow this exact control flow:
+Create one authoritative contract in the Context Packet:
 
 ```text
-PRECHECK
--> CREATE_OR_RESUME_BROWSER_CONVERSATION
--> SEND_CONTEXT_PACKET
--> RECEIVE_RR_REVIEW
--> EXECUTE_NEXT_WORK_ORDER
--> BUILD_EVIDENCE_PACKET
--> SEND_EVIDENCE_TO_SAME_CONVERSATION
--> RECEIVE_NEXT_REVIEW
--> CONTINUE_OR_STOP
+WORK_ITEM_ID
+SHARED_OBJECTIVE
+ACCEPTANCE_CRITERIA
+SCOPE
+CONSTRAINTS
+EVIDENCE_REQUIRED
+STOP_CONDITIONS
 ```
 
-Maintain a loop record containing:
+Use this unchanged contract for Browser review unless the user explicitly changes it. New non-blocking findings go to `DEBT`; the Browser RR Lead must not silently add pass conditions outside `ACCEPTANCE_CRITERIA`.
+
+## Run the goal loop
+
+```text
+COMMON_GOAL
+-> IDE_EXECUTION
+-> IDE_EVIDENCE
+-> RR_ACCEPTANCE_REVIEW
+-> FIX_AND_RESUBMIT_IF_NEEDED
+-> ACHIEVED_WHEN_ALL_CRITERIA_MET
+```
+
+Continue only while `WORK_ITEM_STATE: IN_PROGRESS`, an executable `NEXT_WORK_ORDER` exists, no decision or safety gate is active, and new evidence or a reasonable new path exists. Stop at `ACHIEVED`, `BLOCKED`, `NEEDS_DECISION`, `STALLED`, or `UNSAFE`. Do not describe or implement this as an infinite loop.
+
+Maintain:
 
 ```text
 WORK_ITEM_ID
 CONVERSATION_ID_OR_URL
-OPENCLI_PROFILE_IF_EXPLICIT
-CREATED_AT
 CURRENT_ROUND
 LAST_SUCCESSFUL_READ_AT
 LAST_SUCCESSFUL_WRITE_AT
 CURRENT_STATE
+DELIVERY_STATE
+LAST_MESSAGE_ID
 ```
 
-Never rely only on the active browser tab. Keep the Conversation ID or URL returned by OpenCLI and echo `WORK_ITEM_ID` in every Packet and expected RR response.
+Never rely on the active browser tab.
 
 ## PRECHECK
 
-Before sending anything, run and record only necessary output from:
+Run only necessary checks:
 
 ```powershell
 opencli --version
 opencli chatgpt status -f yaml
 ```
 
-Stop without credential recovery attempts when OpenCLI is missing, Browser Bridge is disconnected, ChatGPT is logged out, a verification/quota/block page appears, or the conversation cannot be read reliably. Never inspect cookies, tokens, API keys, or browser credentials.
+Stop without credential recovery when OpenCLI is missing, Browser Bridge is disconnected, ChatGPT is logged out, or the conversation cannot be read reliably. Never inspect cookies, tokens, API keys, or browser credentials.
 
-The command names and argument shapes below were verified from local OpenCLI `1.8.6` help. Their end-to-end browser behavior remains `UNVERIFIED` until the Transport Smoke Test passes in the current environment:
+Local OpenCLI `1.8.6` help and the `TRANSPORT-SMOKE-001` incident established:
 
-```powershell
-# Candidate first transport: create, send, wait, and return conversationId/conversationUrl.
-opencli chatgpt ask "<rr-lead-init + Context Packet + return format>" --new -f yaml
+- `history --limit <n> -f json` returns conversation IDs, titles, and URLs;
+- `detail <id-or-url> --wait --timeout <seconds> --stable <seconds> -f json` returns roles, text, generation state, and stability;
+- `ask --new` can create and deliver a message even when the CLI later times out without returning identity;
+- explicit-ID `detail` can recover both observed timed-out conversations and their completed replies;
+- history ordering is not a reliable newest-first contract, so compare pre-send and post-send ID sets rather than selecting the first row.
 
-# Candidate continuation: explicitly target the recorded conversation.
-opencli chatgpt ask "<Evidence Packet>" --conversation "<conversation-id-or-/c/url>" -f yaml
+`opencli chatgpt send` exists according to help and appears non-waiting, but its creation, targeting, identity capture, and delivery behavior remain `UNVERIFIED`. Do not use it as the trusted runtime path before a separate no-side-effect Transport Smoke Test.
 
-# Candidate recovery/read: explicitly open the recorded conversation and wait for stability.
-opencli chatgpt detail "<conversation-id-or-/c/url>" --wait -f yaml
+## Identify every Browser message
+
+Prepend every sent message with:
+
+```text
+WORK_ITEM_ID: <id>
+MESSAGE_ID: <work-item>-R<round>-<type>
+ROUND: <number>
+MESSAGE_TYPE: CONTEXT_PACKET / EVIDENCE_PACKET / DECISION_RECEIPT / HANDOFF
 ```
 
-Do not promote these candidates to trusted runtime transport until Experiment A verifies creation, returned identity, explicit continuation, and recovery. `opencli chatgpt new` returns only a status according to local help, so do not use it as the primary identity-capture path. `opencli chatgpt read` reads the current conversation and is insufficient for recovery by itself.
+Before sending and after any timeout, check `MESSAGE_ID`. Never resend the same `MESSAGE_ID` while its state is `SENDING`, `SENT`, `DELIVERY_UNKNOWN`, `DELIVERED`, `RESPONSE_PENDING`, or `RESPONSE_READY`. A new attempt requires confirmed failure and a new user-authorized recovery plan; ordinary timeout is not confirmed failure.
 
-## CREATE_OR_RESUME_BROWSER_CONVERSATION
+## Use the delivery state model
 
-For a new loop, combine:
+```text
+DELIVERY_STATE:
+NOT_SENT
+SENDING
+SENT
+DELIVERY_UNKNOWN
+DELIVERED
+RESPONSE_PENDING
+RESPONSE_READY
+FAILED
+```
 
-1. `assets/rr-lead-init.md`;
-2. the current Context Packet;
-3. the required review response format.
+A CLI timeout moves to `DELIVERY_UNKNOWN`, not automatically to `FAILED`. Run history/detail recovery. A found matching message is `DELIVERED`; if its response is incomplete, use `RESPONSE_PENDING`; when the assistant text is non-empty, `Generating` is false, and the reported stability reaches the configured threshold, use `RESPONSE_READY`. Use `FAILED` only after evidence confirms no conversation/message was created or the transport returned a terminal error and recovery confirms absence. If bounded recovery cannot establish delivery either way, preserve state and enter Work Item `BLOCKED` or `STALLED` rather than resending.
 
-Use the Transport-Smoke-validated creation command. Capture its Conversation ID and URL instead of guessing or searching by title.
+## Split sending from reading
 
-For a resumed loop, use the Transport-Smoke-validated explicit-ID read command, then verify all of the following before sending:
+Use this transport flow:
 
-- the opened Conversation ID or URL matches the loop record;
-- the latest response contains the same `WORK_ITEM_ID`;
-- the latest known `CURRENT_ROUND` and `CURRENT_STATE` are compatible;
-- no evidence indicates that a different conversation was opened.
+```text
+PREPARE_MESSAGE
+-> SEND_ONCE
+-> CAPTURE_OR_RECOVER_CONVERSATION_ID
+-> POLL_OR_READ_RESPONSE
+-> PARSE_RR_REVIEW
+```
 
-If identity cannot be established, enter `STALLED`; never send to an ambiguous conversation.
+Use the wrapper from the target project without copying it:
 
-## SEND_CONTEXT_PACKET and receive review
+```powershell
+$packet | python <skill-dir>/scripts/opencli_transport.py send `
+  --work-item-id <id> --message-id <id-R0-CONTEXT> `
+  --round 0 --message-type CONTEXT_PACKET
 
-Round 0 sends the Context Packet to the verified new or resumed Browser conversation. Parse an actual Browser RR Lead response containing:
+python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
+```
+
+For subsequent rounds add `--conversation <recorded-id-or-url>`. The wrapper uses one short `ask`, then switches to recovery and polling; it does not repeat `ask`. Review its JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`.
+
+Default adjustable parameters are:
+
+```text
+COMMAND_WAIT_SECONDS=25
+POLL_INTERVAL_SECONDS=5
+TOTAL_RESPONSE_WAIT_SECONDS=120
+MAX_RECOVERY_ATTEMPTS=3
+```
+
+Keep each command wait short, impose a total response bound, and never use unlimited technical retries. At the bound, preserve the Conversation ID and Handoff and enter `BLOCKED` or `STALLED` as appropriate.
+
+## Parse review and execute work
+
+Require an actual Browser response containing:
 
 ```text
 WORK_ITEM_ID
 REVIEW_DECISION: PASS / PASS_WITH_DEBT / REVISE / ESCALATE
 WORK_ITEM_STATE: IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
-GOAL_CHECK
+ACCEPTANCE_STATUS
+  - Criterion
+  - Status: MET / NOT_MET / UNVERIFIED
+  - Evidence
 FINDINGS
 BLOCKERS
 DEBT
@@ -125,63 +178,26 @@ VALIDATION
 USER_DECISION_REQUIRED
 ```
 
-Reject an empty or materially incomplete response. Do not fill missing fields with the IDE-side Loop Driver's judgment.
+Reject incomplete output; never fill missing fields locally. Execute `NEXT_WORK_ORDER` only for `IN_PROGRESS`, inside user authorization and project rules, with no pending decision. Build the next Evidence Packet from actual artifacts, commands, tests, observations, sources, failures, and acceptance mapping. Git evidence is conditional on Git being used.
 
-## EXECUTE_NEXT_WORK_ORDER
+## Human-in-the-loop
 
-Execute `NEXT_WORK_ORDER` only when all conditions hold:
+When the Browser RR Lead returns `NEEDS_DECISION`:
 
-- `WORK_ITEM_STATE` is exactly `IN_PROGRESS`;
-- `USER_DECISION_REQUIRED` is false or None;
-- the action stays inside user authorization and target-project rules;
-- the stated validation is locally executable or can be reported as blocked.
+1. Stop execution and do not choose for the user.
+2. Confirm the Browser response gives three plain-language options, their effects, and one recommendation.
+3. Ask the user to decide in that Browser conversation; do not poll automatically.
+4. After the user says they answered, recover the same explicit Conversation ID or URL.
+5. Verify the Work Item and decision, generate a Decision Receipt, then resume only the selected path.
 
-Use appropriate evidence:
+## Stop, recover, and stay safe
 
-- **Code or interactive product:** files, Git diff when Git is used, commands, exit codes, tests, builds, logs, and observable behavior.
-- **Teaching or document:** sections, goals, audience, before/after differences, sources, coverage, consistency, and requirement mapping.
-- **Research:** sources, type and date, claim mapping, strength, conflicts, uncertainty, freshness, and search boundary.
-- **Non-Git:** artifacts, output locations, repeatable checks, acceptance checklist, and observations.
+- `ACHIEVED`: all shared acceptance criteria are `MET`; summarize evidence.
+- `BLOCKED`: identify the missing external condition and preserve recovery state.
+- `STALLED`: stop after bounded, non-duplicating attempts and generate a Handoff.
+- `UNSAFE`: stop immediately.
+- `NEEDS_DECISION`: follow the procedure above.
 
-When Git is not used, state that Git evidence is not applicable. Never invent an empty diff, successful command, or verified result.
+The sixth round is a health checkpoint for drift, repetition, missing evidence, and conversation reliability, not a forced stop.
 
-## BUILD_EVIDENCE_PACKET and continue
-
-Build the Evidence Packet from real results, including failures and acceptance mapping. Send it only to the recorded Conversation ID or URL using the validated continuation path. Parse the next Browser review and repeat until a stop state is reached.
-
-Retry one failed read at most once. If the same instruction fails twice without new evidence, stop repeating it.
-
-## Stop states
-
-- **ACHIEVED:** stop local execution; give the user a plain-language evidence summary and next-stage suggestion.
-- **BLOCKED:** stop retrying; identify the missing external condition.
-- **STALLED:** stop the loop and generate a Handoff with the conversation identity and last confirmed state.
-- **UNSAFE:** stop immediately and do not execute the unsafe action.
-- **NEEDS_DECISION:** run the Human-in-the-loop procedure below.
-
-## Human-in-the-loop for NEEDS_DECISION
-
-1. Stop local execution and do not choose for the user.
-2. Confirm the actual Browser RR Lead response supplies three plain-language options, their effects, and one recommendation.
-3. Tell the user to answer in that Browser conversation.
-4. Do not poll automatically. Wait until the user explicitly says they answered.
-5. Reopen the recorded Conversation ID or URL through the validated recovery path.
-6. Verify `WORK_ITEM_ID`, conversation identity, and the user's explicit decision.
-7. Produce a short Decision Receipt containing Work Item, conversation identity, chosen option, decision text, read time, and affected next step.
-8. Resume the original loop without executing unchosen options.
-
-## Handle transport and format failures
-
-Treat OpenCLI failure, page changes, Bridge loss, empty output, incomplete RR format, lost Conversation ID, wrong-conversation evidence, and two identical failed attempts as real failures.
-
-- Preserve the original error and last confirmed loop record.
-- Never invent a Browser reply or substitute a local review.
-- Retry one read once when safe.
-- If still unreliable, enter `BLOCKED` for an external connection condition or `STALLED` for lost loop continuity.
-- Generate a Handoff and ask the user to repair the browser connection when necessary.
-
-The sixth round is a health checkpoint, not a forced stop. Check goal drift, repetition, missing new evidence, and context reliability.
-
-## Apply safety boundaries
-
-Do not read credentials or unrelated private files; upload, publish, pay, change account permissions, or perform irreversible actions without authorization; or run `git add`, `git stash`, commit, or push by default. The Browser RR Lead advises and reviews; it does not directly control the IDE.
+Do not read unrelated conversations or private files; save credentials; upload, publish, pay, change account permissions, or perform irreversible actions without authorization; or run `git add`, `git stash`, commit, or push by default. The Browser RR Lead reviews and directs but does not directly control the IDE.
