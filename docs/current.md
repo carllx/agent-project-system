@@ -9,34 +9,31 @@
 
 ## Active Work Item
 
-- **ID:** `TRANSPORT-A2P1-INTERFACE-004`
-- **Name:** 补齐 A2.1 可执行接口
+- **ID:** `TRANSPORT-A2P1-READ-COMPAT-007`
+- **Name:** 修复真实 Browser Read 空页识别
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `b80072da113e119336fb8acd298ebf5456e66f09`
-- **Current objective:** 为 Transport Wrapper 增加正式、独立、零发送的 `prepare-new` 命令，以机器预算完成新对话创建、验证、Runtime 持久化和停止。
+- **Baseline commit:** `432e907`
+- **Current objective:** 审查 `TRANSPORT-A2P1-006` 的指定原始证据，确认真实 OpenCLI `read` 误判原因，并补齐精确兼容性测试和最小修复。
 
 ## Acceptance criteria
 
-- 公开 CLI `prepare-new --runtime-dir <path> --work-item-id <id>` 可独立执行 A2.1。
-- 记录操作前 URL、旧 Conversation ID、操作后 URL、验证与只读结果。
-- 一次 `new` 后必须离开旧 `/c/<id>`，停在允许的 ChatGPT 根页面或 `/new`，且 `read` 为空。
-- `EMPTY_RESULT` 在 A2.1 中作为空页面成功证据；不调用 `ask`、`send`，不创建 Message ID。
-- Wrapper 内强制零发送、零恢复、零 detail、最多四个外部命令和端到端六十秒。
-- Runtime 保存指定字段，预算耗尽时记录 `stop_reason=BUDGET_EXHAUSTED`。
-- 合成测试全部通过公开 CLI，覆盖帮助、成功、旧对话、已有消息、零发送、时间预算、持久化和命令预算。
-- Skill、Spec 和当前状态明确 `prepare-new=A2.1`、`send=A2.2/A3`，版本为 `0.4.1`。
-- 创建本地 Commit、不 push；完整覆盖同步 Lab Skill，证明源/Lab 包哈希一致且 fixture 不变。
+- 逐字核对本次指定的四份 Runtime 原始证据，不读取其他 Runtime、Browser 对话或 IDE 日志。
+- 精确兼容真实 stderr error envelope 中非零退出的 `EMPTY_RESULT`，但不放宽其他错误。
+- 区分 `READ_NOT_EMPTY` 与 `READ_UNPARSEABLE`，所有失败保持零发送。
+- 区分 `ALREADY_NEW` 与从旧 `/c/<id>` 成功进入 `/new`，独立记录空环境验证与 Conversation 转换验证。
+- 使用真实 `04-read-new.json` 的脱敏副本或等价精确结构覆盖要求的回归场景，并保留 A2.2/A3 发送回归。
+- 仅更新既有 Skill、Spec、Current 权威文档，版本升至 `0.4.2`。
+- 完成本地验证、Commit（不 push）、Lab Skill 全量同步及源/Lab 包哈希核验；不运行真实 Browser 实验。
 
 ## Completed
 
-- 已确认上一 Work Item 完成且工作区起始状态干净。
-- 已实现公开 `prepare-new`、独立 Runtime schema、`EMPTY_RESULT` 语义和零发送机器预算。
-- 已将合成测试改为通过 subprocess 调用公开 CLI，并使用纯本地假 OpenCLI，未运行真实 Browser 实验。
-- 已同步更新 Skill、RR Loop Spec、版本与包检查规则。
-- 已通过 14 项纯本地传输测试、文档检查、包检查、Skill Creator 校验和 whitespace 检查。
-- 已创建本地源 Commit `45e72b4a35a049192a70d3e47b9157a1bd542278`，未 push。
-- 已完整替换 Lab Skill；源与 Lab 均为八个文件，路径和聚合哈希 `7dda7442cec21a12388290ee53bf63f77f30b0397f8777f8ac4029808d5b273d` 一致。
-- 已确认十个业务 fixture 同步前后聚合哈希均为 `c00493f07deab9264410b790ebc725dfc2b6ff3947272d489d0f8c8326835d61`；`.runtime` 未参与同步。
+- 已确认上一 Work Item 为 `ACHIEVED`、本项开始时工作区干净。
+- 已只读取 `TRANSPORT-A2P1-006/raw/` 下用户指定的四份证据；`04-read-new.json` 为 `returncode=66`、空 stdout、stderr 精确 `error.code=EMPTY_RESULT`。
+- 已确认旧 parser 只解析 stdout、要求零退出，并把真实空页误记为 `READ_NOT_EMPTY`。
+- 已加入真实结构 fixture、窄错误码解析、保守三态读取分类与起始模式/转换字段。
+- 已通过 21 项纯本地传输测试、文档检查、包检查、Skill Creator 校验和 whitespace 检查；发送回归只使用本地假 OpenCLI/Mock。
+- 已完整覆盖同步 Lab Skill；源与 Lab 均为八个文件，逐文件无差异，聚合哈希均为 `d0425eb92beef622527f50e9cfde5f62e415052d121b5ac35e973cebed344146`。
+- 已确认指定 `TRANSPORT-A2P1-006/raw/` 四个文件同步前后无差异；未修改其他 Lab Runtime，也未运行真实 Browser。
 
 ## In progress
 
@@ -52,7 +49,7 @@
 
 ## Next action
 
-- 在独立 Work Item 中运行真实 Browser A2.1；本 Work Item 不运行真实 Browser 实验，也不证明 A2.2/A3。
+- 在新的独立 Work Item 中从旧 `/c/<id>` 起始运行 A2.1，验证真实 `EMPTY_RESULT` 兼容与 Conversation transition；继续保持零发送。
 
 ## Files to read
 
@@ -67,16 +64,16 @@
 ## Last validation
 
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 14 pure-local scenarios: nine public A2.1 CLI cases and five send regressions; no real Browser calls or sends.
+- **Result:** Passed 21 pure-local scenarios, including the real read shape, all required failure/mode cases, and five existing send regressions.
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed.
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed for version `0.4.1` and exact eight-file package.
+- **Result:** Passed for version `0.4.2` and the exact eight-file package.
 - **Command:** Skill Creator `quick_validate.py skills/research-review-lead`
 - **Result:** Passed.
 - **Command:** `git diff --check`
-- **Result:** Passed.
-- **Command:** source/Lab canonical aggregate hash and fixture pre/post hash
-- **Result:** Source/Lab paths and hash equal; ten fixtures unchanged.
-- **Scope:** Source and pure-local public-CLI synthetic validation only; no real Browser experiment or message send.
+- **Result:** Passed; only Git line-ending conversion warnings were emitted.
+- **Command:** source/Lab canonical aggregate hash and specified Runtime pre/post hash comparison
+- **Result:** Source/Lab paths and hashes equal; specified Runtime four files unchanged.
+- **Scope:** 指定原始证据审查与纯本地合成/Mock 验证；未运行真实 Browser 实验或真实发送。
 - **Last verified:** 2026-08-05

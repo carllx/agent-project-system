@@ -18,6 +18,7 @@ from unittest.mock import patch
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "skills" / "research-review-lead" / "scripts" / "opencli_transport.py"
+REAL_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p1-read-empty-result.json"
 sys.dont_write_bytecode = True
 OLD_ID = "old-conversation"
 WORK_ITEM = "SYNTHETIC-A2P1-001"
@@ -85,9 +86,12 @@ def run_prepare(
     return completed, state, calls, runtime
 
 
-def success_sequence(read: object = "EMPTY_RESULT", post_url: str = "https://chatgpt.com/new") -> list[dict[str, object]]:
+def success_sequence(
+    read: object = "EMPTY_RESULT", post_url: str = "https://chatgpt.com/new",
+    pre_url: str = f"https://chatgpt.com/c/{OLD_ID}",
+) -> list[dict[str, object]]:
     return [
-        status(f"https://chatgpt.com/c/{OLD_ID}"),
+        status(pre_url),
         response([{"Status": "New conversation started"}]),
         status(post_url),
         response(read),
@@ -112,18 +116,43 @@ def test_old_conversation_to_new_and_empty_result() -> None:
     assert state["test_result"] == "PREPARED_NEW_CONVERSATION"
     assert state["pre_operation_conversation_id"] == OLD_ID
     assert state["post_operation_url"] == "https://chatgpt.com/new"
-    assert state["read_result"] == "EMPTY_RESULT"
+    assert state["read_result"] == "EMPTY"
+    assert state["verification_result"] == "NEW_BLANK_CONVERSATION_VERIFIED"
+    assert state["pre_operation_mode"] == "EXISTING_CONVERSATION"
+    assert state["conversation_transition_verified"] is True
+    assert state["blank_environment_verified"] is True
     assert state["message_send_count"] == 0
     assert (runtime / "prepare-new-state.json").is_file()
     assert_no_send(calls)
 
 
-def test_empty_json_also_verifies_blank_page() -> None:
-    completed, state, calls, _ = run_prepare(success_sequence([]))
+def test_real_empty_result_format_regression() -> None:
+    real_read = json.loads(REAL_EMPTY_RESULT_FIXTURE.read_text(encoding="utf-8"))
+    sequence = success_sequence()
+    sequence[-1] = real_read
+    completed, state, calls, _ = run_prepare(sequence)
     assert completed.returncode == 0
+    assert state["read_result"] == "EMPTY"
+    assert state["verification_result"] == "NEW_BLANK_CONVERSATION_VERIFIED"
     assert state["test_result"] == "PREPARED_NEW_CONVERSATION"
-    assert state["read_result"] == "EMPTY_RESULT"
     assert_no_send(calls)
+
+
+def test_nonzero_exact_empty_result_code_verifies_blank_page() -> None:
+    read = response("", returncode=73, stderr="ok: false\nerror:\n  code: EMPTY_RESULT\n  exitCode: 73\n")
+    completed, state, calls, _ = run_prepare(success_sequence()[:-1] + [read])
+    assert completed.returncode == 0
+    assert state["read_result"] == "EMPTY"
+    assert_no_send(calls)
+
+
+def test_empty_json_object_or_array_verifies_blank_page() -> None:
+    for value in ({}, []):
+        completed, state, calls, _ = run_prepare(success_sequence(value))
+        assert completed.returncode == 0
+        assert state["test_result"] == "PREPARED_NEW_CONVERSATION"
+        assert state["read_result"] == "EMPTY"
+        assert_no_send(calls)
 
 
 def test_runtime_contains_required_a2p1_fields() -> None:
@@ -131,6 +160,8 @@ def test_runtime_contains_required_a2p1_fields() -> None:
     required = {
         "work_item_id", "operation", "pre_operation_url",
         "pre_operation_conversation_id", "post_operation_url",
+        "pre_operation_mode", "conversation_transition_verified",
+        "blank_environment_verified",
         "verification_result", "read_result", "message_send_count",
         "external_command_count", "started_at", "stopped_at",
         "elapsed_seconds", "stop_reason", "test_result",
@@ -154,9 +185,59 @@ def test_old_conversation_still_active_fails() -> None:
 def test_existing_messages_fail() -> None:
     completed, state, calls, _ = run_prepare(success_sequence([{"Role": "user", "Text": "existing"}]))
     assert completed.returncode == 2
-    assert state["read_result"] == "NON_EMPTY_OR_UNRELIABLE"
+    assert state["read_result"] == "NON_EMPTY"
     assert state["test_result"] == "BLOCKED_BEFORE_SEND"
+    assert state["stop_reason"] == "READ_NOT_EMPTY"
     assert_no_send(calls)
+
+
+def test_unknown_error_code_is_unparseable() -> None:
+    read = response("", returncode=66, stderr="ok: false\nerror:\n  code: SELECTOR_FAILED\n")
+    completed, state, calls, _ = run_prepare(success_sequence()[:-1] + [read])
+    assert completed.returncode == 2
+    assert state["read_result"] == "UNPARSEABLE"
+    assert state["stop_reason"] == "READ_UNPARSEABLE"
+    assert_no_send(calls)
+
+
+def test_unparseable_output_blocks_before_send() -> None:
+    completed, state, calls, _ = run_prepare(success_sequence("not-json-or-empty-result"))
+    assert completed.returncode == 2
+    assert state["read_result"] == "UNPARSEABLE"
+    assert state["stop_reason"] == "READ_UNPARSEABLE"
+    assert_no_send(calls)
+
+
+def test_already_new_reports_no_conversation_transition() -> None:
+    completed, state, calls, _ = run_prepare(success_sequence(pre_url="https://chatgpt.com/new"))
+    assert completed.returncode == 0
+    assert state["pre_operation_mode"] == "ALREADY_NEW"
+    assert state["conversation_transition_verified"] is False
+    assert state["blank_environment_verified"] is True
+    assert_no_send(calls)
+
+
+def test_old_conversation_reports_verified_transition() -> None:
+    completed, state, calls, _ = run_prepare(success_sequence())
+    assert completed.returncode == 0
+    assert state["pre_operation_mode"] == "EXISTING_CONVERSATION"
+    assert state["conversation_transition_verified"] is True
+    assert state["blank_environment_verified"] is True
+    assert_no_send(calls)
+
+
+def test_all_read_failures_remain_zero_send() -> None:
+    failures = [
+        response([{"Role": "assistant", "Text": "existing"}]),
+        response("not-json"),
+        response("", returncode=66, stderr="error:\n  code: UNKNOWN\n"),
+    ]
+    for read in failures:
+        completed, state, calls, _ = run_prepare(success_sequence()[:-1] + [read])
+        assert completed.returncode == 2
+        assert state["test_result"] == "BLOCKED_BEFORE_SEND"
+        assert state["message_send_count"] == 0
+        assert_no_send(calls)
 
 
 def test_sixty_second_budget_is_machine_enforced() -> None:
@@ -307,10 +388,17 @@ def main() -> int:
     tests = [
         test_help_exposes_prepare_new,
         test_old_conversation_to_new_and_empty_result,
-        test_empty_json_also_verifies_blank_page,
+        test_real_empty_result_format_regression,
+        test_nonzero_exact_empty_result_code_verifies_blank_page,
+        test_empty_json_object_or_array_verifies_blank_page,
         test_runtime_contains_required_a2p1_fields,
         test_old_conversation_still_active_fails,
         test_existing_messages_fail,
+        test_unknown_error_code_is_unparseable,
+        test_unparseable_output_blocks_before_send,
+        test_already_new_reports_no_conversation_transition,
+        test_old_conversation_reports_verified_transition,
+        test_all_read_failures_remain_zero_send,
         test_sixty_second_budget_is_machine_enforced,
         test_prepare_never_calls_ask_or_send,
         test_external_command_budget_stops_before_next_command,

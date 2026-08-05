@@ -145,6 +145,52 @@ def parse_json(text: str) -> Any:
             return None
 
 
+def cli_error_code(stderr: str) -> str | None:
+    """Extract an exact code from OpenCLI's top-level YAML-like error envelope."""
+    match = re.search(
+        r"(?m)^error:\s*\r?\n(?:(?:[ \t]+[^\r\n]*\r?\n)*)^[ \t]+code:\s*([A-Z0-9_]+)\s*$",
+        stderr,
+    )
+    return match.group(1) if match else None
+
+
+def contains_chat_message(value: Any) -> bool:
+    if isinstance(value, list):
+        return any(contains_chat_message(item) for item in value)
+    if not isinstance(value, dict):
+        return False
+    lowered = {str(key).lower(): item for key, item in value.items()}
+    if "role" in lowered and any(key in lowered for key in ("text", "content", "message")):
+        return True
+    return any(
+        contains_chat_message(lowered[key])
+        for key in ("messages", "data", "result")
+        if key in lowered
+    )
+
+
+def classify_read_result(result: dict[str, Any]) -> str:
+    """Return EMPTY, NON_EMPTY, or UNPARSEABLE without guessing at UI data."""
+    if result["timed_out"]:
+        return "UNPARSEABLE"
+    stdout = str(result.get("stdout") or "")
+    stripped = stdout.strip()
+    parsed = parse_json(stdout)
+    if stripped:
+        if stripped == "EMPTY_RESULT" and result["returncode"] == 0:
+            return "EMPTY"
+        if parsed in ([], {}):
+            return "EMPTY" if result["returncode"] == 0 else "UNPARSEABLE"
+        if parsed is None:
+            return "UNPARSEABLE"
+        if contains_chat_message(parsed):
+            return "NON_EMPTY"
+        return "UNPARSEABLE"
+    if cli_error_code(str(result.get("stderr") or "")) == "EMPTY_RESULT":
+        return "EMPTY"
+    return "UNPARSEABLE"
+
+
 def rows(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
         return [row for row in value if isinstance(row, dict)]
@@ -253,12 +299,15 @@ def blank_new_url(url: str | None, old_id: str | None) -> bool:
 
 def prepare_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "work_item_id": args.work_item_id,
         "operation": "PREPARE_NEW",
         "pre_operation_url": None,
         "pre_operation_conversation_id": None,
+        "pre_operation_mode": "UNKNOWN",
         "post_operation_url": None,
+        "conversation_transition_verified": False,
+        "blank_environment_verified": False,
         "verification_result": "NOT_RUN",
         "read_result": "NOT_RUN",
         "message_send_count": 0,
@@ -336,6 +385,10 @@ def prepare_new_command(args: argparse.Namespace) -> int:
     if pre_status is not None:
         state["pre_operation_url"] = status_url(pre_status)
         state["pre_operation_conversation_id"] = conversation_id_from_url(state["pre_operation_url"] or "")
+        if state["pre_operation_conversation_id"]:
+            state["pre_operation_mode"] = "EXISTING_CONVERSATION"
+        elif blank_new_url(state["pre_operation_url"], None):
+            state["pre_operation_mode"] = "ALREADY_NEW"
         persist_prepare(state, state_path)
     if pre_status is not None and (
         pre_status["timed_out"] or pre_status["returncode"] != 0 or not state["pre_operation_url"]
@@ -356,6 +409,9 @@ def prepare_new_command(args: argparse.Namespace) -> int:
         state["post_operation_url"] = status_url(post_status)
         if blank_new_url(state["post_operation_url"], state["pre_operation_conversation_id"]):
             state["verification_result"] = "NEW_BLANK_URL_VERIFIED"
+            state["conversation_transition_verified"] = (
+                state["pre_operation_mode"] == "EXISTING_CONVERSATION"
+            )
         else:
             state["verification_result"] = "FAILED"
         persist_prepare(state, state_path)
@@ -366,15 +422,18 @@ def prepare_new_command(args: argparse.Namespace) -> int:
             ["chatgpt", "read", "-f", "json", "--window", "background"],
         )
     if read is not None:
-        parsed = parse_json(read["stdout"])
-        empty = read["returncode"] == 0 and not read["timed_out"] and (
-            str(read["stdout"]).strip() == "EMPTY_RESULT" or parsed == []
-        )
-        state["read_result"] = "EMPTY_RESULT" if empty else "NON_EMPTY_OR_UNRELIABLE"
-        if empty:
+        classification = classify_read_result(read)
+        if classification == "EMPTY":
+            state["read_result"] = "EMPTY"
+            state["verification_result"] = "NEW_BLANK_CONVERSATION_VERIFIED"
+            state["blank_environment_verified"] = True
             finish_prepare(state, "PREPARED_NEW_CONVERSATION", "STOP_WITHOUT_SEND")
-        else:
+        elif classification == "NON_EMPTY":
+            state["read_result"] = "NON_EMPTY"
             finish_prepare(state, "BLOCKED_BEFORE_SEND", "READ_NOT_EMPTY")
+        else:
+            state["read_result"] = "UNPARSEABLE"
+            finish_prepare(state, "BLOCKED_BEFORE_SEND", "READ_UNPARSEABLE")
     elif state.get("test_result") is None:
         state["read_result"] = "NOT_RUN"
         finish_prepare(state, "BLOCKED_BEFORE_SEND", "NEW_CONVERSATION_VERIFICATION_FAILED")
