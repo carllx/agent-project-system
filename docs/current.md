@@ -29,16 +29,18 @@
 
 - 已确认上一 Work Item 为 `ACHIEVED`、本项开始时工作区干净，基线为 `b53615615956b18dce7e237ea52d39d27a347624`。
 - 已确认失败根因为实验协议没有在外部动作前强制验证占位符，也没有把同步 Shell 完成定义为立即终止条件。
-- 已开始把占位符闸门、零等待默认值、唯一轮询例外、动作计数和必填报告字段写入既有权威位置与纯本地协议判定。
+- 已把占位符闸门、零等待默认值、唯一轮询例外、动作计数和必填报告字段写入既有权威位置与纯本地协议判定。
+- 已通过 37 项纯本地测试，其中 11 项覆盖本轮协议和占位符零执行，并保留原有 26 项 A2.1/A2.2/A3 回归。
+- 已通过文档检查、0.4.4 包检查、Skill Creator UTF-8 `quick_validate.py` 和 whitespace 检查。
+- 已创建本地实现 Commit `a462e49a5c05f03ecaaa0a865e587a370ec1538e`，未 push。
 
 ## In progress
 
-- 完成代码与测试审查，运行全套本地验证。
-- 创建本地实现 Commit、覆盖同步 Lab Skill、核验包一致性与 Runtime 保留，然后记录最终证据。
+- 获得 Lab Skill 的精确绝对路径后，覆盖同步整包、核验逐文件一致和包哈希，并证明 Runtime 保留。
 
 ## Blockers
 
-- None.
+- 当前仓库、ADR 默认用户级路径及已知 Codex/Agents/Gemini/项目路径均未找到现有 Lab Skill；必须由用户提供精确绝对路径，才能避免覆盖错误位置并核验 Runtime。
 
 ## Decisions pending
 
@@ -46,7 +48,7 @@
 
 ## Next action
 
-- 完成协议实现和纯本地测试后，执行要求的验证；不运行真实 Browser 实验。
+- 用户提供现有 Lab Skill 的精确绝对路径；随后完成整包覆盖同步与最终证据记录。
 
 ## Files to read
 
@@ -60,6 +62,15 @@
 
 ## Last validation
 
-- **Status:** Pending final validation.
-- **Scope:** 只运行纯本地假 OpenCLI 与合成协议轨迹；不运行真实 Browser 实验、不发送消息。
+- **Command:** `python scripts/test_opencli_transport.py`
+- **Result:** Passed 37 pure-local scenarios: 11 protocol/placeholder cases plus 26 existing A2.1/A2.2/A3 regressions.
+- **Command:** `python scripts/check_docs.py`
+- **Result:** Passed.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed for version `0.4.4` and the exact eight-file package.
+- **Command:** `PYTHONUTF8=1` Skill Creator `quick_validate.py skills/research-review-lead`
+- **Result:** Passed. The first invocation without UTF-8 mode failed only because Windows Python used GBK to decode the UTF-8 Skill.
+- **Command:** `git diff --check`
+- **Result:** Passed; only Git line-ending conversion warnings were emitted.
+- **Scope:** 只运行纯本地假 OpenCLI 与合成协议轨迹；未运行真实 Browser 实验、未发送消息。
 - **Last verified:** 2026-08-05
