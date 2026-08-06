@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
+import secrets
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
@@ -136,8 +140,118 @@ def package_text_files() -> list[Path]:
     )
 
 
+TRANSPORT_TEST_RUNNER = r"""
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+test_path = Path(sys.argv[1])
+result_path = Path(sys.argv[2])
+token = sys.argv[3]
+test_names = json.loads(sys.argv[4])
+spec = importlib.util.spec_from_file_location("checked_transport_tests", test_path)
+if spec is None or spec.loader is None:
+    raise ImportError(f"cannot load transport tests from {test_path}")
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+called = []
+for name in test_names:
+    test = getattr(module, name)
+    if not callable(test):
+        raise TypeError(f"discovered transport test is not callable: {name}")
+    test()
+    called.append(name)
+result_path.write_text(
+    json.dumps({"token": token, "called": called}), encoding="utf-8"
+)
+"""
+
+
+def run_transport_tests(
+    test_path: Path, *, timeout_seconds: float = 120
+) -> tuple[int, list[str]]:
+    """Discover and directly execute every supported transport test once."""
+    errors: list[str] = []
+    try:
+        tree = ast.parse(test_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, SyntaxError) as error:
+        return 0, [f"transport tests could not be discovered: {error}"]
+
+    discovered = {
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith("test_")
+    }
+    unsupported_async = sorted(
+        node.name
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name.startswith("test_")
+    )
+    discovered_count = len(discovered) + len(unsupported_async)
+    if unsupported_async:
+        return discovered_count, [
+            "unsupported async transport tests: " + ", ".join(unsupported_async)
+        ]
+    if not discovered:
+        return 0, ["transport test execution discovered zero test functions"]
+
+    ordered_tests = sorted(discovered)
+    token = secrets.token_hex(32)
+    with tempfile.TemporaryDirectory(prefix="rr-transport-test-runner-") as directory:
+        result_path = Path(directory) / "result.json"
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-I",
+                    "-c",
+                    TRANSPORT_TEST_RUNNER,
+                    str(test_path),
+                    str(result_path),
+                    token,
+                    json.dumps(ordered_tests),
+                ],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return len(discovered), [
+                f"transport test execution timed out after {timeout_seconds:g} seconds"
+            ]
+        except OSError as error:
+            return len(discovered), [f"transport test process could not start: {error}"]
+
+        if completed.returncode != 0:
+            detail = (completed.stderr or completed.stdout).strip()
+            return len(discovered), [
+                f"transport test execution failed with exit code {completed.returncode}"
+                + (f": {detail[-1000:]}" if detail else "")
+            ]
+        if not result_path.is_file():
+            return len(discovered), ["transport test runner produced no completion result"]
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            return len(discovered), [f"transport test runner result is invalid: {error}"]
+        if result != {"token": token, "called": ordered_tests}:
+            return len(discovered), [
+                "transport test runner result does not match discovered tests"
+            ]
+
+    return len(discovered), errors
+
+
 def main() -> int:
     errors: list[str] = []
+    executed_transport_test_count = 0
 
     if not PACKAGE.is_dir():
         errors.append(f"source package does not exist: {PACKAGE}")
@@ -289,6 +403,9 @@ def main() -> int:
         elif re.search(r'\[\s*"chatgpt"\s*,\s*"(?:ask|send)"', prepare_body.group(0)):
             errors.append("prepare_new_command contains a prohibited ask/send OpenCLI call")
 
+        executed_transport_test_count, execution_errors = run_transport_tests(TRANSPORT_TEST)
+        errors.extend(execution_errors)
+
     asset_dir = PACKAGE / "assets"
     actual_assets = (
         {path.name for path in asset_dir.glob("*.md")} if asset_dir.is_dir() else set()
@@ -375,7 +492,12 @@ def main() -> int:
     print("Entry: one valid SKILL.md with matching name and description.")
     print(f"Version: {VERSION.read_text(encoding='utf-8').strip()} (simple SemVer).")
     print("Assets: five required files, each with one authoritative copy.")
-    print("Transport: one syntax-valid wrapper with delivery, recovery, deduplication, and wait markers.")
+    print("Transport structure: wrapper syntax and required package markers validated.")
+    print(
+        "Transport tests: "
+        f"executed {executed_transport_test_count} discovered pure-local tests; "
+        "the controlled runner called every test exactly once without exceptions."
+    )
     print("Loop contract: roles, Goal Contract, delivery state, conversation identity, and HITL markers exist.")
     print("Portability: referenced resources exist; no forbidden runtime dependencies found.")
     return 0
