@@ -13,6 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TRANSPORT = ROOT / "skills" / "research-review-lead" / "scripts" / "opencli_transport.py"
+EXPERIMENT_PROTOCOL = (
+    ROOT / "skills" / "research-review-lead" / "scripts" / "experiment_protocol.py"
+)
 REAL_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p1-read-empty-result.json"
 REAL_A2P2_EMPTY_RESULT_FIXTURE = ROOT / "scripts" / "fixtures" / "transport-a2p2-read-empty-result.json"
 sys.dont_write_bytecode = True
@@ -96,6 +99,39 @@ def success_sequence(
 def assert_no_send(calls: list[list[str]]) -> None:
     verbs = [call[1] for call in calls if len(call) > 1 and call[0] == "chatgpt"]
     assert "ask" not in verbs and "send" not in verbs, verbs
+
+
+def test_experiment_protocol_module_is_loadable() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "rr_experiment_protocol_direct_test", EXPERIMENT_PROTOCOL
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.unresolved_required_values({"target": "TODO"}) == ["target"]
+
+
+def test_opencli_transport_reexports_protocol_api() -> None:
+    for name in (
+        "unresolved_required_values",
+        "assess_experiment_protocol",
+        "validate_experiment_report",
+    ):
+        exported = getattr(TRANSPORT_MODULE, name)
+        assert callable(exported)
+        assert Path(exported.__code__.co_filename).resolve() == EXPERIMENT_PROTOCOL.resolve()
+
+
+def test_direct_opencli_transport_help_still_works() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(TRANSPORT), "--help"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "prepare-new" in completed.stdout
 
 
 def test_help_exposes_prepare_new() -> None:
@@ -1551,6 +1587,9 @@ def test_identity_failure_does_not_allow_same_message_id_resend() -> None:
 
 def main() -> int:
     tests = [
+        test_experiment_protocol_module_is_loadable,
+        test_opencli_transport_reexports_protocol_api,
+        test_direct_opencli_transport_help_still_works,
         test_help_exposes_prepare_new,
         test_help_exposes_require_existing_conversation,
         test_old_conversation_to_new_and_empty_result,

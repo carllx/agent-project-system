@@ -17,6 +17,7 @@ PACKAGE = ROOT / "skills" / "research-review-lead"
 ENTRY = PACKAGE / "SKILL.md"
 VERSION = PACKAGE / "VERSION"
 TRANSPORT_SCRIPT = PACKAGE / "scripts" / "opencli_transport.py"
+EXPERIMENT_PROTOCOL_SCRIPT = PACKAGE / "scripts" / "experiment_protocol.py"
 TRANSPORT_TEST = ROOT / "scripts" / "test_opencli_transport.py"
 REQUIRED_ASSETS = {
     "context-packet.md",
@@ -29,6 +30,7 @@ EXPECTED_PACKAGE_FILES = {
     "SKILL.md",
     "VERSION",
     "scripts/opencli_transport.py",
+    "scripts/experiment_protocol.py",
     *(f"assets/{name}" for name in REQUIRED_ASSETS),
 }
 REQUIRED_SKILL_MARKERS = {
@@ -316,6 +318,17 @@ def main() -> int:
         except SyntaxError as error:
             errors.append(f"transport wrapper has invalid Python syntax: {error}")
 
+    if not EXPERIMENT_PROTOCOL_SCRIPT.is_file():
+        errors.append(
+            "required experiment protocol module does not exist: "
+            "scripts/experiment_protocol.py"
+        )
+    else:
+        try:
+            ast.parse(EXPERIMENT_PROTOCOL_SCRIPT.read_text(encoding="utf-8"))
+        except SyntaxError as error:
+            errors.append(f"experiment protocol module has invalid Python syntax: {error}")
+
     if not TRANSPORT_TEST.is_file():
         errors.append("required pure-local transport test does not exist: scripts/test_opencli_transport.py")
     else:
@@ -325,6 +338,9 @@ def main() -> int:
         except SyntaxError as error:
             errors.append(f"transport synthetic test has invalid Python syntax: {error}")
         for scenario in (
+            "test_experiment_protocol_module_is_loadable",
+            "test_opencli_transport_reexports_protocol_api",
+            "test_direct_opencli_transport_help_still_works",
             "test_help_exposes_prepare_new",
             "test_help_exposes_require_existing_conversation",
             "test_old_conversation_to_new_and_empty_result",
@@ -521,7 +537,10 @@ def main() -> int:
     print("Entry: one valid SKILL.md with matching name and description.")
     print(f"Version: {VERSION.read_text(encoding='utf-8').strip()} (simple SemVer).")
     print("Assets: five required files, each with one authoritative copy.")
-    print("Transport structure: wrapper syntax and required package markers validated.")
+    print(
+        "Transport structure: wrapper and experiment protocol module syntax and "
+        "required package markers validated."
+    )
     print(
         "Transport tests: "
         f"executed {executed_transport_test_count} discovered pure-local tests; "
