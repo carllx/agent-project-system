@@ -138,3 +138,13 @@
 - **FIRST-USE Round 1:** One formal `send --prepare-new` call sent `FIRST-USE-LOOP-001-R1-EVIDENCE` once. One bounded manual recovery established the new verified Conversation and complete User Packet but returned `RESPONSE_PENDING`; Round 2 was not sent.
 - **First-use completion:** Saved Round 1 and live Round 2 reviews both passed exact identity parsing. Round 2 used one send and one pending continuation in the same Conversation; final Browser decision is `PASS / ACHIEVED`.
 - **Last verified:** 2026-08-06
+
+## Installation Acceptance
+- **Platform Forensics:** PASS
+- **Installation:** PASS
+- **Discovery:** PASS
+- **Manual Invocation:** PASS
+- **Handoff:** PASS
+- **Browser Loop:** PASS
+- **Completion Index:** 100/100
+
