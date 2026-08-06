@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import os
@@ -1034,7 +1035,79 @@ def test_manual_recover_preserves_original_send_started_at() -> None:
     state_path.write_text(json.dumps(state), encoding="utf-8")
     _, recovered, _ = run_recover(command, env)
     assert recovered["original_send_started_at"] == original
-    assert recovered["manual_recover_started_at"] != original
+    assert recovered["manual_recover_started_at"] == recovered["current_operation_started_at"]
+
+
+def test_compact_packet_payload_is_single_line_and_lossless() -> None:
+    body = (
+        'SHARED_OBJECTIVE: preserve 中文, "quotes", and \\backslashes\n'
+        "EVIDENCE: line one\nline two"
+    )
+    args = type("Args", (), {
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": LEGACY_MESSAGE_ID,
+        "round": 0,
+        "message_type": "EVIDENCE_PACKET",
+    })()
+    payload = TRANSPORT_MODULE.prepare_payload(args, body)
+    packet = json.loads(payload)
+    assert payload.splitlines() == [payload]
+    assert packet["WORK_ITEM_ID"] == LEGACY_WORK_ITEM
+    assert packet["MESSAGE_ID"] == LEGACY_MESSAGE_ID
+    assert packet["ROUND"] == 0
+    assert packet["MESSAGE_TYPE"] == "EVIDENCE_PACKET"
+    assert packet["EVIDENCE"] == body
+    assert packet["END_SENTINEL"] == f"RR-PACKET-COMPLETE:{LEGACY_MESSAGE_ID}"
+    assert {
+        "SHARED_OBJECTIVE", "ACCEPTANCE_CRITERIA", "RR_LEAD_QUESTION"
+    } <= packet.keys()
+
+
+def test_compact_packet_identity_is_accepted_with_formatter_suffix() -> None:
+    text = json.dumps({
+        "WORK_ITEM_ID": LEGACY_WORK_ITEM,
+        "MESSAGE_ID": LEGACY_MESSAGE_ID,
+    }, separators=(",", ":")) + "\nShow more"
+    found, replied, stable = TRANSPORT_MODULE.inspect_messages(
+        [{"Role": "user", "Text": text}], LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID
+    )
+    assert (found, replied, stable) == (True, False, False)
+
+
+def test_compact_packet_wrong_identity_is_rejected() -> None:
+    text = json.dumps({
+        "WORK_ITEM_ID": LEGACY_WORK_ITEM,
+        "MESSAGE_ID": f"{LEGACY_MESSAGE_ID}-OTHER",
+    }, separators=(",", ":"))
+    found, _, _ = TRANSPORT_MODULE.inspect_messages(
+        [{"Role": "user", "Text": text}], LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID
+    )
+    assert found is False
+
+
+def test_send_passes_one_complete_single_line_packet_to_opencli() -> None:
+    _, state, calls, _, _ = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    ask_call = next(call for call in calls if call[1] == "ask")
+    payload = ask_call[2]
+    packet = json.loads(payload)
+    assert payload.splitlines() == [payload]
+    assert packet["WORK_ITEM_ID"] == LEGACY_WORK_ITEM
+    assert packet["MESSAGE_ID"] == LEGACY_MESSAGE_ID
+    assert packet["EVIDENCE"] == "synthetic body"
+    assert packet["END_SENTINEL"] == f"RR-PACKET-COMPLETE:{LEGACY_MESSAGE_ID}"
+    assert state["payload_integrity"] == {
+        "transport_method": "argv",
+        "byte_length": len(payload.encode("utf-8")),
+        "character_length": len(payload),
+        "line_count": 1,
+        "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
+        "has_work_item_id": True,
+        "has_message_id": True,
+        "has_end_sentinel": True,
+    }
 
 
 def test_manual_recover_has_independent_attempt_budget() -> None:
@@ -1981,6 +2054,10 @@ def main() -> int:
         test_recover_accepts_later_identity_bound_rr_review,
         test_manual_recover_uses_fresh_operation_budget,
         test_manual_recover_preserves_original_send_started_at,
+        test_compact_packet_payload_is_single_line_and_lossless,
+        test_compact_packet_identity_is_accepted_with_formatter_suffix,
+        test_compact_packet_wrong_identity_is_rejected,
+        test_send_passes_one_complete_single_line_packet_to_opencli,
         test_manual_recover_has_independent_attempt_budget,
         test_manual_recover_never_invokes_ask_send_or_new,
         test_manual_recover_does_not_change_send_count,

@@ -9,24 +9,44 @@
 
 ## Active Work Item
 
-- **ID:** `OPENCLI-ASK-TIMEOUT-001`
-- **Name:** 恢复有界 ask 与两阶段发送/回复恢复
+- **ID:** `MULTILINE-PACKET-DELIVERY-001`
+- **Name:** 确认并修复完整 Packet 进入 Browser 的传输边界
 - **Review decision:** `PASS_WITH_DEBT`
 - **Work Item state:** `ACHIEVED`
-- **Skill status:** `BLOCKED_FIRST_USE`
-- **Baseline commit:** `ea7f01efc3da305804df957a21f879ca45d85883`
-- **Current objective:** 使 OpenCLI ask 在 Wrapper 的短硬超时内结束整个本地进程树，保留同 Message ID 禁止重发语义和后续只读恢复预算。
+- **Skill status:** `PACKET_DELIVERY_READY`
+- **Baseline commit:** `c867a7daf149d4d2f99a7bc55d15950f1da85a9b`
+- **Current objective:** 已完成。Windows `opencli.cmd` 的多行 argv 边界已由单行紧凑 JSON Packet 修复并通过真实 Browser 完整送达验证。
 
 ## Acceptance criteria
 
-- OpenCLI 自身 timeout 不可靠时，Wrapper 仍在全局实验预算前硬终止 ask 本地进程树。
-- ask 超时保留 `message_send_count=1` 和同 Message ID 禁止重发，不得回退为 `NOT_SENT`。
-- ask 超时后持久化 state 并保留一次只读 `recover` 预算；`recover` 不得调用 ask、send 或 new。
-- 只读恢复可绑定 Conversation，在回复未完成时保留 ID，并能接受稍后出现的同源身份绑定 RR Review。
-- 不修改 Response Identity、Decision、发送次数、Recovery/Detail 预算上限或其他非阻断范围；不重发旧 Message ID，不 commit 或 push。
+- 先修复 `test_manual_recover_preserves_original_send_started_at` 的秒级时钟脆弱断言；保持 Transport 产品代码与语义不变，并通过全部本地测试。
+- 固定三行 Packet 在输入、Wrapper、子进程前和实际 argv/stdin 各层的长度、行数、SHA-256 与 Marker 状态必须可核对。
+- 纯本地证明 Python 直传、Windows `.cmd` 转发和当前 `run_opencli` 调用方式是否保留多行；不得先调用 ChatGPT。
+- 只根据本机 OpenCLI 1.8.6 `ask` / `send` help 选择一个最小候选，并用唯一 `PACKET-INTEGRITY-001-R1` 真实发送一次。
+- 只有真实 Browser user turn 完整显示三行与结束 Marker 后，候选方式才可进入 Wrapper；不得重发同 Message ID，不 commit 或 push。
 
 ## Completed
 
+- `PACKET_DELIVERY_READY: true`；`MESSAGE_OBSERVABILITY_READY: true`；Skill 版本为 `0.4.13`。
+- `ROOT_CAUSE`: Windows `opencli.cmd` 无法完整转发包含换行的 argv。
+- `SELECTED_METHOD`: 使用单行紧凑 JSON Packet；原始多行正文在 `EVIDENCE` 字段中无损 round-trip，身份和结束 Sentinel 保留在顶层。
+- `DELIVERY_EVIDENCE`: Browser 用户消息包含固定三行测试内容、`END_SENTINEL` 和精确 `MESSAGE_ID`。
+- `SECURITY_AND_PRIVACY`: Runtime 状态与日志只保存长度、SHA-256、Marker 状态和 `argv` 方式，不保存 Packet 正文。
+- Package Checker 标准 unittest 通过 14/14；Transport AST 发现、direct 列表、direct 执行和受控执行均为 123，Missing 0、Duplicate 0、Failed 0、Skipped 0。
+- `test_manual_recover_preserves_original_send_started_at` 的偶发失败根因为 `utc_now()` 使用秒精度，发送与 manual recover 可以产生相同时间字符串；测试已改为验证 original send 时间不变且 manual recover 使用 `current_operation_started_at`，产品代码未为此改变。
+- 固定三行 Packet 在输入与 Wrapper 接收层均为 115 字节、115 字符、3 行、SHA-256 `db81e23a7a5b8b9ce668567eaa00288ef35f318b1ea9a44d38d410a01d3aee3b`；加入 Transport 身份头后的调用前 Prompt 为 226 字节、226 字符、8 行，三个 Marker 仍全部存在。
+- Python 直接传递多行 argv 保留 115 字节和同一 SHA-256；Windows `.cmd` 转发只把第一行的 27 字节交给接收器，当前 `run_opencli -> opencli.cmd` 同样在 OpenCLI 前丢失后续行，根因为 `.cmd` 多行 argv 转发边界。
+- 本机 OpenCLI 1.8.6 `ask` / `send` 都只接受位置参数 `prompt`，没有 stdin、prompt-file、JSON-input 或 raw-text 选项；单行紧凑 JSON 经当前 `.cmd` 调用保持 677 字节与 SHA-256 不变。
+- 唯一真实探针 `PACKET-INTEGRITY-001-R1` 只发送一次；Conversation `6a745b6c-51e4-83ea-affa-9a440036eee6` 的显式 detail/read 与只读 DOM 都显示完整三个 Marker 和结束 Sentinel，Assistant ACK 也精确确认 `END_SENTINEL_SEEN: true`、`LINES_RECEIVED: 3`。
+- Wrapper 已改为把完整 Packet 正文无损封装进单行紧凑 JSON 的 `EVIDENCE` 字段，保留顶层身份与必需路由字段；状态只记录长度、SHA-256、Marker 状态和 `argv` 方式，不新增 Packet 正文日志。Skill 版本由 `0.4.12` 升至 `0.4.13`。
+- 新增四项纯本地回归；直接 Transport 123/123 全部通过，未重发探针 Message ID，Browser 只读 session 已关闭。
+- `OPENCLI-MESSAGE-OBSERVABILITY-001` 已按 `REVISE / STALLED` 停止：detail、read 与 Browser DOM 都只显示相同的 31 字符 Work Item ID，但这不能区分“完整正文不可观察”和“完整 Packet 从未送达”。
+- 当前正确结论为 `FULL_MESSAGE_OBSERVABILITY: UNVERIFIED`、`FULL_PACKET_DELIVERY: UNVERIFIED`、`VISIBLE_BROWSER_MESSAGE: WORK_ITEM_ID_ONLY`；不得把 OpenCLI 1.8.6 完整消息可观测性写成已证明不支持。
+- `OPENCLI-MESSAGE-OBSERVABILITY-001` 离线审计确认 MVP-002 / MVP-003 detail raw 只有 `Role` / `Text` / `Generating` / `StableSeconds`，每条 Text 只含 31 字符的 Work Item ID，不含完整 Message ID、RR Review Envelope 或 `NEXT_WORK_ORDER`。
+- 本机 OpenCLI 1.8.6 `getVisibleMessages()` 从可见 DOM 的 `innerText/textContent` 提取消息，detail formatter 只映射字段，两处都没有长度截断逻辑；raw 中也不存在隐藏的 full-text 字段。
+- Primary 与 Secondary 都有 MVP-003 baseline/history/status raw provenance；Primary 由发送后 status 首次观测，Secondary 由发送后 history 首次观测，两者都不在发送前 baseline。
+- Primary 和 Secondary 的 `detail -> status -> read -> status` 都证明了读取前后 Conversation URL 同源；Primary 仍只有 Work Item ID，Secondary 被证明为非目标 Candidate。
+- 受限 `opencli browser` 只读观察已仅打开 Primary；DOM state 和精确 user/assistant turn 文本同样只有 Work Item ID，随后已关闭命名 session，未点击、输入或发送。
 - Wrapper 在 OpenCLI ask 不遵守自身 timeout 时硬终止完整本地进程树，同时保留 `message_send_count=1`、`DELIVERY_UNKNOWN` 和同 Message ID 禁止重发语义。
 - 自动 Recovery 与 manual recover 使用独立的一次性预算；manual recover 使用新的操作时间预算，不调用 ask、send 或 new，也不改变发送次数。
 - Candidate Conversation ID 单调保存；空 status 不覆盖 Candidate，冲突 Candidate 被显式记录，只有精确消息证据才能晋升为 verified target。
@@ -53,14 +73,12 @@
 
 ## Blockers
 
-- 首次真实循环仍受消息可观测性阻断：OpenCLI ChatGPT detail 没有暴露完整消息正文，无法读取完整 `MESSAGE_ID`、RR Review Envelope 和 `NEXT_WORK_ORDER`。
+- None.
 
 ## Debt
 
-- OpenCLI ChatGPT detail 没有暴露完整消息正文；这是当前外部可观测性 Debt，不否定 ask timeout 与 recovery identity 修复已经通过。
-- 高复杂度协议函数只是被隔离，尚未简化。
-- `opencli_transport.py` 仍约 1325 行。
-- `send_command` 等状态机热点尚未处理。
+- 正式 Browser RR Review 两轮循环尚未验收。
+- ADR 等待 `FIRST-USE-LOOP-001` 通过后创建。
 
 ## Decisions pending
 
@@ -68,7 +86,7 @@
 
 ## Next action
 
-- 创建独立阻断 Work Item，只读调查现有 MVP-002 / MVP-003 Conversation 的完整消息可观测性；不得发送新消息或创建新 Conversation。
+- 创建当前五文件本地 Commit；提交验证干净后，以该 Commit 为基线立即开始 `FIRST-USE-LOOP-001`。
 
 ## Files to read
 
@@ -81,11 +99,11 @@
 ## Last validation
 
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
-- **Result:** Passed all 14 standard unittest cases, including success/failure output, multi-error order, one Runner invocation and Runner failure propagation.
+- **Result:** Passed 14/14；成功输出版本断言动态读取权威 `VERSION` 文件并保持其余输出逐字断言。
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed all 119 directly invoked pure-local Transport tests.
+- **Result:** Passed all 123 directly invoked pure-local Transport tests；AST discovered 123，direct listed 123，Missing 0，Duplicate 0，Failed 0，Skipped 0。
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed; controlled Runner called all 119 discovered tests exactly once, package version `0.4.12`.
+- **Result:** Passed；受控 Runner 发现并逐项执行全部 123 项 Transport 测试，Missing 0，Duplicate 0，Failed 0，Skipped 0。
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
 - **Command:** `python skills/research-review-lead/scripts/opencli_transport.py --help`
@@ -94,5 +112,5 @@
 - **Result:** Baseline and current normalized stdout/stderr hashes match; Runner called once; `main()` is 19 lines with estimated complexity 3 and nesting 2.
 - **Command:** `git diff --check`
 - **Result:** Passed.
-- **Scope:** 本地验证未调用真实 OpenCLI 或 Browser、未发送消息；后续只读恢复证明 detail 消息正文不完整。
+- **Scope:** 真实 OpenCLI/Browser 仅用于唯一 `PACKET-INTEGRITY-001-R1` 完整性探针；发送一次、创建一个 Conversation、未重发、未 commit 或 push。除该探针外没有发送消息。
 - **Last verified:** 2026-08-06

@@ -9,6 +9,7 @@ found in a pre-existing conversation as a successful RR Lead delivery.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -565,9 +566,13 @@ def marker(message_id: str) -> str:
 
 
 def has_exact_header(text: str, name: str, value: str) -> bool:
-    return bool(re.search(
-        rf"(?m)^{re.escape(name)}:[ \t]*{re.escape(value)}[ \t]*\r?$", text
-    ))
+    if re.search(rf"(?m)^{re.escape(name)}:[ \t]*{re.escape(value)}[ \t]*\r?$", text):
+        return True
+    try:
+        packet, _ = json.JSONDecoder().raw_decode(text.lstrip())
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return isinstance(packet, dict) and packet.get(name) == value
 
 
 def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_id: str) -> tuple[bool, bool, bool]:
@@ -943,8 +948,17 @@ def prepare_new_command(args: argparse.Namespace) -> int:
 def prepare_payload(args: argparse.Namespace, body: str) -> str:
     if marker(args.message_id) in body:
         raise ValueError("message body already contains MESSAGE_ID; provide body without transport headers")
-    return (f"WORK_ITEM_ID: {args.work_item_id}\nMESSAGE_ID: {args.message_id}\n"
-            f"ROUND: {args.round}\nMESSAGE_TYPE: {args.message_type}\n\n" + body.lstrip("\ufeff"))
+    return json.dumps({
+        "WORK_ITEM_ID": args.work_item_id,
+        "MESSAGE_ID": args.message_id,
+        "ROUND": args.round,
+        "MESSAGE_TYPE": args.message_type,
+        "SHARED_OBJECTIVE": "See EVIDENCE.",
+        "ACCEPTANCE_CRITERIA": "See EVIDENCE.",
+        "EVIDENCE": body.lstrip("\ufeff"),
+        "RR_LEAD_QUESTION": "Follow the request in EVIDENCE.",
+        "END_SENTINEL": f"RR-PACKET-COMPLETE:{args.message_id}",
+    }, ensure_ascii=False, separators=(",", ":"))
 
 
 def read_payload(args: argparse.Namespace) -> str:
@@ -1305,6 +1319,17 @@ def send_command(args: argparse.Namespace) -> int:
             raise ValueError(f"MESSAGE_ID already has state {existing.get('delivery_state')}; same-ID resend is forbidden")
     state = new_state(args, state_path)
     payload = prepare_payload(args, read_payload(args))
+    payload_bytes = payload.encode("utf-8")
+    state["payload_integrity"] = {
+        "transport_method": "argv",
+        "byte_length": len(payload_bytes),
+        "character_length": len(payload),
+        "line_count": len(payload.splitlines()),
+        "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+        "has_work_item_id": has_exact_header(payload, "WORK_ITEM_ID", args.work_item_id),
+        "has_message_id": has_exact_header(payload, "MESSAGE_ID", args.message_id),
+        "has_end_sentinel": f"RR-PACKET-COMPLETE:{args.message_id}" in payload,
+    }
     pre_rows: list[dict[str, Any]] = []
     if args.prepare_new:
         pre_rows = history(state, state_path)

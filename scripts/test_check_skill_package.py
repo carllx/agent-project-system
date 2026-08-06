@@ -134,6 +134,9 @@ class PackageCheckerExecutionTests(unittest.TestCase):
         )
 
     def test_main_success_output_is_preserved(self) -> None:
+        expected_version = (ROOT / "skills" / "research-review-lead" / "VERSION").read_text(
+            encoding="utf-8"
+        ).strip()
         stdout = io.StringIO()
         with mock.patch.object(
             CHECKER_MODULE, "run_transport_tests", return_value=(101, [])
@@ -145,7 +148,7 @@ class PackageCheckerExecutionTests(unittest.TestCase):
             stdout.getvalue(),
             "Skill package checks passed: skills/research-review-lead\n"
             "Entry: one valid SKILL.md with matching name and description.\n"
-            "Version: 0.4.12 (simple SemVer).\n"
+            f"Version: {expected_version} (simple SemVer).\n"
             "Assets: five required files, each with one authoritative copy.\n"
             "Transport structure: wrapper and experiment protocol module syntax and "
             "required package markers validated.\n"
