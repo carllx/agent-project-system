@@ -9,24 +9,46 @@
 
 ## Active Work Item
 
-- **ID:** `MULTILINE-PACKET-DELIVERY-001`
-- **Name:** 确认并修复完整 Packet 进入 Browser 的传输边界
-- **Review decision:** `PASS_WITH_DEBT`
+- **ID:** `RESPONSE-PENDING-RESUME-001`
+- **Name:** 支持稍后继续读取已送达的 Browser 回复
+- **Review decision:** `PASS`
 - **Work Item state:** `ACHIEVED`
-- **Skill status:** `PACKET_DELIVERY_READY`
-- **Baseline commit:** `c867a7daf149d4d2f99a7bc55d15950f1da85a9b`
-- **Current objective:** 已完成。Windows `opencli.cmd` 的多行 argv 边界已由单行紧凑 JSON Packet 修复并通过真实 Browser 完整送达验证。
+- **Skill status:** `FIRST_USE_READY`
+- **Baseline commit:** `57712ca50b249b98ac5e132d57c35a5ad5f82002`
+- **Skill version before:** `0.4.13`
+- **Current objective:** 已完成 pending 回复续读、严格结构化回复解析以及 `FIRST-USE-LOOP-001` 的真实两轮 Browser RR Lead 闭环；停止继续发送或重构。
 
 ## Acceptance criteria
 
-- 先修复 `test_manual_recover_preserves_original_send_started_at` 的秒级时钟脆弱断言；保持 Transport 产品代码与语义不变，并通过全部本地测试。
-- 固定三行 Packet 在输入、Wrapper、子进程前和实际 argv/stdin 各层的长度、行数、SHA-256 与 Marker 状态必须可核对。
-- 纯本地证明 Python 直传、Windows `.cmd` 转发和当前 `run_opencli` 调用方式是否保留多行；不得先调用 ChatGPT。
-- 只根据本机 OpenCLI 1.8.6 `ask` / `send` help 选择一个最小候选，并用唯一 `PACKET-INTEGRITY-001-R1` 真实发送一次。
-- 只有真实 Browser user turn 完整显示三行与结束 Marker 后，候选方式才可进入 Wrapper；不得重发同 Message ID，不 commit 或 push。
+- 续读仅适用于已确认送达、`RESPONSE_PENDING`、保存了明确 Conversation 与原始 Work Item/Message ID 的 state。
+- 每次显式续读使用新操作预算，只读取保存的 Conversation，最多执行 detail 及必要时同源确认后的单次 read；不得 ask/send/new 或改变发送证据。
+- 持久记录 continuation count、最后检查时间和结果，默认最多三次；耗尽后返回 `BLOCKED_RESPONSE_TIMEOUT`。
+- 完整身份标准保持不变；稳定但错误的回复返回 `RESPONSE_IDENTITY_REJECTED`，不得进入正式 Parser。
+- 本地测试、受控 Runner、Docs、Help 与 Diff 全部通过后同步九文件 Skill 到 Lab，再恢复真实 Round 1。
 
 ## Completed
 
+- `RESPONSE-PENDING-RESUME-001` implements `recover --continue-pending` with a fresh per-invocation operation budget, a saved-Conversation-only detail and necessary same-source status/read fallback, and no ask/send/new path.
+- Runtime now persists `pending_response_continuation_count`, `pending_response_last_checked_at`, and `pending_response_last_result`; the default maximum is three explicit continuations, after which an incomplete response becomes `BLOCKED_RESPONSE_TIMEOUT` without deleting send evidence.
+- Stable wrong or incomplete RR identity becomes `RESPONSE_IDENTITY_REJECTED`; the parser's underlying reason is retained as `pending_response_last_identity_status`. Exact RR envelope and identity requirements are unchanged.
+- Added ten focused pending-response regressions without reorganizing the Transport test file. AST discovered, direct listed, direct executed, and controlled executed are all 133; Missing 0, Duplicate 0, Failed 0, Skipped 0. Checker unittest remains 14/14.
+- Skill version is `0.4.14`; source and Lab contain the same nine relative files with identical SHA-256 values.
+- Initial read of Conversation `6a7461e1-b498-83ea-99b4-014b43d2f0a2` found one stable Assistant response. Status before and after both identified the same Conversation, and no read fallback was needed for that initial observation.
+- The real formal continuation used the original state once, did not alter `message_send_count=1`, and invoked no ask/send/new. It rejected the response because it contains `REPLY_TO_MESSAGE_ID` rather than the required `IN_REPLY_TO_MESSAGE_ID`.
+- Added strict compatibility for the single observed `REPLY_TO_MESSAGE_ID` alias. Exact alias values normalize to the sole authoritative `IN_REPLY_TO_MESSAGE_ID`; wrong, empty, duplicate, missing, or conflicting reply identities are rejected. Browser initialization remains canonical and Skill version remains `0.4.14`.
+- Added eight focused alias regressions. AST discovered, direct listed, direct executed, and controlled executed are all 141; Missing 0, Duplicate 0, Failed 0, Skipped 0. Source and Lab again contain the same nine relative files with identical SHA-256 values.
+- Offline reparse of the saved stable Round 1 response confirmed `REPLY_ID_SOURCE: LEGACY_ALIAS` and normalized the exact expected Message ID, but exposed protocol-external top-level `MESSAGE_ID` and `MESSAGE_TYPE` lines. Under the unchanged parser these lines become part of `WORK_ITEM_ID` and `ROUND`, so the formal result is `RESPONSE_IDENTITY_MISMATCH`. No Round 2 message was sent.
+- Parser now treats every unindented strict uppercase field header as a boundary before applying a whitelist. Unknown top-level fields return `RESPONSE_PROTOCOL_REJECTED`; optional `MESSAGE_ID` and `MESSAGE_TYPE` metadata are accepted only when they exactly identify `<WORK_ITEM_ID>-R<ROUND>-REVIEW` and `RR_REVIEW`.
+- Added ten focused field-boundary and optional-metadata regressions. AST discovered, direct listed, direct executed, and controlled executed are all 151; Missing 0, Duplicate 0, Failed 0, Skipped 0.
+- Reparse of the saved Round 1 response now verifies `WORK_ITEM_ID: FIRST-USE-LOOP-001`, `ROUND: 1`, response Message ID `FIRST-USE-LOOP-001-R1-REVIEW`, response type `RR_REVIEW`, legacy reply source, and exact normalized outbound Message ID.
+- `FIRST-USE-LOOP-001` Round 2 sent `FIRST-USE-LOOP-001-R2-EVIDENCE` exactly once to the same verified Conversation `6a7461e1-b498-83ea-99b4-014b43d2f0a2`. The compact outer payload was one physical line; the fresh marker body was exactly 147 UTF-8 bytes, three lines, SHA-256 `738d60d4f37313b27fcc439d20411b759ef14139bea94acda805c0f66cdb2e05`.
+- The ask timed out after the single send. One bounded manual recovery confirmed delivery and one explicit pending continuation obtained a verified final review without ask/send/new. The final Browser review returned `PASS`, `WORK_ITEM_STATE: ACHIEVED`, canonical reply identity, response Message ID `FIRST-USE-LOOP-001-R2-REVIEW`, response type `RR_REVIEW`, and no blockers.
+- `FIRST-USE-LOOP-001` is `ACHIEVED`; `FIRST_USABLE_VERSION: 0.4.14`; `FURTHER_REFACTOR_REQUIRED_BEFORE_USE: false`. No user message copying, manual Browser intervention, same-ID resend, Round 3, or push occurred.
+- `FIRST-USE-LOOP-001` Lab deployment verified all nine source-relative files with identical SHA-256 values; Lab Wrapper `--help` exited 0.
+- Round 1 used `FIRST-USE-LOOP-001-R1-EVIDENCE` exactly once through `send --prepare-new`; no same-ID resend and no user message copying occurred.
+- Round 1 created and verified Conversation `6a7461e1-b498-83ea-99b4-014b43d2f0a2`. The persisted payload was one physical line, 4171 bytes, SHA-256 `d4816259105593e3a78d9044365a52fc5d80d52533454b3cd73c4eab9debfdee`, with Work Item, Message ID, and end-sentinel markers present.
+- The bounded recovery detail contains one stable User message of 4181 characters with exact Work Item ID, exact Message ID, end sentinel, source commit, local packet test evidence, and real Browser probe evidence; Round 1 Packet delivery is complete.
+- The only ask timed out and was hard-terminated. One manual bounded recovery used status, history, and one detail without ask/send/new; it established the verified target but found no Assistant message, leaving `RESPONSE_PENDING`.
 - `PACKET_DELIVERY_READY: true`；`MESSAGE_OBSERVABILITY_READY: true`；Skill 版本为 `0.4.13`。
 - `ROOT_CAUSE`: Windows `opencli.cmd` 无法完整转发包含换行的 argv。
 - `SELECTED_METHOD`: 使用单行紧凑 JSON Packet；原始多行正文在 `EVIDENCE` 字段中无损 round-trip，身份和结束 Sentinel 保留在顶层。
@@ -77,8 +99,8 @@
 
 ## Debt
 
-- 正式 Browser RR Review 两轮循环尚未验收。
 - ADR 等待 `FIRST-USE-LOOP-001` 通过后创建。
+- 后续 Evidence 应区分 `PROBE_CONVERSATION_ID` 与 `RR_LOOP_CONVERSATION_ID`，避免把独立探针 Conversation 误写为当前 Loop Conversation。
 
 ## Decisions pending
 
@@ -86,7 +108,7 @@
 
 ## Next action
 
-- 创建当前五文件本地 Commit；提交验证干净后，以该 Commit 为基线立即开始 `FIRST-USE-LOOP-001`。
+- Stop the first-use loop. Do not send Round 3 or perform additional changes under `FIRST-USE-LOOP-001`; wait for the user's first real project task.
 
 ## Files to read
 
@@ -101,9 +123,9 @@
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
 - **Result:** Passed 14/14；成功输出版本断言动态读取权威 `VERSION` 文件并保持其余输出逐字断言。
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed all 123 directly invoked pure-local Transport tests；AST discovered 123，direct listed 123，Missing 0，Duplicate 0，Failed 0，Skipped 0。
+- **Result:** Passed all 151 directly invoked pure-local Transport tests；AST discovered 151，direct listed 151，Missing 0，Duplicate 0，Failed 0，Skipped 0。
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed；受控 Runner 发现并逐项执行全部 123 项 Transport 测试，Missing 0，Duplicate 0，Failed 0，Skipped 0。
+- **Result:** Passed；受控 Runner 发现并逐项执行全部 151 项 Transport 测试，Missing 0，Duplicate 0，Failed 0，Skipped 0。
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
 - **Command:** `python skills/research-review-lead/scripts/opencli_transport.py --help`
@@ -112,5 +134,7 @@
 - **Result:** Baseline and current normalized stdout/stderr hashes match; Runner called once; `main()` is 19 lines with estimated complexity 3 and nesting 2.
 - **Command:** `git diff --check`
 - **Result:** Passed.
-- **Scope:** 真实 OpenCLI/Browser 仅用于唯一 `PACKET-INTEGRITY-001-R1` 完整性探针；发送一次、创建一个 Conversation、未重发、未 commit 或 push。除该探针外没有发送消息。
+- **Scope:** 真实 OpenCLI/Browser 用于已完成的唯一 `PACKET-INTEGRITY-001-R1` 探针及本次 `FIRST-USE-LOOP-001` Round 1 正式发送；每个 Message ID 均只发送一次，无重发、无用户复制、无 commit 或 push。
+- **FIRST-USE Round 1:** One formal `send --prepare-new` call sent `FIRST-USE-LOOP-001-R1-EVIDENCE` once. One bounded manual recovery established the new verified Conversation and complete User Packet but returned `RESPONSE_PENDING`; Round 2 was not sent.
+- **First-use completion:** Saved Round 1 and live Round 2 reviews both passed exact identity parsing. Round 2 used one send and one pending continuation in the same Conversation; final Browser decision is `PASS / ACHIEVED`.
 - **Last verified:** 2026-08-06

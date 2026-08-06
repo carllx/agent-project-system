@@ -796,10 +796,12 @@ def rr_review_text(
     message_id: str = LEGACY_MESSAGE_ID,
     round_value: str = "0",
     omit: str | None = None,
+    reply_field: str = "IN_REPLY_TO_MESSAGE_ID",
+    extra_fields: tuple[tuple[str, str], ...] = (),
 ) -> str:
     values = {
         "WORK_ITEM_ID": work_item_id,
-        "IN_REPLY_TO_MESSAGE_ID": message_id,
+        reply_field: message_id,
         "ROUND": round_value,
         "REVIEW_DECISION": "PASS",
         "WORK_ITEM_STATE": "ACHIEVED",
@@ -814,6 +816,8 @@ def rr_review_text(
     fields = "\n".join(
         f"{name}: {value}" for name, value in values.items() if name != omit
     )
+    if extra_fields:
+        fields += "\n" + "\n".join(f"{name}: {value}" for name, value in extra_fields)
     return f"RR_REVIEW_BEGIN\n{fields}\nRR_REVIEW_END"
 
 
@@ -873,6 +877,43 @@ def run_recover(
     log = Path(env["OPENCLI_FAKE_LOG"])
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     return completed, state, calls
+
+
+def run_pending_resume(
+    command: list[str], env: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+    state_path = Path(command[command.index("--state-file") + 1])
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(TRANSPORT),
+            "recover",
+            "--state-file",
+            str(state_path),
+            "--continue-pending",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    log = Path(env["OPENCLI_FAKE_LOG"])
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    return completed, state, calls
+
+
+def pending_resume_case(
+    continuation_results: list[dict],
+) -> tuple[list[str], dict[str, str], dict]:
+    sequence = timeout_then_recover_sequence(legacy_detail(False)) + continuation_results
+    _, _, _, command, env = run_send_case(
+        sequence, manual_new_url="https://chatgpt.com/new"
+    )
+    _, pending, _ = run_recover(command, env)
+    assert pending["delivery_state"] == "RESPONSE_PENDING"
+    return command, env, pending
 
 
 def process_exists(pid: int) -> bool:
@@ -1036,6 +1077,117 @@ def test_manual_recover_preserves_original_send_started_at() -> None:
     _, recovered, _ = run_recover(command, env)
     assert recovered["original_send_started_at"] == original
     assert recovered["manual_recover_started_at"] == recovered["current_operation_started_at"]
+
+
+def test_pending_response_can_resume_in_new_invocation() -> None:
+    command, env, _ = pending_resume_case([legacy_detail()])
+    completed, state, _ = run_pending_resume(command, env)
+    assert completed.returncode == 0
+    assert state["pending_response_continuation_count"] == 1
+    assert state["delivery_state"] == "RESPONSE_READY"
+
+
+def test_pending_resume_uses_fresh_operation_budget() -> None:
+    command, env, state = pending_resume_case([legacy_detail()])
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["current_operation_started_at"] = "2000-01-01T00:00:00+00:00"
+    state["external_command_count"] = state["parameters"]["max_external_commands"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, resumed, _ = run_pending_resume(command, env)
+    assert completed.returncode == 0
+    assert resumed["current_operation"] == "PENDING_RESPONSE_CONTINUATION"
+    assert resumed["current_operation_external_command_count"] == 1
+    assert resumed["pending_response_last_checked_at"] == resumed["current_operation_started_at"]
+
+
+def test_pending_resume_never_invokes_ask_send_or_new() -> None:
+    command, env, _ = pending_resume_case([legacy_detail()])
+    _, _, calls = run_pending_resume(command, env)
+    continuation_verbs = [call[1] for call in calls[7:]]
+    assert continuation_verbs == ["detail"]
+    assert not {"ask", "send", "new"}.intersection(continuation_verbs)
+
+
+def test_pending_resume_does_not_change_send_count() -> None:
+    command, env, pending = pending_resume_case([legacy_detail()])
+    before = (pending["send_attempt_count"], pending["message_send_count"])
+    _, resumed, _ = run_pending_resume(command, env)
+    assert (resumed["send_attempt_count"], resumed["message_send_count"]) == before
+
+
+def test_pending_resume_requires_saved_conversation() -> None:
+    command, env, state = pending_resume_case([])
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["verified_target_conversation_id"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, _, calls = run_pending_resume(command, env)
+    assert completed.returncode == 1
+    assert "saved identity" in completed.stderr
+    assert len(calls) == 7
+
+
+def test_pending_resume_preserves_message_identity() -> None:
+    command, env, pending = pending_resume_case([legacy_detail()])
+    _, resumed, _ = run_pending_resume(command, env)
+    assert resumed["work_item_id"] == pending["work_item_id"]
+    assert resumed["message_id"] == pending["message_id"]
+    assert resumed["original_send_started_at"] == pending["original_send_started_at"]
+
+
+def test_pending_resume_remains_pending_for_incomplete_reply() -> None:
+    incomplete = legacy_detail(False)
+    command, env, _ = pending_resume_case([
+        incomplete,
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        incomplete,
+    ])
+    completed, state, calls = run_pending_resume(command, env)
+    assert completed.returncode == 2
+    assert state["delivery_state"] == "RESPONSE_PENDING"
+    assert state["pending_response_last_result"] == "RESPONSE_PENDING"
+    assert [call[1] for call in calls[7:]] == ["detail", "status", "read"]
+
+
+def test_pending_resume_accepts_later_complete_rr_review() -> None:
+    command, env, _ = pending_resume_case([legacy_detail()])
+    _, state, _ = run_pending_resume(command, env)
+    assert state["response_identity_status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert state["official_response_eligible"] is True
+    assert state["pending_response_last_result"] == "RESPONSE_READY"
+
+
+def test_pending_resume_rejects_wrong_reply_identity() -> None:
+    wrong = legacy_detail(False)
+    wrong["stdout"] = json.dumps([
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"},
+        {"Role": "assistant", "Text": rr_review_text(message_id=f"{LEGACY_MESSAGE_ID}-WRONG"), "Generating": False, "StableSeconds": 3},
+    ])
+    command, env, _ = pending_resume_case([wrong])
+    completed, state, _ = run_pending_resume(command, env)
+    assert completed.returncode == 2
+    assert state["delivery_state"] == "RESPONSE_IDENTITY_REJECTED"
+    assert state["response_identity_status"] == "RESPONSE_IDENTITY_REJECTED"
+    assert state["pending_response_last_identity_status"] == "RESPONSE_IDENTITY_MISMATCH"
+    assert state["pending_response_last_result"] == "RESPONSE_IDENTITY_REJECTED"
+    assert state["official_response_eligible"] is False
+
+
+def test_pending_resume_stops_at_configured_limit() -> None:
+    incomplete = legacy_detail(False)
+    command, env, state = pending_resume_case([
+        incomplete,
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        incomplete,
+    ])
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["parameters"]["max_pending_response_continuations"] = 1
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, resumed, _ = run_pending_resume(command, env)
+    assert completed.returncode == 2
+    assert resumed["delivery_state"] == "BLOCKED_RESPONSE_TIMEOUT"
+    assert resumed["pending_response_continuation_count"] == 1
+    assert resumed["pending_response_last_result"] == "BLOCKED_RESPONSE_TIMEOUT"
+    assert TRANSPORT_MODULE.MAX_PENDING_RESPONSE_CONTINUATIONS == 3
 
 
 def test_compact_packet_payload_is_single_line_and_lossless() -> None:
@@ -1765,6 +1917,140 @@ def test_rr_response_exact_identity_is_accepted() -> None:
     assert result["review"]["IN_REPLY_TO_MESSAGE_ID"] == LEGACY_MESSAGE_ID
 
 
+def test_canonical_in_reply_to_message_id_is_accepted() -> None:
+    result = rr_identity_result([rr_review_text()])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["IN_REPLY_TO_MESSAGE_ID"] == LEGACY_MESSAGE_ID
+    assert result["review"]["REPLY_ID_SOURCE"] == "CANONICAL"
+
+
+def test_exact_legacy_reply_to_message_id_is_normalized() -> None:
+    result = rr_identity_result([rr_review_text(reply_field="REPLY_TO_MESSAGE_ID")])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["IN_REPLY_TO_MESSAGE_ID"] == LEGACY_MESSAGE_ID
+    assert result["review"]["REPLY_ID_SOURCE"] == "LEGACY_ALIAS"
+    assert "REPLY_TO_MESSAGE_ID" not in result["review"]
+
+
+def test_legacy_alias_wrong_message_id_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(
+        message_id=f"{LEGACY_MESSAGE_ID}-OTHER", reply_field="REPLY_TO_MESSAGE_ID",
+    )])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_canonical_and_alias_same_value_are_accepted() -> None:
+    result = rr_identity_result([rr_review_text(
+        extra_fields=(("REPLY_TO_MESSAGE_ID", LEGACY_MESSAGE_ID),),
+    )])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["IN_REPLY_TO_MESSAGE_ID"] == LEGACY_MESSAGE_ID
+    assert result["review"]["REPLY_ID_SOURCE"] == "CANONICAL"
+
+
+def test_canonical_and_alias_conflict_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(
+        extra_fields=(("REPLY_TO_MESSAGE_ID", f"{LEGACY_MESSAGE_ID}-OTHER"),),
+    )])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_duplicate_legacy_alias_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(
+        reply_field="REPLY_TO_MESSAGE_ID",
+        extra_fields=(("REPLY_TO_MESSAGE_ID", LEGACY_MESSAGE_ID),),
+    )])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_missing_reply_identity_fields_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(omit="IN_REPLY_TO_MESSAGE_ID")])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_legacy_alias_does_not_bypass_rr_envelope_validation() -> None:
+    text = "leading text\n" + rr_review_text(reply_field="REPLY_TO_MESSAGE_ID")
+    result = rr_identity_result([text])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+    assert result["review"] is None
+
+
+def test_optional_response_message_metadata_does_not_contaminate_fields() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(
+        ("MESSAGE_ID", f"{LEGACY_WORK_ITEM}-R0-REVIEW"),
+        ("MESSAGE_TYPE", "RR_REVIEW"),
+    ))])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["WORK_ITEM_ID"] == LEGACY_WORK_ITEM
+    assert result["review"]["ROUND"] == "0"
+
+
+def test_exact_response_message_id_is_accepted() -> None:
+    value = f"{LEGACY_WORK_ITEM}-R0-REVIEW"
+    result = rr_identity_result([rr_review_text(extra_fields=(("MESSAGE_ID", value),))])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["RESPONSE_MESSAGE_ID"] == value
+
+
+def test_wrong_response_message_id_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(
+        ("MESSAGE_ID", f"{LEGACY_WORK_ITEM}-R0-REVIEW-OTHER"),
+    ))])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_exact_rr_review_message_type_is_accepted() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(("MESSAGE_TYPE", "RR_REVIEW"),))])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["RESPONSE_MESSAGE_TYPE"] == "RR_REVIEW"
+
+
+def test_wrong_response_message_type_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(("MESSAGE_TYPE", "EVIDENCE_PACKET"),))])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_duplicate_response_message_id_is_rejected() -> None:
+    value = f"{LEGACY_WORK_ITEM}-R0-REVIEW"
+    result = rr_identity_result([rr_review_text(extra_fields=(
+        ("MESSAGE_ID", value), ("MESSAGE_ID", value),
+    ))])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_duplicate_response_message_type_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(
+        ("MESSAGE_TYPE", "RR_REVIEW"), ("MESSAGE_TYPE", "RR_REVIEW"),
+    ))])
+    assert result["status"] == "RESPONSE_IDENTITY_REJECTED"
+
+
+def test_unknown_top_level_field_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(("UNKNOWN_FIELD", "value"),))])
+    assert result["status"] == "RESPONSE_PROTOCOL_REJECTED"
+
+
+def test_legacy_reply_alias_with_valid_message_metadata_is_accepted() -> None:
+    result = rr_identity_result([rr_review_text(
+        reply_field="REPLY_TO_MESSAGE_ID",
+        extra_fields=(
+            ("MESSAGE_ID", f"{LEGACY_WORK_ITEM}-R0-REVIEW"),
+            ("MESSAGE_TYPE", "RR_REVIEW"),
+        ),
+    )])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["REPLY_ID_SOURCE"] == "LEGACY_ALIAS"
+
+
+def test_work_item_and_round_remain_exact_with_optional_metadata() -> None:
+    result = rr_identity_result([rr_review_text(extra_fields=(
+        ("MESSAGE_ID", f"{LEGACY_WORK_ITEM}-R0-REVIEW"),
+        ("MESSAGE_TYPE", "RR_REVIEW"),
+    ))])
+    assert result["review"]["WORK_ITEM_ID"] == LEGACY_WORK_ITEM
+    assert result["review"]["ROUND"] == "0"
+
+
 def test_response_source_is_bound_to_detail_result() -> None:
     sent, state, _, command, env = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
@@ -1927,7 +2213,12 @@ def test_rr_response_wrong_round_is_rejected() -> None:
 def test_rr_response_missing_identity_field_is_rejected() -> None:
     for field in ("WORK_ITEM_ID", "IN_REPLY_TO_MESSAGE_ID", "ROUND"):
         result = rr_identity_result([rr_review_text(omit=field)])
-        assert result["status"] == "RESPONSE_IDENTITY_MISSING", field
+        expected = (
+            "RESPONSE_IDENTITY_REJECTED"
+            if field == "IN_REPLY_TO_MESSAGE_ID"
+            else "RESPONSE_IDENTITY_MISSING"
+        )
+        assert result["status"] == expected, field
         assert result["review"] is None
 
 
@@ -2054,6 +2345,16 @@ def main() -> int:
         test_recover_accepts_later_identity_bound_rr_review,
         test_manual_recover_uses_fresh_operation_budget,
         test_manual_recover_preserves_original_send_started_at,
+        test_pending_response_can_resume_in_new_invocation,
+        test_pending_resume_uses_fresh_operation_budget,
+        test_pending_resume_never_invokes_ask_send_or_new,
+        test_pending_resume_does_not_change_send_count,
+        test_pending_resume_requires_saved_conversation,
+        test_pending_resume_preserves_message_identity,
+        test_pending_resume_remains_pending_for_incomplete_reply,
+        test_pending_resume_accepts_later_complete_rr_review,
+        test_pending_resume_rejects_wrong_reply_identity,
+        test_pending_resume_stops_at_configured_limit,
         test_compact_packet_payload_is_single_line_and_lossless,
         test_compact_packet_identity_is_accepted_with_formatter_suffix,
         test_compact_packet_wrong_identity_is_rejected,
@@ -2102,6 +2403,24 @@ def main() -> int:
         test_send_same_message_id_rejected_regression,
         test_send_external_budget_regression,
         test_rr_response_exact_identity_is_accepted,
+        test_canonical_in_reply_to_message_id_is_accepted,
+        test_exact_legacy_reply_to_message_id_is_normalized,
+        test_legacy_alias_wrong_message_id_is_rejected,
+        test_canonical_and_alias_same_value_are_accepted,
+        test_canonical_and_alias_conflict_is_rejected,
+        test_duplicate_legacy_alias_is_rejected,
+        test_missing_reply_identity_fields_is_rejected,
+        test_legacy_alias_does_not_bypass_rr_envelope_validation,
+        test_optional_response_message_metadata_does_not_contaminate_fields,
+        test_exact_response_message_id_is_accepted,
+        test_wrong_response_message_id_is_rejected,
+        test_exact_rr_review_message_type_is_accepted,
+        test_wrong_response_message_type_is_rejected,
+        test_duplicate_response_message_id_is_rejected,
+        test_duplicate_response_message_type_is_rejected,
+        test_unknown_top_level_field_is_rejected,
+        test_legacy_reply_alias_with_valid_message_metadata_is_accepted,
+        test_work_item_and_round_remain_exact_with_optional_metadata,
         test_response_source_is_bound_to_detail_result,
         test_accept_delivery_cannot_overwrite_verified_target,
         test_wrong_messages_cannot_be_paired_with_expected_conversation,

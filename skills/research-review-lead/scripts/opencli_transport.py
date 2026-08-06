@@ -36,6 +36,7 @@ MAX_RECOVERY_ATTEMPTS = 1
 MAX_DETAIL_CHECKS = 1
 MAX_EXTERNAL_COMMANDS = 9
 MAX_EXPERIMENT_SECONDS = 60
+MAX_PENDING_RESPONSE_CONTINUATIONS = 3
 PREPARE_MAX_SEND_ATTEMPTS = 0
 PREPARE_MAX_RECOVERY_ATTEMPTS = 0
 PREPARE_MAX_DETAIL_CHECKS = 0
@@ -58,6 +59,9 @@ DELIVERY_STATES = {
     "RESPONSE_IDENTITY_AMBIGUOUS",
     "OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS",
     "RESPONSE_SOURCE_CONVERSATION_MISMATCH",
+    "RESPONSE_IDENTITY_REJECTED",
+    "RESPONSE_PROTOCOL_REJECTED",
+    "BLOCKED_RESPONSE_TIMEOUT",
     "FAILED",
 }
 NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT"}
@@ -76,6 +80,9 @@ RR_RESPONSE_FIELDS = (
     "VALIDATION",
     "USER_DECISION_REQUIRED",
 )
+RR_REPLY_ID_ALIAS = "REPLY_TO_MESSAGE_ID"
+RR_OPTIONAL_RESPONSE_FIELDS = ("MESSAGE_ID", "MESSAGE_TYPE")
+RR_ALLOWED_RESPONSE_FIELDS = (*RR_RESPONSE_FIELDS, RR_REPLY_ID_ALIAS, *RR_OPTIONAL_RESPONSE_FIELDS)
 RR_REVIEW_BEGIN = "RR_REVIEW_BEGIN"
 RR_REVIEW_END = "RR_REVIEW_END"
 
@@ -351,6 +358,8 @@ def begin_operation(state: dict[str, Any], operation: str) -> None:
     state["work_item_state"] = "IN_PROGRESS"
     if operation == "MANUAL_RECOVER":
         state["manual_recover_started_at"] = started
+    elif operation == "PENDING_RESPONSE_CONTINUATION":
+        state["pending_response_last_checked_at"] = started
 
 
 def operation_elapsed_seconds(state: dict[str, Any]) -> float:
@@ -602,7 +611,12 @@ def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_
     return True, bool(text), bool(text) and not generating and stable
 
 
-def rr_response_fields(text: str) -> dict[str, str]:
+def rr_response_fields(
+    text: str,
+    expected_message_id: str | None = None,
+    expected_work_item_id: str | None = None,
+    expected_round: int | str | None = None,
+) -> dict[str, str]:
     """Extract fields only from an exact RR review envelope."""
     lines = text.splitlines()
     nonempty = [index for index, line in enumerate(lines) if line.strip()]
@@ -621,10 +635,12 @@ def rr_response_fields(text: str) -> dict[str, str]:
     header = re.compile(r"^([A-Z][A-Z0-9_]*):(?:[ \t]*(.*))?\r?$")
     for line in body:
         match = header.fullmatch(line)
-        if match and match.group(1) in RR_RESPONSE_FIELDS:
+        if match:
             current = match.group(1)
+            if current not in RR_ALLOWED_RESPONSE_FIELDS:
+                return {"PROTOCOL_ERROR": f"UNKNOWN_TOP_LEVEL_FIELD:{current}"}
             if current in blocks:
-                return {}
+                return {"REPLY_IDENTITY_ERROR": f"DUPLICATE_FIELD:{current}"}
             blocks[current] = [match.group(2) or ""]
         elif current is not None:
             blocks[current].append(line)
@@ -634,6 +650,39 @@ def rr_response_fields(text: str) -> dict[str, str]:
         value = "\n".join(lines).strip()
         if value:
             fields[name] = value
+
+    canonical = fields.get("IN_REPLY_TO_MESSAGE_ID")
+    alias = fields.pop(RR_REPLY_ID_ALIAS, None)
+    if canonical is None and alias is None:
+        fields["REPLY_IDENTITY_ERROR"] = "MISSING"
+    elif alias is not None and alias != expected_message_id:
+        fields["REPLY_IDENTITY_ERROR"] = "LEGACY_ALIAS_MISMATCH"
+    elif canonical is not None and alias is not None and canonical != alias:
+        fields["REPLY_IDENTITY_ERROR"] = "CANONICAL_ALIAS_CONFLICT"
+    elif canonical is None:
+        fields["IN_REPLY_TO_MESSAGE_ID"] = alias
+        fields["REPLY_ID_SOURCE"] = "LEGACY_ALIAS"
+    else:
+        fields["REPLY_ID_SOURCE"] = "CANONICAL"
+
+    response_message_id = fields.pop("MESSAGE_ID", None)
+    if response_message_id is not None:
+        expected_response_message_id = (
+            f"{expected_work_item_id}-R{expected_round}-REVIEW"
+            if expected_work_item_id is not None and expected_round is not None
+            else None
+        )
+        if not response_message_id or response_message_id != expected_response_message_id:
+            fields["REPLY_IDENTITY_ERROR"] = "RESPONSE_MESSAGE_ID_MISMATCH"
+        else:
+            fields["RESPONSE_MESSAGE_ID"] = response_message_id
+
+    response_message_type = fields.pop("MESSAGE_TYPE", None)
+    if response_message_type is not None:
+        if response_message_type != "RR_REVIEW":
+            fields["REPLY_IDENTITY_ERROR"] = "RESPONSE_MESSAGE_TYPE_MISMATCH"
+        else:
+            fields["RESPONSE_MESSAGE_TYPE"] = response_message_type
     return fields
 
 
@@ -696,12 +745,20 @@ def verify_rr_response_identity(
 
     complete: list[dict[str, str]] = []
     incomplete_seen = False
+    identity_rejected_seen = False
+    protocol_rejected_seen = False
     for message in messages[user_index + 1:]:
         text = stable_assistant_text(message)
         if text is None:
             continue
-        fields = rr_response_fields(text)
-        if set(RR_RESPONSE_FIELDS).issubset(fields):
+        fields = rr_response_fields(
+            text, last_sent_message_id, expected_work_item_id, expected_round
+        )
+        if "PROTOCOL_ERROR" in fields:
+            protocol_rejected_seen = True
+        elif "REPLY_IDENTITY_ERROR" in fields:
+            identity_rejected_seen = True
+        elif set(RR_RESPONSE_FIELDS).issubset(fields):
             complete.append(fields)
         else:
             incomplete_seen = True
@@ -718,6 +775,10 @@ def verify_rr_response_identity(
     elif len(matching) == 1:
         result["status"] = "RESPONSE_IDENTITY_VERIFIED"
         result["review"] = matching[0]
+    elif protocol_rejected_seen:
+        result["status"] = "RESPONSE_PROTOCOL_REJECTED"
+    elif identity_rejected_seen:
+        result["status"] = "RESPONSE_IDENTITY_REJECTED"
     elif incomplete_seen:
         result["status"] = "RESPONSE_IDENTITY_MISSING"
     elif complete:
@@ -1000,6 +1061,9 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "current_operation_external_command_count": 0,
         "manual_recover_started_at": None,
         "manual_recover_external_command_count": 0,
+        "pending_response_continuation_count": 0,
+        "pending_response_last_checked_at": None,
+        "pending_response_last_result": None,
         "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
@@ -1021,6 +1085,7 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
             "max_external_commands": args.max_external_commands,
             "max_experiment_seconds": args.max_experiment_seconds,
             "recent_candidate_limit": args.recent_candidate_limit,
+            "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
         },
     }
 
@@ -1452,6 +1517,8 @@ def send_command(args: argparse.Namespace) -> int:
 def recover_command(args: argparse.Namespace) -> int:
     state_path = Path(args.state_file)
     state = read_json(state_path)
+    if args.continue_pending:
+        return continue_pending_response(state, state_path)
     if state.get("delivery_state") == "MISROUTED_DELIVERY":
         return output_state(state)
     if not recovery_budget_available(state, "manual"):
@@ -1467,6 +1534,105 @@ def recover_command(args: argparse.Namespace) -> int:
         or state.get("actual_delivery_conversation_id"),
         recovery_kind="manual",
     )
+    write_json(state_path, state)
+    return output_state(state)
+
+
+def continue_pending_response(state: dict[str, Any], state_path: Path) -> int:
+    """Read one already-delivered pending response without sending or navigating elsewhere."""
+    state.setdefault("pending_response_continuation_count", 0)
+    state.setdefault("pending_response_last_checked_at", None)
+    state.setdefault("pending_response_last_result", None)
+    state.setdefault("parameters", {}).setdefault(
+        "max_pending_response_continuations", MAX_PENDING_RESPONSE_CONTINUATIONS
+    )
+    target = state.get("verified_target_conversation_id")
+    if (
+        state.get("delivery_state") != "RESPONSE_PENDING"
+        or state.get("response_identity_status") != "RESPONSE_PENDING"
+        or not target
+        or not state.get("work_item_id")
+        or not state.get("message_id")
+        or state.get("actual_delivery_conversation_id") != target
+    ):
+        raise ValueError(
+            "pending response continuation requires confirmed RESPONSE_PENDING delivery, "
+            "saved identity, and matching verified Conversation"
+        )
+    limit = state["parameters"]["max_pending_response_continuations"]
+    if state["pending_response_continuation_count"] >= limit:
+        state["pending_response_last_result"] = "BLOCKED_RESPONSE_TIMEOUT"
+        set_state(state, "BLOCKED_RESPONSE_TIMEOUT", "pending response continuation limit exhausted")
+        stop(state, "BLOCKED_RESPONSE_TIMEOUT")
+        write_json(state_path, state)
+        return output_state(state)
+
+    begin_operation(state, "PENDING_RESPONSE_CONTINUATION")
+    state["pending_response_continuation_count"] += 1
+    write_json(state_path, state)
+    result = command(
+        state,
+        state_path,
+        "pending-response-detail",
+        ["chatgpt", "detail", target, "-f", "json", "--window", "background"],
+        state["parameters"]["command_wait_seconds"],
+    )
+    batch = ResponseMessageBatch(
+        conversation_id=target,
+        messages=tuple(result_rows(result)),
+        source_kind="PENDING_DETAIL_RESULT",
+        raw_output_path=state["raw_outputs"][-1] if result is not None else None,
+    )
+    stable_assistant_found = any(stable_assistant_text(message) for message in batch.messages)
+    if not stable_assistant_found:
+        status = command(
+            state,
+            state_path,
+            "pending-response-status",
+            ["chatgpt", "status", "-f", "json", "--window", "background"],
+            state["parameters"]["command_wait_seconds"],
+        )
+        current_id = conversation_id_from_url(status_url(status) or "")
+        if current_id != target:
+            state["pending_response_last_identity_status"] = "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
+            state["response_identity_status"] = "RESPONSE_IDENTITY_REJECTED"
+            state["official_response_eligible"] = False
+            state["pending_response_last_result"] = "RESPONSE_IDENTITY_REJECTED"
+            set_state(state, "RESPONSE_IDENTITY_REJECTED", "pending read source did not match saved Conversation")
+            stop(state, "RESPONSE_IDENTITY_REJECTED", "IN_PROGRESS")
+            write_json(state_path, state)
+            return output_state(state)
+        read_result = command(
+            state,
+            state_path,
+            "pending-response-read",
+            ["chatgpt", "read", "-f", "json", "--window", "background"],
+            state["parameters"]["command_wait_seconds"],
+        )
+        batch = ResponseMessageBatch(
+            conversation_id=target,
+            messages=tuple(result_rows(read_result)),
+            source_kind="PENDING_READ_RESULT",
+            raw_output_path=state["raw_outputs"][-1] if read_result is not None else None,
+        )
+
+    accept_delivery(state, batch)
+    identity_status = state["response_identity_status"]
+    state["pending_response_last_identity_status"] = identity_status
+    if identity_status == "RESPONSE_IDENTITY_VERIFIED":
+        state["pending_response_last_result"] = "RESPONSE_READY"
+    elif identity_status == "RESPONSE_PENDING":
+        if state["pending_response_continuation_count"] >= limit:
+            state["pending_response_last_result"] = "BLOCKED_RESPONSE_TIMEOUT"
+            set_state(state, "BLOCKED_RESPONSE_TIMEOUT", "pending response continuation limit exhausted")
+            stop(state, "BLOCKED_RESPONSE_TIMEOUT")
+        else:
+            state["pending_response_last_result"] = "RESPONSE_PENDING"
+    else:
+        state["pending_response_last_result"] = "RESPONSE_IDENTITY_REJECTED"
+        state["response_identity_status"] = "RESPONSE_IDENTITY_REJECTED"
+        set_state(state, "RESPONSE_IDENTITY_REJECTED", "stable Assistant response failed exact RR identity")
+        stop(state, "RESPONSE_IDENTITY_REJECTED", "IN_PROGRESS")
     write_json(state_path, state)
     return output_state(state)
 
@@ -1529,8 +1695,13 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("--max-experiment-seconds", type=int, default=MAX_EXPERIMENT_SECONDS)
     send.add_argument("--recent-candidate-limit", type=int, default=RECENT_CANDIDATE_LIMIT)
     send.set_defaults(handler=send_command)
-    recover = sub.add_parser("recover", help="one bounded exact-ID recovery without sending")
+    recover = sub.add_parser("recover", help="bounded delivery recovery or pending-response continuation without sending")
     recover.add_argument("--state-file", required=True)
+    recover.add_argument(
+        "--continue-pending",
+        action="store_true",
+        help="read one saved RESPONSE_PENDING Conversation without ask, send, or new",
+    )
     recover.set_defaults(handler=recover_command)
     cleanup = sub.add_parser("cleanup")
     cleanup.add_argument("--state-file", required=True)
