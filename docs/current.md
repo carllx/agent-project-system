@@ -9,23 +9,28 @@
 
 ## Active Work Item
 
-- **ID:** `EXTRACT-EXPERIMENT-PROTOCOL-001`
-- **Name:** 抽取实验协议验证模块
-- **Review decision:** `PASS_WITH_DEBT`
+- **ID:** `SIMPLIFY-PACKAGE-CHECKER-001`
+- **Name:** 拆分 Skill 包检查器的超长 main 函数
+- **Review decision:** `PASS`
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `fb99621a58dbec60cd1354960f8e6675dfe3f507`
-- **Current objective:** 将独立的实验协议验证函数和专用常量抽取到包内模块，同时保持所有行为、接口、错误文本、预算和 Transport 执行结果不变。
+- **Baseline commit:** `f49c3e2b43d5f78c0b6a5c005d8cabd44313ba99`
+- **Current objective:** 将 `scripts/check_skill_package.py` 的超长 `main()` 拆分为职责完整的同文件 Helper，同时保持检查规则、错误文本与顺序、退出码、成功输出和受控 Transport Runner 语义不变。
 
 ## Acceptance criteria
 
-- `unresolved_required_values`、`assess_experiment_protocol`、`validate_experiment_report` 及其专用常量只有一个权威定义，并由 `opencli_transport.py` 兼容性重新导出。
-- 三个函数的控制流、条件、返回结构、错误文本和默认值与基线 AST 等价。
-- 新模块可独立按绝对路径导入；Transport 仍支持直接执行、现有 `importlib` 加载和 Skill 包复制后的任意绝对路径。
-- `opencli_transport.py` 不超过 1350 行，新模块保持 250–350 行，Runtime 职责类别从六类降至五类。
-- 所有现有纯本地协议与 Transport 测试继续通过；不运行真实 OpenCLI 或 Browser，不发送消息，不 commit 或 push。
+- `main()` 仅按原顺序编排职责 Helper、汇总错误并选择成功或失败输出，不通过全局可变错误列表共享状态。
+- 检查规则、错误文本、错误顺序、退出码、成功输出和 Transport 测试发现及受控 Runner 语义与基线一致。
+- 标准 unittest 覆盖成功输出、失败退出码、多错误顺序、Runner 恰好调用一次及 Runner 失败传播；原九项执行完整性测试继续通过。
+- `main()` 目标不超过 90 行、项目内部 AST 估算复杂度不超过 12、嵌套不超过 2；Helper 保持完整职责，不机械碎片化。
+- 不修改 Skill 包、Transport、实验协议、Response Identity、Decision 协议或 Skill VERSION；不运行真实 OpenCLI 或 Browser，不发送消息，不 commit 或 push。
 
 ## Completed
 
+- `check_skill_package.py::main` 从 292 行、项目内部 AST 近似复杂度 47 降至 19 行、复杂度 3。
+- 成功输出、失败退出码、31 条错误文本及其顺序与重构前保持一致。
+- Transport Runner 仍在相同检查阶段执行，并且每次正常包检查只执行一次。
+- Checker 标准 unittest 14/14、直接及受控 Transport 测试 101/101 全部通过。
+- `COMPLEXITY-DELTA-002` 已由 Browser RR Lead 判定 `PASS` / `ACHIEVED`；基线 Commit 为 `f49c3e2b43d5f78c0b6a5c005d8cabd44313ba99`，复测未修改仓库文件。
 - `COMPLEXITY-BASELINE-001` 已由 Browser RR Lead 判定 `PASS` / `ACHIEVED`；基线 Commit 为 `fb99621a58dbec60cd1354960f8e6675dfe3f507`，调查未修改仓库文件。
 - 将三个实验协议验证函数及八个专用协议常量抽取到 `scripts/experiment_protocol.py`；Transport 通过基于 `__file__` 的本地加载兼容性重导出原 API。
 - 抽取前后函数 AST dump 全部匹配；三个函数均只有一个定义，协议常量均只有一个字面权威定义。
@@ -57,31 +62,31 @@
 
 ## Next action
 
-- 完成经用户授权的本地 Commit；提交验证通过且工作区干净后，开始只读 `COMPLEXITY-DELTA-002` 复测。
+- 完成经用户授权的本地 Commit；提交验证通过且工作区干净后，开始只读 `COMPLEXITY-DELTA-003` 复测。
 
 ## Files to read
 
 - `AGENTS.md`
 - `README.md`
 - `docs/index.md`
-- `docs/specs/research-review-loop.md`
-- `skills/research-review-lead/SKILL.md`
-- `skills/research-review-lead/scripts/experiment_protocol.py`
-- `skills/research-review-lead/scripts/opencli_transport.py`
-- `scripts/test_opencli_transport.py`
 - `scripts/check_skill_package.py`
+- `scripts/test_check_skill_package.py`
 
 ## Last validation
 
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
-- **Result:** Passed all 9 standard unittest cases.
+- **Result:** Passed all 14 standard unittest cases, including success/failure output, multi-error order, one Runner invocation and Runner failure propagation.
 - **Command:** `python scripts/test_opencli_transport.py`
 - **Result:** Passed all 101 directly invoked pure-local Transport tests.
 - **Command:** `python scripts/check_skill_package.py`
 - **Result:** Passed; controlled Runner called all 101 discovered tests exactly once, package version `0.4.11`.
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
-- **Command:** direct and copied-package `opencli_transport.py --help`, independent protocol and Transport `importlib` probes.
-- **Result:** Passed without relying on repository cwd.
+- **Command:** `python skills/research-review-lead/scripts/opencli_transport.py --help`
+- **Result:** Passed; direct script execution remains available.
+- **Command:** multi-error fixture, Runner invocation probe and temporary AST complexity probe.
+- **Result:** Baseline and current normalized stdout/stderr hashes match; Runner called once; `main()` is 19 lines with estimated complexity 3 and nesting 2.
+- **Command:** `git diff --check`
+- **Result:** Passed.
 - **Scope:** 只允许纯本地测试与静态检查；不运行真实 OpenCLI、Browser 实验或发送消息。
 - **Last verified:** 2026-08-06

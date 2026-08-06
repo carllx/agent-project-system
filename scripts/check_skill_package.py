@@ -110,6 +110,104 @@ REQUIRED_SKILL_MARKERS = {
     "Decision Receipt",
     "UNVERIFIED",
 }
+REQUIRED_TRANSPORT_TEST_SCENARIOS = (
+    "test_experiment_protocol_module_is_loadable",
+    "test_opencli_transport_reexports_protocol_api",
+    "test_direct_opencli_transport_help_still_works",
+    "test_help_exposes_prepare_new",
+    "test_help_exposes_require_existing_conversation",
+    "test_old_conversation_to_new_and_empty_result",
+    "test_real_empty_result_format_regression",
+    "test_nonzero_exact_empty_result_code_verifies_blank_page",
+    "test_empty_json_object_or_array_verifies_blank_page",
+    "test_runtime_contains_required_a2p1_fields",
+    "test_old_conversation_still_active_fails",
+    "test_existing_messages_fail",
+    "test_unknown_error_code_is_unparseable",
+    "test_unparseable_output_blocks_before_send",
+    "test_already_new_reports_no_conversation_transition",
+    "test_required_existing_from_new_stops_before_new",
+    "test_required_existing_from_root_stops_before_new",
+    "test_required_existing_rejects_invalid_conversation_url",
+    "test_prepare_without_requirement_remains_compatible",
+    "test_old_conversation_reports_verified_transition",
+    "test_all_read_failures_remain_zero_send",
+    "test_sixty_second_budget_is_machine_enforced",
+    "test_prepare_never_calls_ask_or_send",
+    "test_external_command_budget_stops_before_next_command",
+    "test_real_conversation_url_can_execute",
+    "test_angle_id_placeholder_is_rejected",
+    "test_chinese_paste_placeholder_is_rejected",
+    "test_empty_required_value_is_rejected",
+    "test_placeholder_failure_has_zero_external_commands",
+    "test_send_placeholder_is_blocked_before_opencli",
+    "test_send_help_exposes_integrated_prepare_new",
+    "test_start_new_and_send_completes_in_one_wrapper_call",
+    "test_start_new_and_send_uses_one_bounded_recovery_when_needed",
+    "test_synchronous_status_terminates_immediately",
+    "test_schedule_after_synchronous_result_is_protocol_violation",
+    "test_two_second_foreground_trace_is_synchronous",
+    "test_seven_second_foreground_trace_is_synchronous",
+    "test_background_wait_without_handle_is_rejected",
+    "test_bound_background_result_is_read_once_within_fifteen_seconds",
+    "test_background_completion_is_not_synchronous_completion",
+    "test_schedule_call_cannot_report_zero_wait",
+    "test_protocol_violation_cannot_return_pass",
+    "test_contradictory_report_fails_validation",
+    "test_unauthorized_sleep_is_protocol_violation",
+    "test_poll_requires_authorized_running_job",
+    "test_all_experiment_actions_are_counted",
+    "test_prepare_and_send_use_one_shared_read_classifier",
+    "test_send_manual_real_empty_result_sends_once_without_new",
+    "test_send_manual_existing_messages_block_without_send",
+    "test_send_manual_unknown_error_blocks_without_send",
+    "test_send_manual_unparseable_output_blocks_without_send",
+    "test_ask_yaml_explicit_conversation_id_is_accepted",
+    "test_ask_yaml_body_cannot_spoof_identity_or_ready_response",
+    "test_ask_identity_rejects_mismatch_and_non_chatgpt_url",
+    "test_ask_without_id_status_new_id_uses_post_history_and_exact_detail",
+    "test_status_without_id_uses_single_new_history_candidate",
+    "test_new_history_candidate_requires_both_exact_identifiers",
+    "test_new_history_candidate_without_identifiers_stays_unknown",
+    "test_work_item_only_without_message_id_stays_unknown",
+    "test_message_id_prefix_collision_does_not_match",
+    "test_work_item_id_prefix_collision_does_not_match",
+    "test_post_send_history_unavailable_uses_status_target_once",
+    "test_recovery_and_detail_budgets_remain_one",
+    "test_detail_count_only_increments_on_real_invocation",
+    "test_multiple_new_history_candidates_stay_unknown_without_detail",
+    "test_existing_conversation_recovery_is_not_misroute",
+    "test_visible_schedule_missing_from_agent_count_fails_validation",
+    "test_wrapper_zero_does_not_replace_agent_schedule_count",
+    "test_unavailable_agent_trace_does_not_claim_zero_total",
+    "test_protocol_violation_cannot_meet_experiment_acceptance",
+    "test_delivery_unknown_report_must_forbid_same_id_resend",
+    "test_report_requires_explicit_agent_trace_fields",
+    "test_report_rejects_unknown_agent_trace_verification",
+    "test_rr_response_exact_identity_is_accepted",
+    "test_response_source_is_bound_to_detail_result",
+    "test_accept_delivery_cannot_overwrite_verified_target",
+    "test_wrong_messages_cannot_be_paired_with_expected_conversation",
+    "test_duplicate_outbound_messages_are_ambiguous",
+    "test_duplicate_outbound_identity_cannot_enter_official_parser",
+    "test_exact_rr_review_envelope_is_accepted",
+    "test_assistant_quoted_rr_review_is_rejected",
+    "test_rr_review_with_leading_text_is_rejected",
+    "test_rr_review_with_trailing_text_is_rejected",
+    "test_rr_review_missing_begin_marker_is_rejected",
+    "test_rr_review_missing_end_marker_is_rejected",
+    "test_rr_response_wrong_work_item_is_rejected",
+    "test_rr_response_wrong_in_reply_to_message_is_rejected",
+    "test_rr_response_wrong_round_is_rejected",
+    "test_rr_response_missing_identity_field_is_rejected",
+    "test_rr_response_work_item_prefix_collision_is_rejected",
+    "test_rr_response_message_id_prefix_collision_is_rejected",
+    "test_user_quoted_rr_response_is_not_accepted",
+    "test_old_round_response_before_target_message_is_not_accepted",
+    "test_correct_response_from_wrong_conversation_is_rejected",
+    "test_multiple_matching_rr_responses_are_ambiguous",
+    "test_identity_failure_does_not_allow_same_message_id_resend",
+)
 FORBIDDEN_RUNTIME_PATTERNS = {
     "source-repository docs dependency": re.compile(
         r"(?:\.\./)+docs/|agent-project-system/docs/", re.IGNORECASE
@@ -257,10 +355,8 @@ def run_transport_tests(
     return len(discovered), errors
 
 
-def main() -> int:
+def check_package_layout() -> list[str]:
     errors: list[str] = []
-    executed_transport_test_count = 0
-
     if not PACKAGE.is_dir():
         errors.append(f"source package does not exist: {PACKAGE}")
     else:
@@ -276,7 +372,11 @@ def main() -> int:
             errors.append(f"expected package file does not exist: {relative}")
         for relative in sorted(actual_package_files - EXPECTED_PACKAGE_FILES):
             errors.append(f"unexpected package file: {relative}")
+    return errors
 
+
+def check_skill_entry_and_version() -> tuple[str, list[str]]:
+    errors: list[str] = []
     skill_text = ""
     if ENTRY.is_file():
         skill_text = ENTRY.read_text(encoding="utf-8")
@@ -309,7 +409,12 @@ def main() -> int:
             version_text,
         ):
             errors.append(f"VERSION is not simple SemVer: {version_text!r}")
+    return skill_text, errors
 
+
+def check_transport_package() -> tuple[int, list[str]]:
+    errors: list[str] = []
+    executed_transport_test_count = 0
     if not TRANSPORT_SCRIPT.is_file():
         errors.append("required transport wrapper does not exist: scripts/opencli_transport.py")
     else:
@@ -337,104 +442,7 @@ def main() -> int:
             ast.parse(test_text)
         except SyntaxError as error:
             errors.append(f"transport synthetic test has invalid Python syntax: {error}")
-        for scenario in (
-            "test_experiment_protocol_module_is_loadable",
-            "test_opencli_transport_reexports_protocol_api",
-            "test_direct_opencli_transport_help_still_works",
-            "test_help_exposes_prepare_new",
-            "test_help_exposes_require_existing_conversation",
-            "test_old_conversation_to_new_and_empty_result",
-            "test_real_empty_result_format_regression",
-            "test_nonzero_exact_empty_result_code_verifies_blank_page",
-            "test_empty_json_object_or_array_verifies_blank_page",
-            "test_runtime_contains_required_a2p1_fields",
-            "test_old_conversation_still_active_fails",
-            "test_existing_messages_fail",
-            "test_unknown_error_code_is_unparseable",
-            "test_unparseable_output_blocks_before_send",
-            "test_already_new_reports_no_conversation_transition",
-            "test_required_existing_from_new_stops_before_new",
-            "test_required_existing_from_root_stops_before_new",
-            "test_required_existing_rejects_invalid_conversation_url",
-            "test_prepare_without_requirement_remains_compatible",
-            "test_old_conversation_reports_verified_transition",
-            "test_all_read_failures_remain_zero_send",
-            "test_sixty_second_budget_is_machine_enforced",
-            "test_prepare_never_calls_ask_or_send",
-            "test_external_command_budget_stops_before_next_command",
-            "test_real_conversation_url_can_execute",
-            "test_angle_id_placeholder_is_rejected",
-            "test_chinese_paste_placeholder_is_rejected",
-            "test_empty_required_value_is_rejected",
-            "test_placeholder_failure_has_zero_external_commands",
-            "test_send_placeholder_is_blocked_before_opencli",
-            "test_send_help_exposes_integrated_prepare_new",
-            "test_start_new_and_send_completes_in_one_wrapper_call",
-            "test_start_new_and_send_uses_one_bounded_recovery_when_needed",
-            "test_synchronous_status_terminates_immediately",
-            "test_schedule_after_synchronous_result_is_protocol_violation",
-            "test_two_second_foreground_trace_is_synchronous",
-            "test_seven_second_foreground_trace_is_synchronous",
-            "test_background_wait_without_handle_is_rejected",
-            "test_bound_background_result_is_read_once_within_fifteen_seconds",
-            "test_background_completion_is_not_synchronous_completion",
-            "test_schedule_call_cannot_report_zero_wait",
-            "test_protocol_violation_cannot_return_pass",
-            "test_contradictory_report_fails_validation",
-            "test_unauthorized_sleep_is_protocol_violation",
-            "test_poll_requires_authorized_running_job",
-            "test_all_experiment_actions_are_counted",
-            "test_prepare_and_send_use_one_shared_read_classifier",
-            "test_send_manual_real_empty_result_sends_once_without_new",
-            "test_send_manual_existing_messages_block_without_send",
-            "test_send_manual_unknown_error_blocks_without_send",
-            "test_send_manual_unparseable_output_blocks_without_send",
-            "test_ask_yaml_explicit_conversation_id_is_accepted",
-            "test_ask_yaml_body_cannot_spoof_identity_or_ready_response",
-            "test_ask_identity_rejects_mismatch_and_non_chatgpt_url",
-            "test_ask_without_id_status_new_id_uses_post_history_and_exact_detail",
-            "test_status_without_id_uses_single_new_history_candidate",
-            "test_new_history_candidate_requires_both_exact_identifiers",
-            "test_new_history_candidate_without_identifiers_stays_unknown",
-            "test_work_item_only_without_message_id_stays_unknown",
-            "test_message_id_prefix_collision_does_not_match",
-            "test_work_item_id_prefix_collision_does_not_match",
-            "test_post_send_history_unavailable_uses_status_target_once",
-            "test_recovery_and_detail_budgets_remain_one",
-            "test_detail_count_only_increments_on_real_invocation",
-            "test_multiple_new_history_candidates_stay_unknown_without_detail",
-            "test_existing_conversation_recovery_is_not_misroute",
-            "test_visible_schedule_missing_from_agent_count_fails_validation",
-            "test_wrapper_zero_does_not_replace_agent_schedule_count",
-            "test_unavailable_agent_trace_does_not_claim_zero_total",
-            "test_protocol_violation_cannot_meet_experiment_acceptance",
-            "test_delivery_unknown_report_must_forbid_same_id_resend",
-            "test_report_requires_explicit_agent_trace_fields",
-            "test_report_rejects_unknown_agent_trace_verification",
-            "test_rr_response_exact_identity_is_accepted",
-            "test_response_source_is_bound_to_detail_result",
-            "test_accept_delivery_cannot_overwrite_verified_target",
-            "test_wrong_messages_cannot_be_paired_with_expected_conversation",
-            "test_duplicate_outbound_messages_are_ambiguous",
-            "test_duplicate_outbound_identity_cannot_enter_official_parser",
-            "test_exact_rr_review_envelope_is_accepted",
-            "test_assistant_quoted_rr_review_is_rejected",
-            "test_rr_review_with_leading_text_is_rejected",
-            "test_rr_review_with_trailing_text_is_rejected",
-            "test_rr_review_missing_begin_marker_is_rejected",
-            "test_rr_review_missing_end_marker_is_rejected",
-            "test_rr_response_wrong_work_item_is_rejected",
-            "test_rr_response_wrong_in_reply_to_message_is_rejected",
-            "test_rr_response_wrong_round_is_rejected",
-            "test_rr_response_missing_identity_field_is_rejected",
-            "test_rr_response_work_item_prefix_collision_is_rejected",
-            "test_rr_response_message_id_prefix_collision_is_rejected",
-            "test_user_quoted_rr_response_is_not_accepted",
-            "test_old_round_response_before_target_message_is_not_accepted",
-            "test_correct_response_from_wrong_conversation_is_rejected",
-            "test_multiple_matching_rr_responses_are_ambiguous",
-            "test_identity_failure_does_not_allow_same_message_id_resend",
-        ):
+        for scenario in REQUIRED_TRANSPORT_TEST_SCENARIOS:
             if scenario not in test_text:
                 errors.append(f"transport synthetic test is missing scenario: {scenario}")
 
@@ -450,7 +458,11 @@ def main() -> int:
 
         executed_transport_test_count, execution_errors = run_transport_tests(TRANSPORT_TEST)
         errors.extend(execution_errors)
+    return executed_transport_test_count, errors
 
+
+def check_assets_and_references(skill_text: str) -> list[str]:
+    errors: list[str] = []
     asset_dir = PACKAGE / "assets"
     actual_assets = (
         {path.name for path in asset_dir.glob("*.md")} if asset_dir.is_dir() else set()
@@ -467,7 +479,11 @@ def main() -> int:
     for relative in sorted(referenced_assets):
         if not (PACKAGE / relative).is_file():
             errors.append(f"SKILL.md references missing package resource: {relative}")
+    return errors
 
+
+def check_portability_and_contract(skill_text: str) -> list[str]:
+    errors: list[str] = []
     for path in package_text_files() if PACKAGE.is_dir() else []:
         text = path.read_text(encoding="utf-8")
         relative = path.relative_to(PACKAGE).as_posix()
@@ -493,7 +509,11 @@ def main() -> int:
             flags=re.IGNORECASE,
         ):
             errors.append("SKILL.md appears to require Git evidence for every project")
+    return errors
 
+
+def check_repository_hygiene() -> list[str]:
+    errors: list[str] = []
     legacy_assets = ROOT / "assets" / "packets"
     if legacy_assets.exists() and any(legacy_assets.rglob("*.md")):
         errors.append("legacy assets/packets Markdown templates still exist")
@@ -526,13 +546,10 @@ def main() -> int:
         errors.append(
             f"package contains generated Python cache: {path.relative_to(PACKAGE)}"
         )
+    return errors
 
-    if errors:
-        print("Skill package checks failed:")
-        for error in errors:
-            print(f"- {error}")
-        return 1
 
+def print_success_summary(executed_transport_test_count: int) -> None:
     print(f"Skill package checks passed: {PACKAGE.relative_to(ROOT).as_posix()}")
     print("Entry: one valid SKILL.md with matching name and description.")
     print(f"Version: {VERSION.read_text(encoding='utf-8').strip()} (simple SemVer).")
@@ -548,6 +565,26 @@ def main() -> int:
     )
     print("Loop contract: roles, Goal Contract, delivery state, conversation identity, and HITL markers exist.")
     print("Portability: referenced resources exist; no forbidden runtime dependencies found.")
+
+
+def main() -> int:
+    errors: list[str] = []
+    errors.extend(check_package_layout())
+    skill_text, entry_and_version_errors = check_skill_entry_and_version()
+    errors.extend(entry_and_version_errors)
+    executed_transport_test_count, transport_errors = check_transport_package()
+    errors.extend(transport_errors)
+    errors.extend(check_assets_and_references(skill_text))
+    errors.extend(check_portability_and_contract(skill_text))
+    errors.extend(check_repository_hygiene())
+
+    if errors:
+        print("Skill package checks failed:")
+        for error in errors:
+            print(f"- {error}")
+        return 1
+
+    print_success_summary(executed_transport_test_count)
     return 0
 
 
