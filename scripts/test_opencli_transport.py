@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -43,7 +44,7 @@ open(counter_path, "w", encoding="utf-8").write(str(index + 1))
 with open(log_path, "a", encoding="utf-8") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\n")
 item = scenario[index]
-time.sleep(2 if item.get("timed_out") else item.get("sleep", 0))
+time.sleep(3 if item.get("timed_out") else item.get("sleep", 0))
 sys.stdout.write(item.get("stdout", ""))
 sys.stderr.write(item.get("stderr", ""))
 raise SystemExit(item.get("returncode", 0))
@@ -837,6 +838,340 @@ def recovery_sequence(
     ]
 
 
+def opencli_timeout_result() -> dict:
+    return legacy_result(
+        returncode=75,
+        stderr=(
+            "ok: false\nerror:\n  code: TIMEOUT\n"
+            "  message: chatgpt ask timed out after 120s\n  exitCode: 75\n"
+        ),
+    )
+
+
+def timeout_then_recover_sequence(detail_result: dict) -> list[dict]:
+    return [
+        legacy_status("https://chatgpt.com/new"),
+        legacy_history(OLD_ID),
+        legacy_result([]),
+        opencli_timeout_result(),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        legacy_history(OLD_ID, NEW_ID),
+        detail_result,
+    ]
+
+
+def run_recover(
+    command: list[str], env: dict[str, str]
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+    state_path = Path(command[command.index("--state-file") + 1])
+    completed = subprocess.run(
+        [sys.executable, str(TRANSPORT), "recover", "--state-file", str(state_path)],
+        capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    log = Path(env["OPENCLI_FAKE_LOG"])
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    return completed, state, calls
+
+
+def process_exists(pid: int) -> bool:
+    if os.name == "nt":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)
+        if not handle:
+            return False
+        exit_code = ctypes.c_ulong()
+        queried = ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return bool(queried and exit_code.value == 259)
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_ask_hard_timeout_returns_before_global_budget() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-ask-hard-timeout-"))
+    fake = root / "hanging_opencli.py"
+    child_pid = root / "child.pid"
+    fake.write_text(
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding='utf-8')\n"
+        "time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    previous = os.environ.get("OPENCLI_TRANSPORT_EXECUTABLE")
+    os.environ["OPENCLI_TRANSPORT_EXECUTABLE"] = str(fake)
+    started = time.monotonic()
+    try:
+        result = TRANSPORT_MODULE.run_opencli([str(child_pid)], 0.5)
+    finally:
+        if previous is None:
+            os.environ.pop("OPENCLI_TRANSPORT_EXECUTABLE", None)
+        else:
+            os.environ["OPENCLI_TRANSPORT_EXECUTABLE"] = previous
+    elapsed = time.monotonic() - started
+    assert result["timed_out"] is True
+    assert result["process_tree_terminated"] is True
+    assert elapsed < 5, elapsed
+    assert elapsed < TRANSPORT_MODULE.MAX_EXPERIMENT_SECONDS
+    assert child_pid.is_file()
+    assert not process_exists(int(child_pid.read_text(encoding="utf-8")))
+
+
+def test_ask_timeout_preserves_recovery_budget() -> None:
+    completed, state, calls, _, _ = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert completed.returncode == 2
+    assert state["ask_timed_out"] is True
+    assert state["recovery_attempt_count"] == 0
+    assert state["detail_check_count"] == 0
+    assert state["external_command_count"] < state["parameters"]["max_external_commands"]
+    assert [call[1] for call in calls] == ["status", "history", "read", "ask"]
+
+
+def test_timeout_does_not_mark_message_as_not_sent() -> None:
+    _, state, _, _, _ = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+
+
+def test_timeout_forbids_same_message_id_resend() -> None:
+    _, _, calls, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    assert repeated.returncode == 1
+    assert "same-ID resend is forbidden" in repeated.stderr
+    assert sum(call[1] == "ask" for call in calls) == 1
+
+
+def test_recover_never_invokes_ask_or_send() -> None:
+    _, _, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail(False)),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    completed, _, calls = run_recover(command, env)
+    assert completed.returncode == 2
+    recovery_verbs = [call[1] for call in calls[4:]]
+    assert recovery_verbs == ["status", "history", "detail"]
+    assert "ask" not in recovery_verbs and "send" not in recovery_verbs
+
+
+def test_recover_can_bind_conversation_after_ask_timeout() -> None:
+    _, _, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail(False)),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    _, state, _ = run_recover(command, env)
+    assert state["actual_delivery_conversation_id"] == NEW_ID
+    assert state["verified_target_conversation_id"] == NEW_ID
+    assert state["response_source_conversation_id"] == NEW_ID
+
+
+def test_recover_pending_response_preserves_conversation_id() -> None:
+    _, _, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail(False)),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    _, state, _ = run_recover(command, env)
+    assert state["delivery_state"] == "RESPONSE_PENDING"
+    assert state["response_identity_status"] == "RESPONSE_PENDING"
+    assert state["verified_target_conversation_id"] == NEW_ID
+    assert state["official_response_eligible"] is False
+
+
+def test_recover_accepts_later_identity_bound_rr_review() -> None:
+    _, _, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    completed, state, _ = run_recover(command, env)
+    assert completed.returncode == 0
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["response_identity_status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert state["official_response_eligible"] is True
+
+
+def test_manual_recover_uses_fresh_operation_budget() -> None:
+    _, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["started_at"] = "2000-01-01T00:00:00+00:00"
+    state["current_operation_started_at"] = state["started_at"]
+    state["external_command_count"] = state["parameters"]["max_external_commands"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, recovered, calls = run_recover(command, env)
+    assert completed.returncode == 0
+    assert recovered["current_operation"] == "MANUAL_RECOVER"
+    assert recovered["current_operation_started_at"] == recovered["manual_recover_started_at"]
+    assert recovered["current_operation_external_command_count"] == 3
+    assert [call[1] for call in calls[4:]] == ["status", "history", "detail"]
+
+
+def test_manual_recover_preserves_original_send_started_at() -> None:
+    _, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    original = state["original_send_started_at"]
+    state["started_at"] = "2000-01-01T00:00:00+00:00"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _, recovered, _ = run_recover(command, env)
+    assert recovered["original_send_started_at"] == original
+    assert recovered["manual_recover_started_at"] != original
+
+
+def test_manual_recover_has_independent_attempt_budget() -> None:
+    _, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["automatic_recovery_attempt_count"] = 1
+    state["recovery_attempt_count"] = 1
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, recovered, _ = run_recover(command, env)
+    assert completed.returncode == 0
+    assert recovered["automatic_recovery_attempt_count"] == 1
+    assert recovered["manual_recovery_attempt_count"] == 1
+    assert recovered["recovery_attempt_count"] == 2
+
+
+def test_manual_recover_never_invokes_ask_send_or_new() -> None:
+    _, _, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail(False)),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    _, _, calls = run_recover(command, env)
+    recovery_verbs = [call[1] for call in calls[4:]]
+    assert recovery_verbs == ["status", "history", "detail"]
+    assert not {"ask", "send", "new"}.intersection(recovery_verbs)
+
+
+def test_manual_recover_does_not_change_send_count() -> None:
+    _, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
+    before = (state["send_attempt_count"], state["message_send_count"])
+    _, recovered, _ = run_recover(command, env)
+    assert (recovered["send_attempt_count"], recovered["message_send_count"]) == before
+
+
+def test_empty_status_does_not_erase_candidate_conversation_id() -> None:
+    sequence = timeout_then_recover_sequence(legacy_detail())
+    sequence[4] = legacy_status("https://chatgpt.com/")
+    _, state, _, command, env = run_send_case(
+        sequence, manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["candidate_conversation_id"] = NEW_ID
+    state["post_send_active_conversation_id"] = NEW_ID
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    _, recovered, _ = run_recover(command, env)
+    assert recovered["last_observed_status_conversation_id"] is None
+    assert recovered["candidate_conversation_id"] == NEW_ID
+    assert recovered["post_send_active_conversation_id"] == NEW_ID
+
+
+def test_conflicting_candidate_is_not_silently_overwritten() -> None:
+    state = {
+        "candidate_conversation_id": "candidate-a",
+        "candidate_conversation_conflicts": [],
+    }
+    TRANSPORT_MODULE.observe_candidate(state, "candidate-b", "STATUS_PROBE")
+    assert state["candidate_conversation_id"] == "candidate-a"
+    assert state["candidate_conversation_conflict"] is True
+    assert state["candidate_conversation_conflicts"] == [{
+        "preserved_conversation_id": "candidate-a",
+        "observed_conversation_id": "candidate-b",
+        "source": "STATUS_PROBE",
+        "at": state["candidate_conversation_conflicts"][0]["at"],
+    }]
+
+
+def test_candidate_is_not_verified_target() -> None:
+    state = {
+        "candidate_conversation_id": None,
+        "verified_target_conversation_id": None,
+        "official_response_eligible": False,
+    }
+    TRANSPORT_MODULE.observe_candidate(state, NEW_ID, "STATUS_PROBE")
+    assert state["candidate_conversation_id"] == NEW_ID
+    assert state["verified_target_conversation_id"] is None
+    assert state["official_response_eligible"] is False
+
+
+def test_exact_detail_promotes_candidate_to_verified_target() -> None:
+    sequence = timeout_then_recover_sequence(legacy_detail())
+    sequence[4] = legacy_status("https://chatgpt.com/")
+    _, state, _, command, env = run_send_case(
+        sequence, manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["candidate_conversation_id"] = NEW_ID
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    completed, recovered, _ = run_recover(command, env)
+    assert completed.returncode == 0
+    assert recovered["verified_target_conversation_id"] == NEW_ID
+    assert recovered["response_source_conversation_id"] == NEW_ID
+    assert recovered["official_response_eligible"] is True
+
+
+def test_old_timeout_state_can_run_one_manual_recover() -> None:
+    sequence = timeout_then_recover_sequence(legacy_detail())
+    sequence[4] = legacy_status("https://chatgpt.com/")
+    _, state, _, command, env = run_send_case(
+        sequence, manual_new_url="https://chatgpt.com/new",
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    raw_path = state_path.parent / "raw" / "legacy-status-after-send.json"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.write_text(json.dumps(legacy_status(f"https://chatgpt.com/c/{NEW_ID}")), encoding="utf-8")
+    state["raw_outputs"].append(str(raw_path))
+    for field in (
+        "automatic_recovery_attempt_count",
+        "manual_recovery_attempt_count",
+        "manual_recover_started_at",
+        "candidate_conversation_id",
+        "candidate_conversation_source",
+        "current_operation",
+        "current_operation_started_at",
+        "current_operation_external_command_count",
+        "original_send_started_at",
+    ):
+        state.pop(field, None)
+    state["started_at"] = "2000-01-01T00:00:00+00:00"
+    state["external_command_count"] = state["parameters"]["max_external_commands"]
+    state["recovery_attempt_count"] = 1
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    first, recovered, calls = run_recover(command, env)
+    assert first.returncode == 0
+    assert recovered["candidate_conversation_id"] == NEW_ID
+    assert recovered["verified_target_conversation_id"] == NEW_ID
+    assert recovered["manual_recovery_attempt_count"] == 1
+    first_call_count = len(calls)
+    _, repeated, repeated_calls = run_recover(command, env)
+    assert repeated["manual_recovery_attempt_count"] == 1
+    assert len(repeated_calls) == first_call_count
+
+
 def test_send_correct_new_conversation_regression() -> None:
     completed, state, _, _, _ = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
@@ -1179,7 +1514,7 @@ def test_send_manual_unparseable_output_blocks_without_send() -> None:
 
 
 def test_send_timeout_recovery_regression() -> None:
-    completed, state, _, _, _ = run_send_case([
+    sent, state, _, command, env = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
@@ -1187,7 +1522,11 @@ def test_send_timeout_recovery_regression() -> None:
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
         legacy_history(OLD_ID, NEW_ID), legacy_detail(),
     ])
-    assert completed.returncode == 0
+    assert sent.returncode == 2
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["recovery_attempt_count"] == 0
+    recovered, state, _ = run_recover(command, env)
+    assert recovered.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["recovery_attempt_count"] == 1
 
@@ -1354,7 +1693,7 @@ def test_rr_response_exact_identity_is_accepted() -> None:
 
 
 def test_response_source_is_bound_to_detail_result() -> None:
-    completed, state, _, _, _ = run_send_case([
+    sent, state, _, command, env = run_send_case([
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
@@ -1362,6 +1701,8 @@ def test_response_source_is_bound_to_detail_result() -> None:
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
         legacy_history(OLD_ID, NEW_ID), legacy_detail(),
     ])
+    assert sent.returncode == 2
+    completed, state, _ = run_recover(command, env)
     assert completed.returncode == 0
     assert state["response_source_kind"] == "DETAIL_RESULT"
     assert state["response_source_conversation_id"] == NEW_ID
@@ -1630,6 +1971,24 @@ def main() -> int:
         test_sixty_second_budget_is_machine_enforced,
         test_prepare_never_calls_ask_or_send,
         test_external_command_budget_stops_before_next_command,
+        test_ask_hard_timeout_returns_before_global_budget,
+        test_ask_timeout_preserves_recovery_budget,
+        test_timeout_does_not_mark_message_as_not_sent,
+        test_timeout_forbids_same_message_id_resend,
+        test_recover_never_invokes_ask_or_send,
+        test_recover_can_bind_conversation_after_ask_timeout,
+        test_recover_pending_response_preserves_conversation_id,
+        test_recover_accepts_later_identity_bound_rr_review,
+        test_manual_recover_uses_fresh_operation_budget,
+        test_manual_recover_preserves_original_send_started_at,
+        test_manual_recover_has_independent_attempt_budget,
+        test_manual_recover_never_invokes_ask_send_or_new,
+        test_manual_recover_does_not_change_send_count,
+        test_empty_status_does_not_erase_candidate_conversation_id,
+        test_conflicting_candidate_is_not_silently_overwritten,
+        test_candidate_is_not_verified_target,
+        test_exact_detail_promotes_candidate_to_verified_target,
+        test_old_timeout_state_can_run_one_manual_recover,
         test_send_correct_new_conversation_regression,
         test_send_help_exposes_integrated_prepare_new,
         test_start_new_and_send_completes_in_one_wrapper_call,

@@ -145,7 +145,7 @@ class PackageCheckerExecutionTests(unittest.TestCase):
             stdout.getvalue(),
             "Skill package checks passed: skills/research-review-lead\n"
             "Entry: one valid SKILL.md with matching name and description.\n"
-            "Version: 0.4.11 (simple SemVer).\n"
+            "Version: 0.4.12 (simple SemVer).\n"
             "Assets: five required files, each with one authoritative copy.\n"
             "Transport structure: wrapper and experiment protocol module syntax and "
             "required package markers validated.\n"

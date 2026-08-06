@@ -27,6 +27,7 @@ from urllib.parse import urlparse
 PROCESS_MONOTONIC_STARTED = time.monotonic()
 PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 COMMAND_WAIT_SECONDS = 15
+ASK_HARD_TIMEOUT_GRACE_SECONDS = 1
 POLL_INTERVAL_SECONDS = 5
 TOTAL_RESPONSE_WAIT_SECONDS = 30
 MAX_SEND_ATTEMPTS_PER_MESSAGE = 1
@@ -172,18 +173,49 @@ def find_opencli() -> list[str]:
     raise RuntimeError("opencli was not found on PATH")
 
 
-def run_opencli(args: list[str], timeout: int) -> dict[str, Any]:
-    started = utc_now()
+def terminate_process_tree(process: subprocess.Popen[str]) -> bool:
+    """Terminate one OpenCLI process tree after a bounded command timeout."""
     try:
-        completed = subprocess.run(
-            [*find_opencli(), *args], capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=timeout, check=False,
-        )
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                timeout=5,
+                check=False,
+            )
+        else:
+            os.killpg(process.pid, 15)
+        process.communicate(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        process.kill()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.SubprocessError:
+            return False
+    return process.poll() is not None
+
+
+def run_opencli(args: list[str], timeout: float) -> dict[str, Any]:
+    started = utc_now()
+    popen_options: dict[str, Any] = {}
+    if os.name == "nt":
+        popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_options["start_new_session"] = True
+    process = subprocess.Popen(
+        [*find_opencli(), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", **popen_options,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
         return {"started_at": started, "finished_at": utc_now(), "timed_out": False,
-                "returncode": completed.returncode, "stdout": completed.stdout, "stderr": completed.stderr}
+                "returncode": process.returncode, "stdout": stdout, "stderr": stderr,
+                "process_tree_terminated": False}
     except subprocess.TimeoutExpired as error:
+        terminated = terminate_process_tree(process)
         return {"started_at": started, "finished_at": utc_now(), "timed_out": True,
-                "returncode": None, "stdout": _decode(error.stdout), "stderr": _decode(error.stderr)}
+                "returncode": None, "stdout": _decode(error.stdout), "stderr": _decode(error.stderr),
+                "process_tree_terminated": terminated}
 
 
 def _decode(value: bytes | str | None) -> str:
@@ -306,6 +338,26 @@ def stop(state: dict[str, Any], reason: str, work_item_state: str = "BLOCKED") -
     state["stop_reason"] = reason
 
 
+def begin_operation(state: dict[str, Any], operation: str) -> None:
+    """Start one bounded operation without rewriting the original send audit time."""
+    started = utc_now()
+    state.setdefault("original_send_started_at", state.get("started_at") or started)
+    state["current_operation"] = operation
+    state["current_operation_started_at"] = started
+    state["current_operation_external_command_count"] = 0
+    state["stopped_at"] = None
+    state["stop_reason"] = None
+    state["work_item_state"] = "IN_PROGRESS"
+    if operation == "MANUAL_RECOVER":
+        state["manual_recover_started_at"] = started
+
+
+def operation_elapsed_seconds(state: dict[str, Any]) -> float:
+    started_at = state.get("current_operation_started_at") or state["started_at"]
+    started = datetime.fromisoformat(started_at)
+    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+
 def command(
     state: dict[str, Any],
     state_path: Path,
@@ -314,20 +366,30 @@ def command(
     timeout: int,
     before_invoke: Callable[[], None] | None = None,
 ) -> dict[str, Any] | None:
-    if state["external_command_count"] >= state["parameters"]["max_external_commands"]:
+    operation_count = state.get(
+        "current_operation_external_command_count", state["external_command_count"]
+    )
+    if operation_count >= state["parameters"]["max_external_commands"]:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXTERNAL_COMMANDS")
         return None
-    started = datetime.fromisoformat(state["started_at"])
-    elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    elapsed = operation_elapsed_seconds(state)
     if elapsed >= state["parameters"]["max_experiment_seconds"]:
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_EXPERIMENT_SECONDS")
         return None
     if before_invoke:
         before_invoke()
     state["external_command_count"] += 1
+    state["current_operation_external_command_count"] = operation_count + 1
+    if state.get("current_operation") == "MANUAL_RECOVER":
+        state["manual_recover_external_command_count"] = operation_count + 1
     result = run_opencli(args, min(timeout, max(1, int(state["parameters"]["max_experiment_seconds"] - elapsed))))
     save_raw(state, state_path, label, result)
     return result
+
+
+def remaining_experiment_seconds(state: dict[str, Any]) -> float:
+    elapsed = operation_elapsed_seconds(state)
+    return max(0.0, state["parameters"]["max_experiment_seconds"] - elapsed)
 
 
 def result_rows(result: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -443,6 +505,59 @@ def status_url(result: dict[str, Any] | None) -> str | None:
         if url:
             return str(url)
     return None
+
+
+def observe_candidate(
+    state: dict[str, Any], identity: str | None, source: str
+) -> None:
+    """Preserve the first non-empty Conversation candidate and record conflicts."""
+    if not identity:
+        return
+    current = state.get("candidate_conversation_id")
+    if not current:
+        state["candidate_conversation_id"] = identity
+        state["candidate_conversation_source"] = source
+        return
+    if current == identity:
+        return
+    conflict = {
+        "preserved_conversation_id": current,
+        "observed_conversation_id": identity,
+        "source": source,
+        "at": utc_now(),
+    }
+    conflicts = state.setdefault("candidate_conversation_conflicts", [])
+    if not any(
+        item.get("preserved_conversation_id") == current
+        and item.get("observed_conversation_id") == identity
+        and item.get("source") == source
+        for item in conflicts
+    ):
+        conflicts.append(conflict)
+    state["candidate_conversation_conflict"] = True
+
+
+def restore_legacy_candidate_evidence(state: dict[str, Any]) -> None:
+    """Recover non-empty candidate evidence from fields and recorded status outputs."""
+    for field, source in (
+        ("candidate_conversation_id", "PERSISTED_CANDIDATE"),
+        ("recovery_target_conversation_id", "LEGACY_RECOVERY_TARGET"),
+        ("post_send_active_conversation_id", "LEGACY_POST_SEND_STATUS"),
+        ("actual_delivery_conversation_id", "LEGACY_ACTUAL_DELIVERY"),
+        ("ask_reported_conversation_id", "LEGACY_ASK_RESULT"),
+    ):
+        observe_candidate(state, state.get(field), source)
+    for raw_value in state.get("raw_outputs", []):
+        raw_path = Path(raw_value)
+        if "status-after-send" not in raw_path.name or not raw_path.is_file():
+            continue
+        try:
+            observed_url = status_url(read_json(raw_path))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            continue
+        observed_id = conversation_id_from_url(observed_url or "")
+        state["last_observed_status_conversation_id"] = observed_id
+        observe_candidate(state, observed_id, f"LEGACY_RAW_STATUS:{raw_path.name}")
 
 
 def marker(message_id: str) -> str:
@@ -841,6 +956,7 @@ def read_payload(args: argparse.Namespace) -> str:
 
 
 def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
+    started = utc_now()
     return {
         "schema_version": 4, "work_item_id": args.work_item_id, "message_id": args.message_id,
         "operation": "START_NEW_AND_SEND" if args.prepare_new else "SEND",
@@ -851,7 +967,10 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "actual_delivery_conversation_id": None, "verified_target_url": None,
         "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
         "send_attempt_count": 0, "message_send_count": 0,
-        "recovery_attempt_count": 0, "detail_check_count": 0,
+        "recovery_attempt_count": 0,
+        "automatic_recovery_attempt_count": 0,
+        "manual_recovery_attempt_count": 0,
+        "detail_check_count": 0,
         "external_command_count": 0, "misroute_detected": False,
         "read_result": "NOT_RUN", "blank_environment_verified": False,
         "pre_send_already_new": False, "new_command_called": False,
@@ -862,7 +981,12 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "response_source_kind": None,
         "response_raw_output_path": None,
         "verified_rr_review": None,
-        "started_at": utc_now(), "stopped_at": None,
+        "started_at": started, "original_send_started_at": started,
+        "current_operation": "SEND", "current_operation_started_at": started,
+        "current_operation_external_command_count": 0,
+        "manual_recover_started_at": None,
+        "manual_recover_external_command_count": 0,
+        "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
         "post_send_status_url": None, "post_send_active_conversation_id": None,
@@ -870,6 +994,11 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "post_send_history_available": False, "post_send_recent_conversation_ids": [],
         "new_candidate_diff": [], "recovery_target_source": None,
         "recovery_target_conversation_id": None,
+        "candidate_conversation_id": None,
+        "candidate_conversation_source": None,
+        "candidate_conversation_conflict": False,
+        "candidate_conversation_conflicts": [],
+        "last_observed_status_conversation_id": None,
         "parameters": {
             "command_wait_seconds": args.command_wait_seconds,
             "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
@@ -994,10 +1123,40 @@ def capture_post_send_status(
 ) -> dict[str, Any] | None:
     status = command(state, state_path, "status-after-send", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
     current_url = status_url(status)
-    state["post_send_status_url"] = current_url
-    state["post_send_active_conversation_id"] = conversation_id_from_url(current_url or "")
+    current_id = conversation_id_from_url(current_url or "")
+    state["last_observed_status_conversation_id"] = current_id
+    if current_url:
+        state["post_send_status_url"] = current_url
+    if current_id:
+        state["post_send_active_conversation_id"] = current_id
+    observe_candidate(state, current_id, "POST_SEND_STATUS")
     state["post_send_page_mode"] = page_mode(current_url)
     return status
+
+
+def recovery_attempt_key(recovery_kind: str) -> str:
+    if recovery_kind == "automatic":
+        return "automatic_recovery_attempt_count"
+    if recovery_kind == "manual":
+        return "manual_recovery_attempt_count"
+    raise ValueError(f"unsupported recovery kind: {recovery_kind}")
+
+
+def recovery_budget_available(state: dict[str, Any], recovery_kind: str) -> bool:
+    key = recovery_attempt_key(recovery_kind)
+    return state.get(key, 0) < state["parameters"]["max_recovery_attempts"]
+
+
+def record_recovery_attempt(state: dict[str, Any], recovery_kind: str) -> None:
+    key = recovery_attempt_key(recovery_kind)
+    state[key] = state.get(key, 0) + 1
+    separated_total = (
+        state.get("automatic_recovery_attempt_count", 0)
+        + state.get("manual_recovery_attempt_count", 0)
+    )
+    state["recovery_attempt_count"] = max(
+        state.get("recovery_attempt_count", 0), separated_total
+    )
 
 
 def recover_delivery(
@@ -1005,11 +1164,16 @@ def recover_delivery(
     returned_identity: str | None = None,
     post_send_status: dict[str, Any] | None = None,
     post_send_status_checked: bool = False,
+    recovery_kind: str = "automatic",
 ) -> bool:
-    if state["recovery_attempt_count"] >= state["parameters"]["max_recovery_attempts"]:
-        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_RECOVERY_ATTEMPTS")
+    if not recovery_budget_available(state, recovery_kind):
+        stop(
+            state,
+            f"EXPERIMENT_BUDGET_EXHAUSTED: MAX_{recovery_kind.upper()}_RECOVERY_ATTEMPTS",
+        )
         return False
-    state["recovery_attempt_count"] += 1
+    record_recovery_attempt(state, recovery_kind)
+    restore_legacy_candidate_evidence(state)
     candidates: list[tuple[str, str]] = []
     status = post_send_status if post_send_status_checked else capture_post_send_status(state, state_path)
     current_url = status_url(status)
@@ -1028,6 +1192,10 @@ def recover_delivery(
         if identity and all(existing != identity for existing, _ in candidates):
             candidates.append((identity, source))
 
+    add_candidate(
+        state.get("candidate_conversation_id"),
+        state.get("candidate_conversation_source") or "PERSISTED_CANDIDATE",
+    )
     add_candidate(returned_identity, "ASK_REPORTED_CONVERSATION_ID")
     add_candidate(current_id, "POST_SEND_STATUS")
     if len(new_ids) == 1:
@@ -1036,6 +1204,7 @@ def recover_delivery(
         state["recovery_target_source"] = "AMBIGUOUS_NEW_CANDIDATE_DIFF"
     if candidates:
         identity, source = candidates[0]
+        observe_candidate(state, identity, source)
         state["recovery_target_source"] = source
         state["recovery_target_conversation_id"] = identity
         response_batch = detail(state, state_path, identity)
@@ -1175,12 +1344,26 @@ def send_command(args: argparse.Namespace) -> int:
         state["message_send_count"] = 1
         write_json(state_path, state)
 
+    recovery_reserve = min(
+        float(args.command_wait_seconds),
+        float(args.max_experiment_seconds) / 2,
+    )
+    ask_hard_timeout = min(
+        float(args.command_wait_seconds) + ASK_HARD_TIMEOUT_GRACE_SECONDS,
+        remaining_experiment_seconds(state) - recovery_reserve,
+    )
+    if ask_hard_timeout <= 0:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: ASK_RECOVERY_RESERVE")
+        write_json(state_path, state)
+        return output_state(state)
+    state["parameters"]["ask_hard_timeout_seconds"] = round(ask_hard_timeout, 3)
+    state["parameters"]["recovery_budget_reserve_seconds"] = recovery_reserve
     result = command(
         state,
         state_path,
         "ask",
         ["chatgpt", "ask", payload, *target, "--timeout", str(args.command_wait_seconds), "-f", "json", "--window", "background"],
-        args.command_wait_seconds + 5,
+        ask_hard_timeout,
         before_invoke=mark_send_invoked,
     )
     if result is None:
@@ -1188,8 +1371,11 @@ def send_command(args: argparse.Namespace) -> int:
         return output_state(state)
     returned_id, returned_url = ask_identity(result)
     state["ask_return_code"] = result.get("returncode")
-    state["ask_timed_out"] = bool(result.get("timed_out"))
     state["ask_error_code"] = cli_error_code(str(result.get("stderr") or ""))
+    state["ask_timed_out"] = bool(
+        result.get("timed_out") or state["ask_error_code"] == "TIMEOUT"
+    )
+    state["ask_process_tree_terminated"] = result.get("process_tree_terminated", False)
     state["ask_reported_conversation_id"] = returned_id
     state["ask_reported_url"] = returned_url
     state["ask_delivery_classification"] = classify_ask_delivery(result, returned_id)
@@ -1200,7 +1386,10 @@ def send_command(args: argparse.Namespace) -> int:
         return output_state(state)
     post_status_id = state.get("post_send_active_conversation_id")
     identity_conflict = bool(returned_id and post_status_id and returned_id != post_status_id)
-    if result["timed_out"] or result["returncode"] != 0:
+    if state["ask_timed_out"]:
+        set_state(state, "DELIVERY_UNKNOWN", "ask timed out; same Message ID resend is forbidden")
+        stop(state, "ASK_TIMEOUT: recover with the persisted state", "IN_PROGRESS")
+    elif result["returncode"] != 0:
         set_state(state, "DELIVERY_UNKNOWN", "ask timed out or returned nonzero; one bounded recovery only")
         recover_delivery(
             state, state_path, returned_id, post_status,
@@ -1240,7 +1429,19 @@ def recover_command(args: argparse.Namespace) -> int:
     state = read_json(state_path)
     if state.get("delivery_state") == "MISROUTED_DELIVERY":
         return output_state(state)
-    recover_delivery(state, state_path, state.get("actual_delivery_conversation_id"))
+    if not recovery_budget_available(state, "manual"):
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_MANUAL_RECOVERY_ATTEMPTS")
+        write_json(state_path, state)
+        return output_state(state)
+    begin_operation(state, "MANUAL_RECOVER")
+    restore_legacy_candidate_evidence(state)
+    recover_delivery(
+        state,
+        state_path,
+        state.get("candidate_conversation_id")
+        or state.get("actual_delivery_conversation_id"),
+        recovery_kind="manual",
+    )
     write_json(state_path, state)
     return output_state(state)
 

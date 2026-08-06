@@ -9,23 +9,28 @@
 
 ## Active Work Item
 
-- **ID:** `SIMPLIFY-PACKAGE-CHECKER-001`
-- **Name:** 拆分 Skill 包检查器的超长 main 函数
-- **Review decision:** `PASS`
+- **ID:** `OPENCLI-ASK-TIMEOUT-001`
+- **Name:** 恢复有界 ask 与两阶段发送/回复恢复
+- **Review decision:** `PASS_WITH_DEBT`
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `f49c3e2b43d5f78c0b6a5c005d8cabd44313ba99`
-- **Current objective:** 将 `scripts/check_skill_package.py` 的超长 `main()` 拆分为职责完整的同文件 Helper，同时保持检查规则、错误文本与顺序、退出码、成功输出和受控 Transport Runner 语义不变。
+- **Skill status:** `BLOCKED_FIRST_USE`
+- **Baseline commit:** `ea7f01efc3da305804df957a21f879ca45d85883`
+- **Current objective:** 使 OpenCLI ask 在 Wrapper 的短硬超时内结束整个本地进程树，保留同 Message ID 禁止重发语义和后续只读恢复预算。
 
 ## Acceptance criteria
 
-- `main()` 仅按原顺序编排职责 Helper、汇总错误并选择成功或失败输出，不通过全局可变错误列表共享状态。
-- 检查规则、错误文本、错误顺序、退出码、成功输出和 Transport 测试发现及受控 Runner 语义与基线一致。
-- 标准 unittest 覆盖成功输出、失败退出码、多错误顺序、Runner 恰好调用一次及 Runner 失败传播；原九项执行完整性测试继续通过。
-- `main()` 目标不超过 90 行、项目内部 AST 估算复杂度不超过 12、嵌套不超过 2；Helper 保持完整职责，不机械碎片化。
-- 不修改 Skill 包、Transport、实验协议、Response Identity、Decision 协议或 Skill VERSION；不运行真实 OpenCLI 或 Browser，不发送消息，不 commit 或 push。
+- OpenCLI 自身 timeout 不可靠时，Wrapper 仍在全局实验预算前硬终止 ask 本地进程树。
+- ask 超时保留 `message_send_count=1` 和同 Message ID 禁止重发，不得回退为 `NOT_SENT`。
+- ask 超时后持久化 state 并保留一次只读 `recover` 预算；`recover` 不得调用 ask、send 或 new。
+- 只读恢复可绑定 Conversation，在回复未完成时保留 ID，并能接受稍后出现的同源身份绑定 RR Review。
+- 不修改 Response Identity、Decision、发送次数、Recovery/Detail 预算上限或其他非阻断范围；不重发旧 Message ID，不 commit 或 push。
 
 ## Completed
 
+- Wrapper 在 OpenCLI ask 不遵守自身 timeout 时硬终止完整本地进程树，同时保留 `message_send_count=1`、`DELIVERY_UNKNOWN` 和同 Message ID 禁止重发语义。
+- 自动 Recovery 与 manual recover 使用独立的一次性预算；manual recover 使用新的操作时间预算，不调用 ask、send 或 new，也不改变发送次数。
+- Candidate Conversation ID 单调保存；空 status 不覆盖 Candidate，冲突 Candidate 被显式记录，只有精确消息证据才能晋升为 verified target。
+- Checker 标准 unittest 14/14 与 Transport 119/119 全部通过，共 133/133 项独立测试；受控 Runner 发现并逐项执行全部 119 项 Transport 测试。
 - `check_skill_package.py::main` 从 292 行、项目内部 AST 近似复杂度 47 降至 19 行、复杂度 3。
 - 成功输出、失败退出码、31 条错误文本及其顺序与重构前保持一致。
 - Transport Runner 仍在相同检查阶段执行，并且每次正常包检查只执行一次。
@@ -48,10 +53,11 @@
 
 ## Blockers
 
-- None.
+- 首次真实循环仍受消息可观测性阻断：OpenCLI ChatGPT detail 没有暴露完整消息正文，无法读取完整 `MESSAGE_ID`、RR Review Envelope 和 `NEXT_WORK_ORDER`。
 
 ## Debt
 
+- OpenCLI ChatGPT detail 没有暴露完整消息正文；这是当前外部可观测性 Debt，不否定 ask timeout 与 recovery identity 修复已经通过。
 - 高复杂度协议函数只是被隔离，尚未简化。
 - `opencli_transport.py` 仍约 1325 行。
 - `send_command` 等状态机热点尚未处理。
@@ -62,7 +68,7 @@
 
 ## Next action
 
-- 完成经用户授权的本地 Commit；提交验证通过且工作区干净后，开始只读 `COMPLEXITY-DELTA-003` 复测。
+- 创建独立阻断 Work Item，只读调查现有 MVP-002 / MVP-003 Conversation 的完整消息可观测性；不得发送新消息或创建新 Conversation。
 
 ## Files to read
 
@@ -77,9 +83,9 @@
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
 - **Result:** Passed all 14 standard unittest cases, including success/failure output, multi-error order, one Runner invocation and Runner failure propagation.
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed all 101 directly invoked pure-local Transport tests.
+- **Result:** Passed all 119 directly invoked pure-local Transport tests.
 - **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed; controlled Runner called all 101 discovered tests exactly once, package version `0.4.11`.
+- **Result:** Passed; controlled Runner called all 119 discovered tests exactly once, package version `0.4.12`.
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed; 14 registered Markdown files.
 - **Command:** `python skills/research-review-lead/scripts/opencli_transport.py --help`
@@ -88,5 +94,5 @@
 - **Result:** Baseline and current normalized stdout/stderr hashes match; Runner called once; `main()` is 19 lines with estimated complexity 3 and nesting 2.
 - **Command:** `git diff --check`
 - **Result:** Passed.
-- **Scope:** 只允许纯本地测试与静态检查；不运行真实 OpenCLI、Browser 实验或发送消息。
+- **Scope:** 本地验证未调用真实 OpenCLI 或 Browser、未发送消息；后续只读恢复证明 detail 消息正文不完整。
 - **Last verified:** 2026-08-06
