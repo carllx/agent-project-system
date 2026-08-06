@@ -29,6 +29,14 @@ Resolve these paths relative to this `SKILL.md`:
 
 Filled Packets, receipts, transport records, and Handoffs are temporary by default. Keep transport state and raw command output in the system temporary directory, record their paths, exclude credentials and unnecessary private content, and clean them after the loop. Do not depend on an IDE-private scratch directory. Prefer stdin; use a safely created temporary file only when stdin is unsuitable.
 
+## Invocation, Assets, and Handoff
+
+- Use the target Agent platform's Skill selection entry to invoke `research-review-lead` manually when the user requests a Browser Research / Review loop.
+- The frontmatter `description` supplies semantic candidate signals, but the platform may not proactively select this Skill without an explicit selection. Do not treat that platform behavior as a project-level installation failure.
+- After the Skill is selected, resolve bundled paths relative to this `SKILL.md` and read only the asset required by the current scenario. Use `rr-lead-init.md` for creating the Browser RR Lead conversation, `context-packet.md` for the first Work Item sync, `evidence-packet.md` for verified execution evidence, `decision-request.md` for a genuine user decision gate, and `handoff.md` when continuity or Agent handoff is needed.
+- When the user expresses handoff intent (for example, “生成 handoff”, “我要交接了”, or “准备给下一个 Agent”), read `assets/handoff.md` and produce its structured handoff from the current project evidence. Output the Handoff in the conversation by default; write a project file only when the user or target-project rules explicitly require persistence, using the designated project location and avoiding disposable document buildup.
+- Do not require a target project to duplicate these Skill invocation or asset-reading rules in `AGENTS.md`.
+
 ## Establish one Goal Contract
 
 Create one authoritative contract in the Context Packet:
