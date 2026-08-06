@@ -140,6 +140,12 @@ RESPONSE_READY
 FAILED
 ```
 
+正式 RR Lead 回复采用两层身份绑定。Transport 必须把一次 `detail` 或同一次 `ask` 结果产生的 Conversation ID、messages、来源类型和原始输出路径封装成不可拆分的 `ResponseMessageBatch`。`verified_target_conversation_id` 必须在进入正式回复验证前由调用层显式建立；`accept_delivery` 只能消费该 Batch，不得写入或覆盖 verified target。传输来源必须证明 `response_batch.conversation_id == verified_target_conversation_id`，不得信任回复正文自报的 Conversation ID。
+
+正式回复必须由第一条非空行 `RR_REVIEW_BEGIN` 和最后一条非空行 `RR_REVIEW_END` 完整封包，封包外不得有说明、示例、引用或其他文字。封包内必须完整包含 `WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID`、`ROUND`、`REVIEW_DECISION`、`WORK_ITEM_STATE`、`ACCEPTANCE_STATUS`、`FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`；字段不得重复，前三项必须分别与当前 Work Item、最后发送的完整 Message ID 和预期 Round 精确相等。
+
+解析器先在已验证 Conversation 的有序消息中收集同时精确包含目标 `WORK_ITEM_ID` 与 `MESSAGE_ID` 的 user-role 消息。零个返回 `RESPONSE_IDENTITY_MISMATCH`；多于一个返回 `OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS`，不得任意选择锚点或进入正式 Review Parser；恰好一个时只检查其后的 assistant-role 消息。用户引用、较早回复、其他 Conversation、缺字段、前缀或子串碰撞、封包外文字均不可成为正式审核，也不得本地补值。唯一完整匹配回复进入 `RESPONSE_IDENTITY_VERIFIED`；无回复保持 `RESPONSE_PENDING`，缺字段、身份不匹配、多个完整匹配或来源错误分别记录为 `RESPONSE_IDENTITY_MISSING`、`RESPONSE_IDENTITY_MISMATCH`、`RESPONSE_IDENTITY_AMBIGUOUS` 或 `RESPONSE_SOURCE_CONVERSATION_MISMATCH`。这些失败状态不得进入正式 Review Parser，也不得允许相同 Message ID 重发。
+
 CLI timeout 首先进入 `DELIVERY_UNKNOWN`。`MISROUTED_DELIVERY` 表示消息已确认送达，但进入发送前已存在且不是当前 Work Item 目标的 Conversation。进入后必须禁止相同 Message ID 重发、禁止继续使用错误 Conversation、禁止把其回复作为正式 RR Lead 输出，只记录错误 Conversation ID 与精确 Work Item/Message ID 命中的最少证据，并返回 Work Item `BLOCKED` 请求修复创建流程。旧 Conversation 命中永远不得晋升为 `DELIVERED`。
 
 传输拆成：

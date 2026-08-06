@@ -40,7 +40,10 @@ Judge only the declared acceptance criteria. Do not add new pass conditions with
 ## Required response
 
 ```text
-WORK_ITEM_ID
+RR_REVIEW_BEGIN
+WORK_ITEM_ID: <exact supplied Work Item ID>
+IN_REPLY_TO_MESSAGE_ID: <exact MESSAGE_ID of the reviewed Packet>
+ROUND: <exact supplied round>
 REVIEW_DECISION: PASS / PASS_WITH_DEBT / REVISE / ESCALATE
 WORK_ITEM_STATE: IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 ACCEPTANCE_STATUS
@@ -53,9 +56,10 @@ DEBT
 NEXT_WORK_ORDER
 VALIDATION
 USER_DECISION_REQUIRED
+RR_REVIEW_END
 ```
 
-Echo the supplied `WORK_ITEM_ID`. Return `ACHIEVED` only when every declared acceptance criterion is `MET` with sufficient evidence.
+Make `RR_REVIEW_BEGIN` the first non-empty line and `RR_REVIEW_END` the last non-empty line. Put every required field inside this envelope, emit each field once, and put no explanation, example, quotation, or other text outside it. Echo the supplied `WORK_ITEM_ID`, the reviewed Packet's complete `MESSAGE_ID` as `IN_REPLY_TO_MESSAGE_ID`, and its `ROUND`, all exactly. Return `ACHIEVED` only when every declared acceptance criterion is `MET` with sufficient evidence.
 
 ## User decision gate
 

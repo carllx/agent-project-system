@@ -9,36 +9,41 @@
 
 ## Active Work Item
 
-- **ID:** `VALIDATION-INTEGRITY-001`
-- **Name:** 消除 Skill 包检查的虚假通过
+- **ID:** `RESPONSE-IDENTITY-001`
+- **Name:** Browser RR Lead 回复身份绑定
+- **Review decision:** `PASS_WITH_DEBT`
 - **Work Item state:** `ACHIEVED`
-- **Baseline commit:** `c25dbece4bdec9e18e40d6822bba277b29ab2ee0`
-- **Current objective:** 让 `scripts/check_skill_package.py` 只有在真实 Transport 测试被发现、执行且全部通过时才能成功，并使成功输出只描述实际验证范围。
+- **Baseline commit:** `c6ed5ab9cc7703c5adf0dd38a61bb9f345f64ce3`
+- **Current objective:** 只有来源 Conversation、目标消息和回复中的 Work Item、Message ID、Round 全部精确绑定时，才把 Browser RR Lead 回复交给正式 Review Parser。
 
 ## Acceptance criteria
 
-- 检查器使用当前 Python 解释器启动受控 Runner，导入并直接调用 `scripts/test_opencli_transport.py` 中的测试，不安装新依赖。
-- 从测试文件 AST 发现的顶层同步 `test_*` 函数数量必须大于零，且每项必须由 Runner 恰好调用一次；异步测试明确拒绝。
-- 测试异常、非零退出、超时、导入失败或 Runner 完成结果缺失、不匹配时，检查器必须失败。
-- 成功输出区分静态结构检查与真实测试执行，不再把关键词存在描述为功能证明。
-- 保留现有包结构和纯本地测试边界；不运行真实 OpenCLI 或 Browser，不发送消息，不 push。
-
-## Confirmed implementation
-
-- 检查器启动独立 Python 子进程，由受控 Runner 导入测试模块并直接调用 AST 发现的每个顶层同步测试函数。
-- 只有 Runner 完成全部调用后写出的带随机令牌结构化结果才可证明完成；测试模块的 stdout 和 stderr 仅用于失败诊断。
-- 零测试、异步测试、异常、非零退出、超时、导入失败、结果缺失或调用集合不匹配均被定义为检查失败。
+- RR Lead 初始化规则和 Skill 要求正式回复精确回显 `WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID` 与 `ROUND`。
+- Parser 只接受与预先建立的 `verified_target_conversation_id` 同源绑定、位于唯一精确 outbound 用户消息之后、assistant-role、正式封包完整且三项内容身份全部精确匹配的唯一回复。
+- 旧 Round、其他 Message、前缀碰撞、用户引用、错误 Conversation、缺字段和多个匹配回复均不得成为正式审核。
+- 重复 outbound 锚点必须返回 `OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS`；正式回复必须以 `RR_REVIEW_BEGIN` / `RR_REVIEW_END` 严格封包且封包外无文字。
+- 身份失败不得触发相同 Message ID 重发，不改变发送次数、恢复预算、Conversation 创建路径或 Decision 协议。
+- 只运行 fake OpenCLI 或纯函数测试；不运行真实 OpenCLI 或 Browser，不发送消息，不 commit 或 push。
 
 ## Completed
 
-- 受控子进程 Runner 会导入测试模块并逐个直接调用 75 个 AST 发现的顶层同步测试函数；测试模块自行打印的 PASS、SKIP 或其他文本不参与成功判定。
-- 9 项标准 `unittest` 检查器回归测试全部通过，覆盖名称字符串、零测试、伪 PASS、真实异常、超时、多测试逐项调用、异步拒绝、导入失败和完成结果缺失。
-- 旧伪 PASS 探针现返回失败，并保留实际 `AssertionError` 诊断；75 项 Transport 测试通过受控 Runner 和直接入口分别验证。
-- 未修改 Transport Wrapper、Skill、Packet 或消息协议；未运行真实 OpenCLI 或 Browser，未发送消息，未 commit 或 push。
+- 修改前调查确认 Wrapper 没有正式 RR Review Parser；`ask_response()` 只提取文本，`inspect_messages()` 只判断目标用户消息后是否存在稳定 Assistant 文本。
+- 当前基线 Worktree clean，Skill 版本为 `0.4.8`，Transport 纯本地测试为 75 项。
+- 新增来源、role、消息顺序和三项内容身份的结构化验证；只有唯一完整匹配回复才写入 `verified_rr_review` 并使 `official_response_eligible=true`。
+- 新增 12 项纯本地回复身份测试；完整 Transport 套件从 75 项增至 87 项并全部通过，受控检查器也直接调用全部 87 项。
+- Skill 与 RR Lead 初始化规则要求精确回显 `WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID` 和 `ROUND`；版本按 patch 规则升至 `0.4.9`。
+- 修复来源校验自我满足：不可变 `ResponseMessageBatch` 绑定同一次 detail/ask 的 Conversation ID 与消息，调用层先建立 verified target，`accept_delivery` 不再写入或覆盖 target。
+- 重复 outbound 精确锚点在正式 Parser 前返回 `OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS`；正式 Assistant 回复只从完整 `RR_REVIEW_BEGIN` / `RR_REVIEW_END` 封包解析。
+- 新增 11 项纯本地回归，Transport 套件从 87 项增至 98 项并全部通过；受控检查器直接调用全部 98 项，Skill 版本升至 `0.4.10`。
+- 未调用真实 OpenCLI 或 Browser，未发送消息；未修改 Decision 协议或 `START_NEW_AND_SEND` 的发送、恢复和 Conversation 创建预算。
 
 ## Blockers
 
 - None.
+
+## Debt
+
+- 真实 OpenCLI / Browser 端到端行为尚未验证；该验证明确不属于本 Work Item。
 
 ## Decisions pending
 
@@ -46,7 +51,7 @@
 
 ## Next action
 
-- 本 Work Item 已达到验收条件；后续工作必须另建 Work Item，不在本项混入消息身份、Decision 协议或其他漏洞修复。
+- 创建经用户授权的本地 Commit；提交验证通过后开始独立调查 Work Item `COMPLEXITY-BASELINE-001`。
 
 ## Files to read
 
@@ -57,20 +62,15 @@
 - `skills/research-review-lead/SKILL.md`
 - `skills/research-review-lead/scripts/opencli_transport.py`
 - `scripts/test_opencli_transport.py`
+- `scripts/check_skill_package.py`
 
 ## Last validation
 
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
 - **Result:** Passed 9 discovered standard unittest cases.
-- **Command:** `python scripts/check_skill_package.py`
-- **Result:** Passed; controlled Runner directly called all 75 discovered top-level synchronous Transport tests exactly once without exceptions.
-- **Command:** forged-PASS temporary probe against `run_transport_tests`
-- **Result:** Rejected with exit code 1; `FALSE_PASS=False` and the called test's `AssertionError` was reported.
 - **Command:** `python scripts/test_opencli_transport.py`
-- **Result:** Passed 75 pure-local Transport tests directly.
-- **Command:** `python scripts/check_docs.py`
-- **Result:** Passed; 14 registered Markdown files.
-- **Command:** `git diff --check`
-- **Result:** Passed; only Git line-ending conversion warnings were emitted.
-- **Scope:** 只运行纯本地测试与静态检查；不运行真实 OpenCLI、Browser 实验或发送消息。
+- **Result:** Passed all 98 directly invoked pure-local Transport tests, including 11 new source-binding, duplicate-anchor, and response-envelope regressions.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed; controlled Runner directly called all 98 discovered tests exactly once without exceptions; package version `0.4.10`.
+- **Scope:** 只允许纯本地测试与静态检查；不运行真实 OpenCLI、Browser 实验或发送消息。
 - **Last verified:** 2026-08-06

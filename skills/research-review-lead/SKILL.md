@@ -183,7 +183,7 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
 python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
 ```
 
-For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Accept the real OpenCLI JSON or flat YAML `conversationId`/`conversationUrl` identity returned by `ask`. When `ask` returns no usable identity, recovery executes `POST_SEND_STATUS -> POST_SEND_HISTORY_REFRESH -> NEW_CANDIDATE_DIFF -> EXACT_ID_DETAIL_CHECK`: compare the same bounded recent-history window with the pre-send baseline, exclude every pre-send ID from the new-candidate diff, and use at most one exact detail check. Prefer an ask-reported identity, then the current post-send Conversation, then a unique new history candidate. If the current target is a pre-send Conversation and both exact identifiers match, mark `MISROUTED_DELIVERY`; if no exact two-marker match is found, preserve `DELIVERY_UNKNOWN` and forbid resend. Review the JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false.
+For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Accept the real OpenCLI JSON or flat YAML `conversationId`/`conversationUrl` identity returned by `ask`. When `ask` returns no usable identity, recovery executes `POST_SEND_STATUS -> POST_SEND_HISTORY_REFRESH -> NEW_CANDIDATE_DIFF -> EXACT_ID_DETAIL_CHECK`: compare the same bounded recent-history window with the pre-send baseline, exclude every pre-send ID from the new-candidate diff, and use at most one exact detail check. Prefer an ask-reported identity, then the current post-send Conversation, then a unique new history candidate. If the current target is a pre-send Conversation and both exact identifiers match, mark `MISROUTED_DELIVERY`; if no exact two-marker match is found, preserve `DELIVERY_UNKNOWN` and forbid resend. Review the JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false. Bind messages and source as one immutable `ResponseMessageBatch` created from one `detail` command or one `ask` result. Establish `verified_target_conversation_id` before calling `accept_delivery`; never let `accept_delivery` write or replace it. Require `response_batch.conversation_id` to exactly equal that verified target, and never trust a Conversation ID claimed by the response body.
 
 Default adjustable parameters are:
 
@@ -262,7 +262,10 @@ Transport A2 and A3 must both pass before the formal Loop starts. The formal Loo
 Require an actual Browser response containing:
 
 ```text
+RR_REVIEW_BEGIN
 WORK_ITEM_ID
+IN_REPLY_TO_MESSAGE_ID
+ROUND
 REVIEW_DECISION: PASS / PASS_WITH_DEBT / REVISE / ESCALATE
 WORK_ITEM_STATE: IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 ACCEPTANCE_STATUS
@@ -275,9 +278,10 @@ DEBT
 NEXT_WORK_ORDER
 VALIDATION
 USER_DECISION_REQUIRED
+RR_REVIEW_END
 ```
 
-Reject incomplete output; never fill missing fields locally. Execute `NEXT_WORK_ORDER` only for `IN_PROGRESS`, inside user authorization and project rules, with no pending decision. Build the next Evidence Packet from actual artifacts, commands, tests, observations, sources, failures, and acceptance mapping. Git evidence is conditional on Git being used.
+Require the first non-empty line to be exactly `RR_REVIEW_BEGIN` and the last non-empty line to be exactly `RR_REVIEW_END`; reject missing markers and any leading or trailing explanation, example, quotation, or other text. Parse required fields only inside the envelope, reject duplicates, and require `WORK_ITEM_ID`, `IN_REPLY_TO_MESSAGE_ID`, and `ROUND` to exactly equal the current Work Item, the last sent full Message ID, and the expected round. In the verified Conversation, collect user-role messages with exact `WORK_ITEM_ID` and `MESSAGE_ID`: reject zero matches, return `OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS` for multiple matches without selecting an anchor or entering the formal parser, and only for one match inspect assistant-role messages after it. Never parse a user quotation, an earlier Assistant reply, or content from another Conversation. Accept exactly one complete identity-matching response as `RESPONSE_IDENTITY_VERIFIED`; return `RESPONSE_IDENTITY_MISSING`, `RESPONSE_IDENTITY_MISMATCH`, `RESPONSE_IDENTITY_AMBIGUOUS`, `RESPONSE_SOURCE_CONVERSATION_MISMATCH`, or `RESPONSE_PENDING` otherwise. Reject incomplete output, never fill missing fields locally, never pass identity failures to the formal Review Parser, and never resend the same Message ID after an identity failure. Execute `NEXT_WORK_ORDER` only for `IN_PROGRESS`, inside user authorization and project rules, with no pending decision. Build the next Evidence Packet from actual artifacts, commands, tests, observations, sources, failures, and acceptance mapping. Git evidence is conditional on Git being used.
 
 ## Human-in-the-loop
 

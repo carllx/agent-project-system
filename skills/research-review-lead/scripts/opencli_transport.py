@@ -19,7 +19,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 from urllib.parse import urlparse
 
 
@@ -80,9 +80,40 @@ DELIVERY_STATES = {
     "DELIVERED",
     "RESPONSE_PENDING",
     "RESPONSE_READY",
+    "RESPONSE_IDENTITY_MISSING",
+    "RESPONSE_IDENTITY_MISMATCH",
+    "RESPONSE_IDENTITY_AMBIGUOUS",
+    "OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS",
+    "RESPONSE_SOURCE_CONVERSATION_MISMATCH",
     "FAILED",
 }
 NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT"}
+
+RR_RESPONSE_FIELDS = (
+    "WORK_ITEM_ID",
+    "IN_REPLY_TO_MESSAGE_ID",
+    "ROUND",
+    "REVIEW_DECISION",
+    "WORK_ITEM_STATE",
+    "ACCEPTANCE_STATUS",
+    "FINDINGS",
+    "BLOCKERS",
+    "DEBT",
+    "NEXT_WORK_ORDER",
+    "VALIDATION",
+    "USER_DECISION_REQUIRED",
+)
+RR_REVIEW_BEGIN = "RR_REVIEW_BEGIN"
+RR_REVIEW_END = "RR_REVIEW_END"
+
+
+class ResponseMessageBatch(NamedTuple):
+    """Messages and their transport-proven source as one immutable value."""
+
+    conversation_id: str
+    messages: tuple[dict[str, Any], ...]
+    source_kind: str
+    raw_output_path: str | None
 
 
 def unresolved_required_values(required_values: dict[str, Any]) -> list[str]:
@@ -744,6 +775,129 @@ def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_
     return True, bool(text), bool(text) and not generating and stable
 
 
+def rr_response_fields(text: str) -> dict[str, str]:
+    """Extract fields only from an exact RR review envelope."""
+    lines = text.splitlines()
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    if not nonempty:
+        return {}
+    first, last = nonempty[0], nonempty[-1]
+    if lines[first].strip() != RR_REVIEW_BEGIN or lines[last].strip() != RR_REVIEW_END:
+        return {}
+    body = lines[first + 1:last]
+    if any(line.strip() in {RR_REVIEW_BEGIN, RR_REVIEW_END} for line in body):
+        return {}
+
+    fields: dict[str, str] = {}
+    current: str | None = None
+    blocks: dict[str, list[str]] = {}
+    header = re.compile(r"^([A-Z][A-Z0-9_]*):(?:[ \t]*(.*))?\r?$")
+    for line in body:
+        match = header.fullmatch(line)
+        if match and match.group(1) in RR_RESPONSE_FIELDS:
+            current = match.group(1)
+            if current in blocks:
+                return {}
+            blocks[current] = [match.group(2) or ""]
+        elif current is not None:
+            blocks[current].append(line)
+        elif line.strip():
+            return {}
+    for name, lines in blocks.items():
+        value = "\n".join(lines).strip()
+        if value:
+            fields[name] = value
+    return fields
+
+
+def stable_assistant_text(message: dict[str, Any]) -> str | None:
+    if str(pick(message, "Role") or "").lower() != "assistant":
+        return None
+    text = str(pick(message, "Text") or "").strip()
+    generating = str(pick(message, "Generating") or "false").lower() == "true"
+    stable_value = pick(message, "StableSeconds")
+    try:
+        stable = float(stable_value) >= STABLE_SECONDS if stable_value is not None else not generating
+    except (TypeError, ValueError):
+        stable = False
+    return text if text and not generating and stable else None
+
+
+def verify_rr_response_identity(
+    messages: list[dict[str, Any]],
+    response_source_conversation_id: str | None,
+    verified_target_conversation_id: str | None,
+    expected_work_item_id: str,
+    last_sent_message_id: str,
+    expected_round: int | str,
+) -> dict[str, Any]:
+    """Bind one complete Assistant review to its verified source and outbound message."""
+    result: dict[str, Any] = {
+        "status": "RESPONSE_PENDING",
+        "review": None,
+        "matching_response_count": 0,
+        "outbound_message_found": False,
+        "outbound_message_match_count": 0,
+    }
+    if (
+        not response_source_conversation_id
+        or not verified_target_conversation_id
+        or response_source_conversation_id != verified_target_conversation_id
+    ):
+        result["status"] = "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
+        return result
+
+    user_indexes: list[int] = []
+    for index, message in enumerate(messages):
+        if str(pick(message, "Role") or "").lower() != "user":
+            continue
+        text = str(pick(message, "Text") or "")
+        if (
+            has_exact_header(text, "WORK_ITEM_ID", expected_work_item_id)
+            and has_exact_header(text, "MESSAGE_ID", last_sent_message_id)
+        ):
+            user_indexes.append(index)
+    result["outbound_message_match_count"] = len(user_indexes)
+    if not user_indexes:
+        result["status"] = "RESPONSE_IDENTITY_MISMATCH"
+        return result
+    if len(user_indexes) > 1:
+        result["status"] = "OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS"
+        return result
+    result["outbound_message_found"] = True
+    user_index = user_indexes[0]
+
+    complete: list[dict[str, str]] = []
+    incomplete_seen = False
+    for message in messages[user_index + 1:]:
+        text = stable_assistant_text(message)
+        if text is None:
+            continue
+        fields = rr_response_fields(text)
+        if set(RR_RESPONSE_FIELDS).issubset(fields):
+            complete.append(fields)
+        else:
+            incomplete_seen = True
+
+    matching = [
+        fields for fields in complete
+        if fields["WORK_ITEM_ID"] == expected_work_item_id
+        and fields["IN_REPLY_TO_MESSAGE_ID"] == last_sent_message_id
+        and fields["ROUND"] == str(expected_round)
+    ]
+    result["matching_response_count"] = len(matching)
+    if len(matching) > 1:
+        result["status"] = "RESPONSE_IDENTITY_AMBIGUOUS"
+    elif len(matching) == 1:
+        result["status"] = "RESPONSE_IDENTITY_VERIFIED"
+        result["review"] = matching[0]
+    elif incomplete_seen:
+        result["status"] = "RESPONSE_IDENTITY_MISSING"
+    elif complete:
+        result["status"] = "RESPONSE_IDENTITY_MISMATCH"
+    return result
+
+
 def blank_new_url(url: str | None, old_id: str | None) -> bool:
     if not url:
         return False
@@ -995,7 +1149,13 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "read_result": "NOT_RUN", "blank_environment_verified": False,
         "pre_send_already_new": False, "new_command_called": False,
         "browser_navigation_occurred": False,
-        "official_response_eligible": False, "started_at": utc_now(), "stopped_at": None,
+        "official_response_eligible": False,
+        "response_identity_status": "RESPONSE_PENDING",
+        "response_source_conversation_id": None,
+        "response_source_kind": None,
+        "response_raw_output_path": None,
+        "verified_rr_review": None,
+        "started_at": utc_now(), "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
         "post_send_status_url": None, "post_send_active_conversation_id": None,
@@ -1032,15 +1192,52 @@ def history(state: dict[str, Any], state_path: Path) -> list[dict[str, Any]]:
     return history_result(state, state_path)[0]
 
 
-def detail(state: dict[str, Any], state_path: Path, identity: str) -> tuple[list[dict[str, Any]], str | None]:
+def detail(
+    state: dict[str, Any], state_path: Path, identity: str
+) -> ResponseMessageBatch | None:
     if state["detail_check_count"] >= state["parameters"]["max_detail_checks"]:
-        return [], None
+        return None
     before_command_count = state["external_command_count"]
     result = command(state, state_path, "detail", ["chatgpt", "detail", identity, "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
     if state["external_command_count"] > before_command_count:
         state["detail_check_count"] += 1
     raw = state["raw_outputs"][-1] if result is not None else None
-    return result_rows(result), raw
+    if result is None:
+        return None
+    return ResponseMessageBatch(
+        conversation_id=identity,
+        messages=tuple(result_rows(result)),
+        source_kind="DETAIL_RESULT",
+        raw_output_path=raw,
+    )
+
+
+def response_batch_from_ask(
+    result: dict[str, Any], payload: str, raw_output_path: str | None
+) -> ResponseMessageBatch | None:
+    """Bind identity and response extracted from the same ask result."""
+    identity, _ = ask_identity(result)
+    response = ask_response(result)
+    if not identity or not response:
+        return None
+    return ResponseMessageBatch(
+        conversation_id=identity,
+        messages=(
+            {"Role": "user", "Text": payload},
+            {"Role": "assistant", "Text": response, "Generating": False},
+        ),
+        source_kind="ASK_RESULT",
+        raw_output_path=raw_output_path,
+    )
+
+
+def establish_verified_target(state: dict[str, Any], identity: str) -> bool:
+    """Establish a target once; never replace a conflicting verified target."""
+    current = state.get("verified_target_conversation_id")
+    if current and current != identity:
+        return False
+    state["verified_target_conversation_id"] = identity
+    return True
 
 
 def mark_misroute(state: dict[str, Any], identity: str, raw_path: str | None) -> None:
@@ -1060,12 +1257,29 @@ def pre_send_ids(state: dict[str, Any]) -> set[str]:
     return identities
 
 
-def accept_delivery(state: dict[str, Any], identity: str, ready: bool, response_exists: bool) -> None:
-    state["actual_delivery_conversation_id"] = identity
-    state["verified_target_conversation_id"] = identity
-    state["official_response_eligible"] = True
-    set_state(state, "RESPONSE_READY" if ready else ("RESPONSE_PENDING" if response_exists else "DELIVERED"), "exact identifiers found in verified new conversation")
-    stop(state, "RESPONSE_READY" if ready else "BOUNDED_WAIT_COMPLETE", "ACHIEVED" if ready else "IN_PROGRESS")
+def accept_delivery(state: dict[str, Any], response_batch: ResponseMessageBatch) -> None:
+    state["actual_delivery_conversation_id"] = response_batch.conversation_id
+    state["response_source_conversation_id"] = response_batch.conversation_id
+    state["response_source_kind"] = response_batch.source_kind
+    state["response_raw_output_path"] = response_batch.raw_output_path
+    identity_result = verify_rr_response_identity(
+        list(response_batch.messages),
+        response_batch.conversation_id,
+        state["verified_target_conversation_id"],
+        state["work_item_id"],
+        state["message_id"],
+        state["round"],
+    )
+    response_status = identity_result["status"]
+    state["response_identity_status"] = response_status
+    state["verified_rr_review"] = identity_result["review"]
+    state["official_response_eligible"] = response_status == "RESPONSE_IDENTITY_VERIFIED"
+    if state["official_response_eligible"]:
+        set_state(state, "RESPONSE_READY", "RR response source, role, order, and content identity verified")
+        stop(state, "RESPONSE_READY", "ACHIEVED")
+    else:
+        set_state(state, response_status, "delivery confirmed but no unique identity-bound RR response was accepted")
+        stop(state, f"{response_status}: same Message ID resend remains forbidden", "IN_PROGRESS")
 
 
 def capture_post_send_status(
@@ -1117,13 +1331,19 @@ def recover_delivery(
         identity, source = candidates[0]
         state["recovery_target_source"] = source
         state["recovery_target_conversation_id"] = identity
-        messages, raw_path = detail(state, state_path, identity)
+        response_batch = detail(state, state_path, identity)
+        messages = list(response_batch.messages) if response_batch else []
         delivered, response_exists, ready = inspect_messages(messages, state["work_item_id"], state["message_id"])
         if delivered:
             if state.get("expected_conversation_mode") == "NEW" and identity in baseline:
-                mark_misroute(state, identity, raw_path)
+                mark_misroute(
+                    state, identity,
+                    response_batch.raw_output_path if response_batch else None,
+                )
             else:
-                accept_delivery(state, identity, ready, response_exists)
+                establish_verified_target(state, identity)
+                if response_batch is not None:
+                    accept_delivery(state, response_batch)
             return True
     if not state.get("stopped_at"):
         set_state(state, "DELIVERY_UNKNOWN", "bounded exact-ID recovery found no delivery")
@@ -1289,11 +1509,15 @@ def send_command(args: argparse.Namespace) -> int:
         )
     elif returned_id:
         state["actual_delivery_conversation_id"] = returned_id
-        state["verified_target_conversation_id"] = returned_id
-        state["official_response_eligible"] = True
-        response = ask_response(result)
-        set_state(state, "RESPONSE_READY" if response else "DELIVERED", "ask returned verified new conversation identity")
-        stop(state, "RESPONSE_READY" if response else "BOUNDED_WAIT_COMPLETE", "ACHIEVED" if response else "IN_PROGRESS")
+        establish_verified_target(state, returned_id)
+        response_batch = response_batch_from_ask(result, payload, ask_raw_path)
+        if response_batch:
+            accept_delivery(state, response_batch)
+        else:
+            state["response_identity_status"] = "RESPONSE_PENDING"
+            state["official_response_eligible"] = False
+            set_state(state, "DELIVERED", "ask returned verified new conversation identity without a response")
+            stop(state, "BOUNDED_WAIT_COMPLETE", "IN_PROGRESS")
     else:
         set_state(state, "DELIVERY_UNKNOWN", "ask returned without conversation identity")
         recover_delivery(

@@ -753,10 +753,36 @@ def legacy_history(*identities: str) -> dict:
     ])
 
 
+def rr_review_text(
+    *, work_item_id: str = LEGACY_WORK_ITEM,
+    message_id: str = LEGACY_MESSAGE_ID,
+    round_value: str = "0",
+    omit: str | None = None,
+) -> str:
+    values = {
+        "WORK_ITEM_ID": work_item_id,
+        "IN_REPLY_TO_MESSAGE_ID": message_id,
+        "ROUND": round_value,
+        "REVIEW_DECISION": "PASS",
+        "WORK_ITEM_STATE": "ACHIEVED",
+        "ACCEPTANCE_STATUS": "all criteria MET",
+        "FINDINGS": "None.",
+        "BLOCKERS": "None.",
+        "DEBT": "None.",
+        "NEXT_WORK_ORDER": "None.",
+        "VALIDATION": "Pure-local fixture.",
+        "USER_DECISION_REQUIRED": "false",
+    }
+    fields = "\n".join(
+        f"{name}: {value}" for name, value in values.items() if name != omit
+    )
+    return f"RR_REVIEW_BEGIN\n{fields}\nRR_REVIEW_END"
+
+
 def legacy_detail(ready: bool = True) -> dict:
-    messages = [{"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}"}]
+    messages = [{"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"}]
     if ready:
-        messages.append({"Role": "assistant", "Text": "synthetic response", "Generating": False, "StableSeconds": 3})
+        messages.append({"Role": "assistant", "Text": rr_review_text(), "Generating": False, "StableSeconds": 3})
     return legacy_result(messages)
 
 
@@ -780,7 +806,7 @@ def test_send_correct_new_conversation_regression() -> None:
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
-        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
     ])
     assert completed.returncode == 0
     assert state["delivery_state"] == "RESPONSE_READY"
@@ -808,7 +834,7 @@ def test_start_new_and_send_completes_in_one_wrapper_call() -> None:
         legacy_result([{
             "conversationId": NEW_ID,
             "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}",
-            "response": "ok",
+            "response": rr_review_text(),
         }]),
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
     ], prepare_new=True)
@@ -823,6 +849,7 @@ def test_start_new_and_send_completes_in_one_wrapper_call() -> None:
     assert state["message_send_count"] == 1
     assert state["post_send_active_conversation_id"] == NEW_ID
     assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["official_response_eligible"] is True
     assert state["post_send_history_called"] is False
 
 
@@ -863,11 +890,12 @@ def test_ask_yaml_explicit_conversation_id_is_accepted() -> None:
         legacy_status("https://chatgpt.com/new"), legacy_history(OLD_ID),
         legacy_result([]), legacy_result(yaml_stdout),
     ], manual_new_url="https://chatgpt.com/new")
-    assert completed.returncode == 0
+    assert completed.returncode == 2
     assert state["ask_reported_conversation_id"] == NEW_ID
     assert state["ask_reported_url"] == f"https://chatgpt.com/c/{NEW_ID}"
     assert state["ask_delivery_classification"] == "A. ASK_CONFIRMED_DELIVERY_WITH_ID"
-    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["delivery_state"] == "RESPONSE_IDENTITY_MISSING"
+    assert state["official_response_eligible"] is False
     assert state["post_send_history_called"] is False
     assert [call[1] for call in calls] == ["status", "history", "read", "ask"]
 
@@ -1061,7 +1089,7 @@ def run_manual_read_case(read: dict) -> tuple[subprocess.CompletedProcess[str], 
     manual_url = "https://chatgpt.com/new"
     completed, state, calls, _, _ = run_send_case([
         legacy_status(manual_url), legacy_history(), read,
-        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
     ], manual_new_url=manual_url)
     return completed, state, calls
 
@@ -1242,7 +1270,7 @@ def test_send_same_message_id_rejected_regression() -> None:
         legacy_history(OLD_ID), legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
-        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": "ok"}]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
     ], prepare_new=True)
     assert completed.returncode == 0
@@ -1262,6 +1290,263 @@ def test_send_external_budget_regression() -> None:
     assert completed.returncode == 2
     assert state["send_attempt_count"] == 0
     assert state["external_command_count"] == 3
+
+
+def rr_identity_result(
+    assistant_texts: list[str], *, source: str = NEW_ID,
+    user_text: str | None = None,
+) -> dict:
+    messages = [{
+        "Role": "user",
+        "Text": user_text or (
+            f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+            f"MESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"
+        ),
+    }]
+    messages.extend({
+        "Role": "assistant", "Text": text, "Generating": False, "StableSeconds": 3,
+    } for text in assistant_texts)
+    return TRANSPORT_MODULE.verify_rr_response_identity(
+        messages, source, NEW_ID, LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID, 0
+    )
+
+
+def test_rr_response_exact_identity_is_accepted() -> None:
+    result = rr_identity_result([rr_review_text()])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+    assert result["review"]["IN_REPLY_TO_MESSAGE_ID"] == LEGACY_MESSAGE_ID
+
+
+def test_response_source_is_bound_to_detail_result() -> None:
+    completed, state, _, _, _ = run_send_case([
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"), legacy_result([]),
+        legacy_result(returncode=1, timed_out=True),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        legacy_history(OLD_ID, NEW_ID), legacy_detail(),
+    ])
+    assert completed.returncode == 0
+    assert state["response_source_kind"] == "DETAIL_RESULT"
+    assert state["response_source_conversation_id"] == NEW_ID
+    assert state["verified_target_conversation_id"] == NEW_ID
+    assert state["response_raw_output_path"] in state["raw_outputs"]
+
+
+def synthetic_accept_state(verified_target: str) -> dict:
+    return {
+        "actual_delivery_conversation_id": None,
+        "verified_target_conversation_id": verified_target,
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": LEGACY_MESSAGE_ID,
+        "round": 0,
+        "official_response_eligible": False,
+        "response_identity_status": "RESPONSE_PENDING",
+        "verified_rr_review": None,
+        "transitions": [],
+    }
+
+
+def response_batch(conversation_id: str = NEW_ID) -> object:
+    return TRANSPORT_MODULE.ResponseMessageBatch(
+        conversation_id=conversation_id,
+        messages=(
+            {"Role": "user", "Text": (
+                f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+                f"MESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"
+            )},
+            {"Role": "assistant", "Text": rr_review_text(), "Generating": False},
+        ),
+        source_kind="SYNTHETIC_LOCAL_TEST",
+        raw_output_path=None,
+    )
+
+
+def test_accept_delivery_cannot_overwrite_verified_target() -> None:
+    state = synthetic_accept_state(OLD_ID)
+    TRANSPORT_MODULE.accept_delivery(state, response_batch(NEW_ID))
+    assert state["verified_target_conversation_id"] == OLD_ID
+    assert state["response_identity_status"] == "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
+    assert state["official_response_eligible"] is False
+
+
+def test_wrong_messages_cannot_be_paired_with_expected_conversation() -> None:
+    batch = response_batch(OLD_ID)
+    try:
+        batch.conversation_id = NEW_ID
+    except AttributeError:
+        pass
+    else:
+        raise AssertionError("ResponseMessageBatch source must be immutable")
+    state = synthetic_accept_state(NEW_ID)
+    TRANSPORT_MODULE.accept_delivery(state, batch)
+    assert state["response_identity_status"] == "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
+    assert state["official_response_eligible"] is False
+
+
+def duplicate_outbound_messages() -> list[dict]:
+    outbound = (
+        f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+        f"MESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"
+    )
+    return [
+        {"Role": "user", "Text": outbound},
+        {"Role": "user", "Text": outbound},
+        {"Role": "assistant", "Text": rr_review_text(), "Generating": False},
+    ]
+
+
+def test_duplicate_outbound_messages_are_ambiguous() -> None:
+    result = TRANSPORT_MODULE.verify_rr_response_identity(
+        duplicate_outbound_messages(), NEW_ID, NEW_ID,
+        LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID, 0,
+    )
+    assert result["status"] == "OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS"
+    assert result["outbound_message_match_count"] == 2
+    assert result["review"] is None
+
+
+def test_duplicate_outbound_identity_cannot_enter_official_parser() -> None:
+    original = TRANSPORT_MODULE.rr_response_fields
+
+    def forbidden_parser(_: str) -> dict:
+        raise AssertionError("official parser was entered after an ambiguous outbound anchor")
+
+    TRANSPORT_MODULE.rr_response_fields = forbidden_parser
+    try:
+        result = TRANSPORT_MODULE.verify_rr_response_identity(
+            duplicate_outbound_messages(), NEW_ID, NEW_ID,
+            LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID, 0,
+        )
+    finally:
+        TRANSPORT_MODULE.rr_response_fields = original
+    assert result["status"] == "OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS"
+
+
+def test_exact_rr_review_envelope_is_accepted() -> None:
+    result = rr_identity_result([rr_review_text()])
+    assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
+
+
+def test_assistant_quoted_rr_review_is_rejected() -> None:
+    result = rr_identity_result([
+        "Below is an example, not a formal review:\n\n" + rr_review_text()
+    ])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+    assert result["review"] is None
+
+
+def test_rr_review_with_leading_text_is_rejected() -> None:
+    result = rr_identity_result(["leading text\n" + rr_review_text()])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+
+
+def test_rr_review_with_trailing_text_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text() + "\ntrailing text"])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+
+
+def test_rr_review_missing_begin_marker_is_rejected() -> None:
+    text = rr_review_text().removeprefix("RR_REVIEW_BEGIN\n")
+    result = rr_identity_result([text])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+
+
+def test_rr_review_missing_end_marker_is_rejected() -> None:
+    text = rr_review_text().removesuffix("\nRR_REVIEW_END")
+    result = rr_identity_result([text])
+    assert result["status"] == "RESPONSE_IDENTITY_MISSING"
+
+
+def test_rr_response_wrong_work_item_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(work_item_id=f"{LEGACY_WORK_ITEM}-OTHER")])
+    assert result["status"] == "RESPONSE_IDENTITY_MISMATCH"
+    assert result["review"] is None
+
+
+def test_rr_response_wrong_in_reply_to_message_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(message_id=f"{LEGACY_MESSAGE_ID}-OTHER")])
+    assert result["status"] == "RESPONSE_IDENTITY_MISMATCH"
+
+
+def test_rr_response_wrong_round_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(round_value="1")])
+    assert result["status"] == "RESPONSE_IDENTITY_MISMATCH"
+
+
+def test_rr_response_missing_identity_field_is_rejected() -> None:
+    for field in ("WORK_ITEM_ID", "IN_REPLY_TO_MESSAGE_ID", "ROUND"):
+        result = rr_identity_result([rr_review_text(omit=field)])
+        assert result["status"] == "RESPONSE_IDENTITY_MISSING", field
+        assert result["review"] is None
+
+
+def test_rr_response_work_item_prefix_collision_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(work_item_id=LEGACY_WORK_ITEM[:-1])])
+    assert result["status"] == "RESPONSE_IDENTITY_MISMATCH"
+
+
+def test_rr_response_message_id_prefix_collision_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text(message_id=LEGACY_MESSAGE_ID[:-1])])
+    assert result["status"] == "RESPONSE_IDENTITY_MISMATCH"
+
+
+def test_user_quoted_rr_response_is_not_accepted() -> None:
+    messages = [
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}"},
+        {"Role": "user", "Text": rr_review_text()},
+    ]
+    result = TRANSPORT_MODULE.verify_rr_response_identity(
+        messages, NEW_ID, NEW_ID, LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID, 0
+    )
+    assert result["status"] == "RESPONSE_PENDING"
+
+
+def test_old_round_response_before_target_message_is_not_accepted() -> None:
+    messages = [
+        {"Role": "assistant", "Text": rr_review_text(round_value="0")},
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 1"},
+    ]
+    result = TRANSPORT_MODULE.verify_rr_response_identity(
+        messages, NEW_ID, NEW_ID, LEGACY_WORK_ITEM, LEGACY_MESSAGE_ID, 1
+    )
+    assert result["status"] == "RESPONSE_PENDING"
+
+
+def test_correct_response_from_wrong_conversation_is_rejected() -> None:
+    result = rr_identity_result([rr_review_text()], source=OLD_ID)
+    assert result["status"] == "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
+    assert result["review"] is None
+
+
+def test_multiple_matching_rr_responses_are_ambiguous() -> None:
+    result = rr_identity_result([rr_review_text(), rr_review_text()])
+    assert result["status"] == "RESPONSE_IDENTITY_AMBIGUOUS"
+    assert result["matching_response_count"] == 2
+    assert result["review"] is None
+
+
+def test_identity_failure_does_not_allow_same_message_id_resend() -> None:
+    completed, state, calls, command, env = run_send_case([
+        legacy_history(OLD_ID), legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"), legacy_result([]),
+        legacy_result([{
+            "conversationId": NEW_ID,
+            "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}",
+            "response": rr_review_text(message_id=f"{LEGACY_MESSAGE_ID}-OTHER"),
+        }]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
+    assert completed.returncode == 2
+    assert state["response_identity_status"] == "RESPONSE_IDENTITY_MISMATCH"
+    assert state["official_response_eligible"] is False
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    assert repeated.returncode == 1
+    assert "same-ID resend is forbidden" in repeated.stderr
+    assert sum(call[1] == "ask" for call in calls) == 1
 
 
 def main() -> int:
@@ -1341,6 +1626,29 @@ def main() -> int:
         test_report_rejects_unknown_agent_trace_verification,
         test_send_same_message_id_rejected_regression,
         test_send_external_budget_regression,
+        test_rr_response_exact_identity_is_accepted,
+        test_response_source_is_bound_to_detail_result,
+        test_accept_delivery_cannot_overwrite_verified_target,
+        test_wrong_messages_cannot_be_paired_with_expected_conversation,
+        test_duplicate_outbound_messages_are_ambiguous,
+        test_duplicate_outbound_identity_cannot_enter_official_parser,
+        test_exact_rr_review_envelope_is_accepted,
+        test_assistant_quoted_rr_review_is_rejected,
+        test_rr_review_with_leading_text_is_rejected,
+        test_rr_review_with_trailing_text_is_rejected,
+        test_rr_review_missing_begin_marker_is_rejected,
+        test_rr_review_missing_end_marker_is_rejected,
+        test_rr_response_wrong_work_item_is_rejected,
+        test_rr_response_wrong_in_reply_to_message_is_rejected,
+        test_rr_response_wrong_round_is_rejected,
+        test_rr_response_missing_identity_field_is_rejected,
+        test_rr_response_work_item_prefix_collision_is_rejected,
+        test_rr_response_message_id_prefix_collision_is_rejected,
+        test_user_quoted_rr_response_is_not_accepted,
+        test_old_round_response_before_target_message_is_not_accepted,
+        test_correct_response_from_wrong_conversation_is_rejected,
+        test_multiple_matching_rr_responses_are_ambiguous,
+        test_identity_failure_does_not_allow_same_message_id_resend,
     ]
     for test in tests:
         test()
