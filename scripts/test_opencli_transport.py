@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import importlib.util
@@ -777,6 +778,90 @@ def run_send_case(
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
     assert len(calls) <= max_external_commands
     return completed, state, calls, command, env
+
+
+def run_bootstrap_case(
+    sequence: list[dict], *, max_external_commands: int = 9,
+    init_text: str = "INIT RULES", context_text: str = "CONTEXT BODY",
+    prepare_new: bool = False, work_item_id: str = LEGACY_WORK_ITEM,
+    message_id: str = LEGACY_MESSAGE_ID, message_type: str = "CONTEXT_PACKET",
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-regression-"))
+    fake = root / "fake_opencli.py"
+    fake.write_text(FAKE_OPENCLI, encoding="utf-8")
+    scenario = root / "scenario.json"
+    scenario.write_text(json.dumps(sequence), encoding="utf-8")
+    counter = root / "counter.txt"
+    log = root / "calls.jsonl"
+    init_file = root / "init.md"
+    init_file.write_text(init_text, encoding="utf-8")
+    context_file = root / "context.md"
+    context_file.write_text(context_text, encoding="utf-8")
+    env = os.environ.copy()
+    env.update({
+        "OPENCLI_TRANSPORT_EXECUTABLE": str(fake),
+        "OPENCLI_FAKE_SCENARIO": str(scenario),
+        "OPENCLI_FAKE_COUNTER": str(counter),
+        "OPENCLI_FAKE_LOG": str(log),
+    })
+    command = [
+        sys.executable, str(TRANSPORT), "bootstrap",
+        "--work-item-id", work_item_id,
+        "--message-id", message_id,
+        "--round", "0",
+        "--message-type", message_type,
+        "--init-file", str(init_file),
+        "--context-file", str(context_file),
+        "--state-file", str(root / "state.json"),
+        "--command-wait-seconds", "1",
+        "--max-recovery-attempts", "1",
+        "--max-detail-checks", "1",
+        "--max-external-commands", str(max_external_commands),
+        "--max-experiment-seconds", "60",
+        "--recent-candidate-limit", "3",
+    ]
+    if prepare_new:
+        command.append("--prepare-new")
+    completed = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    state = json.loads((root / "state.json").read_text(encoding="utf-8"))
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert len(calls) <= max_external_commands
+    return completed, state, calls, command, env
+
+
+def run_manual_export_case(
+    *, body: str = "synthetic body 中文 🎉", work_item_id: str = LEGACY_WORK_ITEM,
+    message_id: str = LEGACY_MESSAGE_ID, message_type: str = "CONTEXT_PACKET",
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+    root = Path(tempfile.mkdtemp(prefix="rr-manual-export-"))
+    counter = root / "counter.txt"
+    log = root / "calls.jsonl"
+    message_file = root / "message.md"
+    message_file.write_text(body, encoding="utf-8")
+    env = os.environ.copy()
+    env.update({
+        "OPENCLI_TRANSPORT_EXECUTABLE": str(root / "fake_opencli.py"),
+        "OPENCLI_FAKE_COUNTER": str(counter),
+        "OPENCLI_FAKE_LOG": str(log),
+    })
+    state_path = root / "state.json"
+    command = [
+        sys.executable, str(TRANSPORT), "manual-export",
+        "--work-item-id", work_item_id,
+        "--message-id", message_id,
+        "--round", "0",
+        "--message-type", message_type,
+        "--message-file", str(message_file),
+        "--state-file", str(state_path),
+    ]
+    completed = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.is_file() else []
+    return completed, state, calls
 
 
 def legacy_status(url: str) -> dict:
@@ -2290,6 +2375,249 @@ def test_identity_failure_does_not_allow_same_message_id_resend() -> None:
     assert sum(call[1] == "ask" for call in calls) == 1
 
 
+def bootstrap_combined(init: str, context: str, *, work_item_id=LEGACY_WORK_ITEM, message_id=LEGACY_MESSAGE_ID) -> str:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-block-"))
+    init_file = root / "init.md"
+    init_file.write_text(init, encoding="utf-8")
+    context_file = root / "context.md"
+    context_file.write_text(context, encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    body = TRANSPORT_MODULE.bootstrap_body(ns)
+    send_ns = argparse.Namespace(
+        work_item_id=work_item_id, message_id=message_id, round=0,
+        message_type="CONTEXT_PACKET",
+    )
+    return TRANSPORT_MODULE.prepare_payload(send_ns, body)
+
+
+def test_bootstrap_help_exposes_new_commands() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(TRANSPORT), "--help"],
+        capture_output=True, text=True, encoding="utf-8", check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "bootstrap" in completed.stdout
+    assert "manual-export" in completed.stdout
+
+
+def test_bootstrap_payload_contains_init_and_context_in_fixed_order() -> None:
+    payload = bootstrap_combined("INIT_A", "CONTEXT_B")
+    assert "BEGIN_RR_LEAD_INITIALIZATION" in payload
+    assert "END_RR_LEAD_INITIALIZATION" in payload
+    assert "BEGIN_CONTEXT_PACKET" in payload
+    assert "END_CONTEXT_PACKET" in payload
+    init_pos = payload.index("BEGIN_RR_LEAD_INITIALIZATION")
+    context_pos = payload.index("BEGIN_CONTEXT_PACKET")
+    assert init_pos < context_pos
+    assert payload.index("END_RR_LEAD_INITIALIZATION") < context_pos
+    assert payload.index("RR-PACKET-COMPLETE:") > context_pos
+
+
+def test_bootstrap_fixed_boundaries_appear_once() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-boundary-"))
+    init_file = root / "init.md"
+    init_file.write_text("A" * 20, encoding="utf-8")
+    context_file = root / "context.md"
+    context_file.write_text("B" * 30, encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    body = TRANSPORT_MODULE.bootstrap_body(ns)
+    for marker in ("BEGIN_RR_LEAD_INITIALIZATION", "END_RR_LEAD_INITIALIZATION",
+                   "BEGIN_CONTEXT_PACKET", "END_CONTEXT_PACKET"):
+        assert body.splitlines().count(marker) == 1
+
+
+def test_bootstrap_same_inputs_produce_stable_hash() -> None:
+    payload_a = bootstrap_combined("SAME INIT", "SAME CONTEXT")
+    payload_b = bootstrap_combined("SAME INIT", "SAME CONTEXT")
+    assert payload_a == payload_b
+    assert TRANSPORT_MODULE._export_payload_integrity(payload_a)["sha256"] ==            TRANSPORT_MODULE._export_payload_integrity(payload_b)["sha256"]
+
+
+def test_bootstrap_utf8_bom_is_accepted_and_stripped() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-bom-"))
+    init_file = root / "init.md"
+    init_file.write_bytes(b"\xef\xbb\xbfINIT BOM")
+    context_file = root / "context.md"
+    context_file.write_text("CONTEXT", encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    body = TRANSPORT_MODULE.bootstrap_body(ns)
+    assert "INIT BOM" in body
+    assert "\ufeff" not in body
+
+
+def test_bootstrap_crlf_is_normalized_and_semantically_preserved() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-crlf-"))
+    init_file = root / "init.md"
+    init_file.write_bytes(b"line1\r\nline2\rline3")
+    context_file = root / "context.md"
+    context_file.write_text("ctx", encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    body = TRANSPORT_MODULE.bootstrap_body(ns)
+    assert "line1\nline2\nline3" in body
+    assert "\r\n" not in body and "\r" not in body.split("BEGIN_RR_LEAD_INITIALIZATION")[1]
+
+
+def test_bootstrap_preserves_chinese_and_emoji() -> None:
+    payload = bootstrap_combined("中文目标", "emoji 🎉")
+    assert "中文目标" in payload
+    assert "🎉" in payload
+
+
+def test_bootstrap_invalid_utf8_fails_before_send() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-invalid-"))
+    init_file = root / "init.md"
+    init_file.write_bytes(b"ABC\xff\xfeBAD")
+    context_file = root / "context.md"
+    context_file.write_text("ctx", encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    try:
+        TRANSPORT_MODULE.bootstrap_body(ns)
+    except ValueError as error:
+        assert "invalid UTF-8" in str(error)
+    else:
+        raise AssertionError("invalid UTF-8 must fail before send")
+
+
+def test_bootstrap_lone_surrogate_fails_before_send() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-bootstrap-surrogate-"))
+    init_file = root / "init.md"
+    init_file.write_bytes("before \ud800 after".encode("utf-8", errors="surrogatepass"))
+    context_file = root / "context.md"
+    context_file.write_text("ctx", encoding="utf-8")
+    ns = argparse.Namespace(init_file=str(init_file), context_file=str(context_file))
+    try:
+        TRANSPORT_MODULE.bootstrap_body(ns)
+    except ValueError as error:
+        assert "UTF-8" in str(error)
+    else:
+        raise AssertionError("lone surrogate must fail before send")
+
+
+def test_bootstrap_does_not_require_stdin() -> None:
+    # bootstrap derives the body purely from the two files; no stdin needed.
+    completed, state, calls, _, _ = run_bootstrap_case([
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
+    assert completed.returncode == 0
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+
+
+def test_bootstrap_does_not_use_shell_concat_ask() -> None:
+    completed, state, calls, _, _ = run_bootstrap_case([
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
+    ask_calls = [call for call in calls if len(call) > 1 and call[0] == "chatgpt" and call[1] == "ask"]
+    assert len(ask_calls) == 1
+    body = ask_calls[0][2]
+    assert "BEGIN_RR_LEAD_INITIALIZATION" in body
+    assert "BEGIN_CONTEXT_PACKET" in body
+    assert "INIT RULES" in body
+    assert "CONTEXT BODY" in body
+
+
+def test_bootstrap_same_message_id_cannot_resend() -> None:
+    completed, state, calls, command, env = run_bootstrap_case([
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+    ], prepare_new=True)
+    assert completed.returncode == 0
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
+    )
+    assert repeated.returncode == 1
+    assert "same-ID resend is forbidden" in repeated.stderr
+    assert sum(call[1] == "ask" for call in calls) == 1
+
+
+def test_manual_export_never_calls_opencli() -> None:
+    _, state, calls = run_manual_export_case()
+    assert calls == []
+    assert state["operation"] == "MANUAL_EXPORT"
+
+
+def test_manual_export_does_not_increase_send_count() -> None:
+    _, state, _ = run_manual_export_case()
+    assert state["send_attempted"] is False
+    assert state["send_attempt_count"] == 0
+    assert state["message_send_count"] == 0
+
+
+def test_manual_export_packet_hash_matches_body() -> None:
+    completed, state, _ = run_manual_export_case(body="export body 中文 🎉")
+    assert "BEGIN_MESSAGE" in completed.stdout
+    assert "END_MESSAGE" in completed.stdout
+    body_lines = completed.stdout.split("BEGIN_MESSAGE", 1)[1].split("END_MESSAGE", 1)[0]
+    body_bytes = body_lines.strip().encode("utf-8")
+    assert state["exported_body_sha256"] == hashlib.sha256(body_bytes).hexdigest()
+    assert state["payload_integrity"]["sha256"] == state["exported_body_sha256"]
+
+
+def test_manual_export_state_is_manual_relay_required_and_in_progress() -> None:
+    _, state, _ = run_manual_export_case()
+    assert state["delivery_state"] == "MANUAL_RELAY_REQUIRED"
+    assert state["work_item_state"] == "IN_PROGRESS"
+    assert state["transport_state"] == "MANUAL_RELAY_REQUIRED"
+
+
+def test_automatic_recovery_exhaustion_enters_manual_relay_required() -> None:
+    # When automatic recovery budget is already spent, recover_delivery must
+    # enter MANUAL_RELAY_REQUIRED and keep the Work Item IN_PROGRESS instead of
+    # permanently blocking it.
+    state_path_root = Path(tempfile.mkdtemp(prefix="rr-recover-exhaust-"))
+    state_path = state_path_root / "state.json"
+    state = TRANSPORT_MODULE.new_state(
+        argparse.Namespace(
+            work_item_id=LEGACY_WORK_ITEM, message_id=LEGACY_MESSAGE_ID,
+            round=0, message_type="CONTEXT_PACKET", conversation=None,
+            prepare_new=False, command_wait_seconds=1, max_recovery_attempts=1,
+            max_detail_checks=1, max_external_commands=9, max_experiment_seconds=60,
+            recent_candidate_limit=3, state_file=str(state_path),
+        ),
+        state_path,
+    )
+    state["automatic_recovery_attempt_count"] = state["parameters"]["max_recovery_attempts"]
+    state["recovery_attempt_count"] = 1
+    result = TRANSPORT_MODULE.recover_delivery(
+        state, state_path, recovery_kind="automatic",
+    )
+    assert result is False
+    assert state["delivery_state"] == "MANUAL_RELAY_REQUIRED"
+    assert state["work_item_state"] == "IN_PROGRESS"
+    assert state["send_attempted"] is False
+
+
+def test_send_command_still_accepts_normal_message_file() -> None:
+    # Old send/recover behavior must not regress.
+    completed, state, calls, _, _ = run_send_case([
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"), legacy_result([]),
+        legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
+    ])
+    assert completed.returncode == 0
+    assert state["delivery_state"] == "RESPONSE_READY"
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+
+
 def main() -> int:
     tests = [
         test_experiment_protocol_module_is_loadable,
@@ -2443,6 +2771,24 @@ def main() -> int:
         test_correct_response_from_wrong_conversation_is_rejected,
         test_multiple_matching_rr_responses_are_ambiguous,
         test_identity_failure_does_not_allow_same_message_id_resend,
+        test_bootstrap_help_exposes_new_commands,
+        test_bootstrap_payload_contains_init_and_context_in_fixed_order,
+        test_bootstrap_fixed_boundaries_appear_once,
+        test_bootstrap_same_inputs_produce_stable_hash,
+        test_bootstrap_utf8_bom_is_accepted_and_stripped,
+        test_bootstrap_crlf_is_normalized_and_semantically_preserved,
+        test_bootstrap_preserves_chinese_and_emoji,
+        test_bootstrap_invalid_utf8_fails_before_send,
+        test_bootstrap_lone_surrogate_fails_before_send,
+        test_bootstrap_does_not_require_stdin,
+        test_bootstrap_does_not_use_shell_concat_ask,
+        test_bootstrap_same_message_id_cannot_resend,
+        test_manual_export_never_calls_opencli,
+        test_manual_export_does_not_increase_send_count,
+        test_manual_export_packet_hash_matches_body,
+        test_manual_export_state_is_manual_relay_required_and_in_progress,
+        test_automatic_recovery_exhaustion_enters_manual_relay_required,
+        test_send_command_still_accepts_normal_message_file,
     ]
     for test in tests:
         test()

@@ -62,6 +62,7 @@ DELIVERY_STATES = {
     "RESPONSE_IDENTITY_REJECTED",
     "RESPONSE_PROTOCOL_REJECTED",
     "BLOCKED_RESPONSE_TIMEOUT",
+    "MANUAL_RELAY_REQUIRED",
     "FAILED",
 }
 NO_RESEND_STATES = DELIVERY_STATES - {"NOT_SENT"}
@@ -85,6 +86,10 @@ RR_OPTIONAL_RESPONSE_FIELDS = ("MESSAGE_ID", "MESSAGE_TYPE")
 RR_ALLOWED_RESPONSE_FIELDS = (*RR_RESPONSE_FIELDS, RR_REPLY_ID_ALIAS, *RR_OPTIONAL_RESPONSE_FIELDS)
 RR_REVIEW_BEGIN = "RR_REVIEW_BEGIN"
 RR_REVIEW_END = "RR_REVIEW_END"
+BOOTSTRAP_BEGIN_INIT = "BEGIN_RR_LEAD_INITIALIZATION"
+BOOTSTRAP_END_INIT = "END_RR_LEAD_INITIALIZATION"
+BOOTSTRAP_BEGIN_CONTEXT = "BEGIN_CONTEXT_PACKET"
+BOOTSTRAP_END_CONTEXT = "END_CONTEXT_PACKET"
 
 
 class ResponseMessageBatch(NamedTuple):
@@ -1030,6 +1035,50 @@ def read_payload(args: argparse.Namespace) -> str:
     return sys.stdin.read()
 
 
+def strict_utf8_text(path: Path) -> str:
+    """Strictly decode one UTF-8 file; reject invalid bytes and lone surrogates.
+
+    Reads raw bytes and decodes without an errors fallback so invalid sequences
+    raise before any send. A following strict re-encode rejects lone surrogates
+    that survive decoding, so corrupted characters are never silently replaced.
+    """
+    if not path.is_file():
+        raise ValueError(f"required file does not exist: {path}")
+    raw = path.read_bytes()
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"invalid UTF-8 in {path}: {error}") from error
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise ValueError(f"lone surrogate in {path}: {error}") from error
+    text = text.removeprefix("\ufeff")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def bootstrap_body(args: argparse.Namespace) -> str:
+    """Deterministically assemble the init and context files into one body."""
+    nl = "\n"
+    init_text = strict_utf8_text(Path(args.init_file))
+    context_text = strict_utf8_text(Path(args.context_file))
+    body = (
+        f"{BOOTSTRAP_BEGIN_INIT}{nl}"
+        f"{init_text.rstrip(nl)}{nl}"
+        f"{BOOTSTRAP_END_INIT}{nl}{nl}"
+        f"{BOOTSTRAP_BEGIN_CONTEXT}{nl}"
+        f"{context_text.rstrip(nl)}{nl}"
+        f"{BOOTSTRAP_END_CONTEXT}"
+    )
+    for marker in (
+        BOOTSTRAP_BEGIN_INIT, BOOTSTRAP_END_INIT,
+        BOOTSTRAP_BEGIN_CONTEXT, BOOTSTRAP_END_CONTEXT,
+    ):
+        if body.splitlines().count(marker) != 1:
+            raise ValueError(f"bootstrap boundary is not unique: {marker}")
+    return body
+
+
 def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     started = utc_now()
     return {
@@ -1041,6 +1090,7 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "pre_send_active_conversation_id": None, "verified_target_conversation_id": args.conversation,
         "actual_delivery_conversation_id": None, "verified_target_url": None,
         "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
+        "send_attempted": False,
         "send_attempt_count": 0, "message_send_count": 0,
         "recovery_attempt_count": 0,
         "automatic_recovery_attempt_count": 0,
@@ -1246,10 +1296,22 @@ def recover_delivery(
     recovery_kind: str = "automatic",
 ) -> bool:
     if not recovery_budget_available(state, recovery_kind):
-        stop(
-            state,
-            f"EXPERIMENT_BUDGET_EXHAUSTED: MAX_{recovery_kind.upper()}_RECOVERY_ATTEMPTS",
-        )
+        if recovery_kind == "automatic":
+            # Automatic transport cannot recover within budget: hand the
+            # prepared payload to a human for Manual Relay instead of
+            # permanently failing the Work Item.
+            set_state(
+                state,
+                "MANUAL_RELAY_REQUIRED",
+                "automatic recovery budget exhausted; use manual-export to relay",
+            )
+            state["work_item_state"] = "IN_PROGRESS"
+            state["send_attempted"] = False
+        else:
+            stop(
+                state,
+                f"EXPERIMENT_BUDGET_EXHAUSTED: MAX_{recovery_kind.upper()}_RECOVERY_ATTEMPTS",
+            )
         return False
     record_recovery_attempt(state, recovery_kind)
     restore_legacy_candidate_evidence(state)
@@ -1348,7 +1410,7 @@ def verify_new_conversation(
     return True
 
 
-def send_command(args: argparse.Namespace) -> int:
+def send_command(args: argparse.Namespace, payload_body: str | None = None) -> int:
     if args.prepare_new and (args.conversation or args.manual_new_url):
         raise ValueError("--prepare-new cannot be combined with --conversation or --manual-new-url")
     required_values = {
@@ -1356,14 +1418,12 @@ def send_command(args: argparse.Namespace) -> int:
         "MESSAGE_ID": args.message_id,
         "MESSAGE_TYPE": args.message_type,
     }
-    for name, value in (
-        ("CONVERSATION", args.conversation),
-        ("MANUAL_NEW_URL", args.manual_new_url),
-        ("MESSAGE_FILE", args.message_file),
-        ("STATE_FILE", args.state_file),
+    for name in (
+        "conversation", "manual_new_url", "message_file", "state_file",
     ):
+        value = getattr(args, name, None)
         if value is not None:
-            required_values[name] = value
+            required_values[name.upper()] = value
     unresolved = unresolved_required_values(required_values)
     if unresolved:
         report = assess_experiment_protocol(required_values, [])
@@ -1383,7 +1443,8 @@ def send_command(args: argparse.Namespace) -> int:
         if existing.get("delivery_state") in NO_RESEND_STATES or existing.get("send_attempt_count", 0) >= 1:
             raise ValueError(f"MESSAGE_ID already has state {existing.get('delivery_state')}; same-ID resend is forbidden")
     state = new_state(args, state_path)
-    payload = prepare_payload(args, read_payload(args))
+    body = payload_body if payload_body is not None else read_payload(args)
+    payload = prepare_payload(args, body)
     payload_bytes = payload.encode("utf-8")
     state["payload_integrity"] = {
         "transport_method": "argv",
@@ -1430,6 +1491,7 @@ def send_command(args: argparse.Namespace) -> int:
     def mark_send_invoked() -> None:
         # Persist the one permitted write at the actual invocation boundary.
         # A process crash during ask must still make a same-ID retry impossible.
+        state["send_attempted"] = True
         state["send_attempt_count"] = 1
         state["message_send_count"] = 1
         write_json(state_path, state)
@@ -1657,6 +1719,143 @@ def cleanup_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _manual_export_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
+    """Minimal manual-relay state that never implies an OpenCLI send path."""
+    started = utc_now()
+    return {
+        "schema_version": 4, "work_item_id": args.work_item_id, "message_id": args.message_id,
+        "operation": "MANUAL_EXPORT", "prepare_new": False,
+        "round": args.round, "message_type": args.message_type,
+        "expected_conversation_mode": "MANUAL_RELAY",
+        "pre_send_active_conversation_id": None, "verified_target_conversation_id": None,
+        "actual_delivery_conversation_id": None, "verified_target_url": None,
+        "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
+        "transport_state": "MANUAL_RELAY_REQUIRED",
+        "send_attempted": False, "send_attempt_count": 0, "message_send_count": 0,
+        "recovery_attempt_count": 0, "automatic_recovery_attempt_count": 0,
+        "manual_recovery_attempt_count": 0, "detail_check_count": 0,
+        "external_command_count": 0, "misroute_detected": False,
+        "read_result": "NOT_RUN", "blank_environment_verified": False,
+        "pre_send_already_new": False, "new_command_called": False,
+        "browser_navigation_occurred": False,
+        "official_response_eligible": False,
+        "response_identity_status": "RESPONSE_PENDING",
+        "response_source_conversation_id": None, "response_source_kind": None,
+        "response_raw_output_path": None, "verified_rr_review": None,
+        "started_at": started, "original_send_started_at": started,
+        "current_operation": "MANUAL_EXPORT", "current_operation_started_at": started,
+        "current_operation_external_command_count": 0,
+        "manual_recover_started_at": None, "manual_recover_external_command_count": 0,
+        "pending_response_continuation_count": 0,
+        "pending_response_last_checked_at": None, "pending_response_last_result": None,
+        "stopped_at": None, "stop_reason": None, "updated_at": utc_now(),
+        "state_file": str(state_path), "raw_outputs": [], "transitions": [],
+        "post_send_status_url": None, "post_send_active_conversation_id": None,
+        "post_send_page_mode": "NOT_RUN", "post_send_history_called": False,
+        "post_send_history_available": False, "post_send_recent_conversation_ids": [],
+        "new_candidate_diff": [], "recovery_target_source": None,
+        "recovery_target_conversation_id": None, "candidate_conversation_id": None,
+        "candidate_conversation_source": None, "candidate_conversation_conflict": False,
+        "candidate_conversation_conflicts": [],
+        "last_observed_status_conversation_id": None,
+        "manual_export_at": started, "exported_body_sha256": None, "exported_body_byte_length": None,
+        "parameters": {
+            "command_wait_seconds": COMMAND_WAIT_SECONDS,
+            "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
+            "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
+            "max_detail_checks": MAX_DETAIL_CHECKS,
+            "max_external_commands": MAX_EXTERNAL_COMMANDS,
+            "max_experiment_seconds": MAX_EXPERIMENT_SECONDS,
+            "recent_candidate_limit": RECENT_CANDIDATE_LIMIT,
+            "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
+        },
+    }
+
+
+def _export_payload_integrity(payload: str) -> dict[str, Any]:
+    payload_bytes = payload.encode("utf-8")
+    return {
+        "byte_length": len(payload_bytes),
+        "character_length": len(payload),
+        "line_count": len(payload.splitlines()),
+        "sha256": hashlib.sha256(payload_bytes).hexdigest(),
+    }
+
+
+def manual_export_command(args: argparse.Namespace) -> int:
+    """Export the prepared final payload for a human to paste in the Browser.
+
+    Never calls OpenCLI, never creates a conversation, never increments any send
+    count, and derives the copyable body from the exact payload a send would use.
+    """
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+    required_values = {
+        "WORK_ITEM_ID": args.work_item_id,
+        "MESSAGE_ID": args.message_id,
+        "MESSAGE_TYPE": args.message_type,
+        "STATE_FILE": args.state_file,
+    }
+    for name, value in (("MESSAGE_FILE", args.message_file), ("ROUND", args.round)):
+        if value is not None:
+            required_values[name] = value
+    unresolved = unresolved_required_values(required_values)
+    if unresolved:
+        report = assess_experiment_protocol(required_values, [])
+        report.update({
+            "operation": "MANUAL_EXPORT",
+            "stop_reason": "REQUIRED_VALUE_UNRESOLVED",
+            "test_result": "BLOCKED_BEFORE_EXECUTION",
+        })
+        print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+        return 2
+    body = read_payload(args)
+    payload = prepare_payload(args, body)
+    integrity = _export_payload_integrity(payload)
+    state_path = Path(args.state_file)
+    state = read_json(state_path) if state_path.exists() else _manual_export_state(args, state_path)
+    set_state(state, "MANUAL_RELAY_REQUIRED", "manual relay export prepared; user pastes into the Browser")
+    state["work_item_state"] = "IN_PROGRESS"
+    state["send_attempted"] = False
+    state["send_attempt_count"] = 0
+    state["message_send_count"] = 0
+    state["transport_state"] = "MANUAL_RELAY_REQUIRED"
+    state["manual_export_at"] = utc_now()
+    state["exported_body_sha256"] = integrity["sha256"]
+    state["exported_body_byte_length"] = integrity["byte_length"]
+    state["payload_integrity"] = integrity
+    write_json(state_path, state)
+    conversation_required = getattr(args, "conversation_required", None) or "NEW"
+    header = (
+        "MANUAL_RELAY_EXPORT\n"
+        f"WORK_ITEM_ID: {args.work_item_id}\n"
+        f"MESSAGE_ID: {args.message_id}\n"
+        f"MESSAGE_TYPE: {args.message_type}\n"
+        f"ROUND: {args.round}\n"
+        f"CONVERSATION_REQUIRED: {conversation_required}\n"
+        f"BYTE_LENGTH: {integrity['byte_length']}\n"
+        f"CHARACTER_LENGTH: {integrity['character_length']}\n"
+        f"LINE_COUNT: {integrity['line_count']}\n"
+        f"SHA256: {integrity['sha256']}\n"
+        "WORK_ITEM_STATE: IN_PROGRESS\n"
+        "TRANSPORT_STATE: MANUAL_RELAY_REQUIRED\n"
+        "SEND_ATTEMPTED: false\n"
+        "BEGIN_MESSAGE\n"
+        f"{payload}\n"
+        "END_MESSAGE"
+    )
+    print(header)
+    return 2
+
+
+def bootstrap_command(args: argparse.Namespace) -> int:
+    """Create a real Browser RR Lead: assemble init + context, then one send."""
+    body = bootstrap_body(args)
+    return send_command(args, payload_body=body)
+
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(description=__doc__)
     sub = root.add_subparsers(dest="command", required=True)
@@ -1706,6 +1905,42 @@ def parser() -> argparse.ArgumentParser:
     cleanup = sub.add_parser("cleanup")
     cleanup.add_argument("--state-file", required=True)
     cleanup.set_defaults(handler=cleanup_command)
+    bootstrap = sub.add_parser(
+        "bootstrap",
+        help="deterministically create a real Browser RR Lead by assembling init + context",
+    )
+    bootstrap.add_argument("--work-item-id", required=True)
+    bootstrap.add_argument("--message-id", required=True)
+    bootstrap.add_argument("--round", type=int, default=0)
+    bootstrap.add_argument("--message-type", default="CONTEXT_PACKET")
+    bootstrap.add_argument("--init-file", required=True)
+    bootstrap.add_argument("--context-file", required=True)
+    bootstrap.add_argument(
+        "--prepare-new", action="store_true",
+        help="START_NEW_AND_SEND: create, verify, send once, and recover in one Wrapper call",
+    )
+    bootstrap.add_argument("--conversation", help="explicit existing Conversation ID for a continuation")
+    bootstrap.add_argument("--manual-new-url", help="current manually opened blank ChatGPT URL; must match status")
+    bootstrap.add_argument("--state-file")
+    bootstrap.add_argument("--command-wait-seconds", type=int, default=COMMAND_WAIT_SECONDS)
+    bootstrap.add_argument("--max-recovery-attempts", type=int, default=MAX_RECOVERY_ATTEMPTS)
+    bootstrap.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
+    bootstrap.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
+    bootstrap.add_argument("--max-experiment-seconds", type=int, default=MAX_EXPERIMENT_SECONDS)
+    bootstrap.add_argument("--recent-candidate-limit", type=int, default=RECENT_CANDIDATE_LIMIT)
+    bootstrap.set_defaults(handler=bootstrap_command)
+    manual_export = sub.add_parser(
+        "manual-export",
+        help="export the prepared final payload for a human to paste into the Browser RR Lead conversation",
+    )
+    manual_export.add_argument("--work-item-id", required=True)
+    manual_export.add_argument("--message-id", required=True)
+    manual_export.add_argument("--round", required=True, type=int)
+    manual_export.add_argument("--message-type", required=True)
+    manual_export.add_argument("--conversation-required", default="NEW")
+    manual_export.add_argument("--message-file")
+    manual_export.add_argument("--state-file", required=True)
+    manual_export.set_defaults(handler=manual_export_command)
     return root
 
 

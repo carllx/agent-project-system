@@ -211,6 +211,32 @@ FIXED_SCHEDULE_TIMER_ALLOWED=false
 
 Keep each command wait short, impose a total response bound, and never use unlimited technical retries. At the bound, preserve the Conversation ID and Handoff and enter `BLOCKED` or `STALLED` as appropriate.
 
+## Deterministic Bootstrap and Manual Relay
+
+First Browser RR Lead creation must use the deterministic `bootstrap` command. The wrapper reads the two files itself, strips a UTF-8 BOM, normalizes newlines, and rejects invalid UTF-8 or lone surrogates before any send, then assembles `BEGIN_RR_LEAD_INITIALIZATION`/`END_RR_LEAD_INITIALIZATION` followed by `BEGIN_CONTEXT_PACKET`/`END_CONTEXT_PACKET` in that fixed order. Do not hand-concatenate init and context with PowerShell.
+
+```powershell
+python <skill-dir>/scripts/opencli_transport.py bootstrap --prepare-new `
+  --work-item-id <id> --message-id <id-R0-CONTEXT> `
+  --init-file <rr-lead-init.md> --context-file <filled-context-packet.md> `
+  --state-file <path>
+```
+
+Prefer file inputs (`--init-file`, `--context-file`, `--message-file`) for formal payloads. The same Message ID is sent at most once; the wrapper reuses the existing bounded send and recover flow.
+
+If automatic transport cannot deliver within its recovery budget, the wrapper records `WORK_ITEM_STATE: IN_PROGRESS` and `TRANSPORT_STATE: MANUAL_RELAY_REQUIRED` instead of failing the Work Item. To hand a prepared packet to a human, run:
+
+```powershell
+python <skill-dir>/scripts/opencli_transport.py manual-export `
+  --work-item-id <id> --message-id <id-R0-CONTEXT> `
+  --round 0 --message-type CONTEXT_PACKET --message-file <path> `
+  --state-file <path>
+```
+
+Paste only the `BEGIN_MESSAGE` ... `END_MESSAGE` body into the Browser RR Lead conversation so the on-wire bytes match the reported SHA-256. After the RR Lead replies in the Browser, recover with `recover --continue-pending --state-file <same-path>`.
+
+A Manual Relay is NOT Browser E2E verification; it only hands a prepared packet to a human. A Local Sub Agent review is only a degraded alternative and never satisfies Browser acceptance.
+
 ## Bound recovery and experiments
 
 Recovery saves a bounded pre-send history baseline, performs one send, reads post-send status, refreshes the same bounded history window once, computes IDs absent from the baseline, and performs at most one detail check against the strongest bounded target. Search only exact Work Item ID and Message ID, stop on the first hit, and retain no unrelated conversation body. Never scan all pre-send Conversations, enlarge the candidate limit, or poll repeatedly as a recovery substitute.

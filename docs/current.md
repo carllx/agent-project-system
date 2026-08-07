@@ -9,24 +9,45 @@
 
 ## Active Work Item
 
-- **ID:** `RESPONSE-PENDING-RESUME-001`
-- **Name:** 支持稍后继续读取已送达的 Browser 回复
-- **Review decision:** `PASS`
-- **Work Item state:** `ACHIEVED`
-- **Skill status:** `FIRST_USE_READY`
-- **Baseline commit:** `57712ca50b249b98ac5e132d57c35a5ad5f82002`
-- **Skill version before:** `0.4.13`
-- **Current objective:** 已完成 pending 回复续读、严格结构化回复解析以及 `FIRST-USE-LOOP-001` 的真实两轮 Browser RR Lead 闭环；停止继续发送或重构。
+- **ID:** `BOOTSTRAP-MANUAL-RELAY-001`
+- **Name:** 确定性 Browser Bootstrap 与 Manual Relay fallback
+- **Review decision:** `NONE`（本地完成；待重新安装后的真实 Browser 验收）
+- **Work Item state:** `IN_PROGRESS`
+- **Skill status:** `INSTALL_PENDING`
+- **Baseline commit:** `2f01246`
+- **Skill version before:** `0.4.14`
+- **Skill version after:** `0.4.15`
+- **Current objective:** 补齐 `bootstrap`（确定性单次 init+context 发送）与 `manual-export`/`MANUAL_RELAY_REQUIRED`（自动恢复预算耗尽时人工中转），本地全绿后提交、重新安装，并在真实 Browser 上完成 Gate 1–5 验收。
+
+## Corrected acceptance status
+
+- `SOURCE_PACKAGE_TESTED=true`
+- `PACKAGE_COPIED_TO_CANDIDATE_PATH=false`（重新安装进行中）
+- `DISCOVERY=UNVERIFIED`（待全新会话运行时观察；不以 frontmatter 推断为 PASS）
+- `LIVE_TRANSPORT_DELIVERY_VERIFIED=true`
+- `RR_LEAD_PROTOCOL_VERIFIED=false`（待 Gate 4 新版本 Live ACK）
+- `DETERMINISTIC_BOOTSTRAP_IMPLEMENTED=true`（本地测试全绿；真实 Browser 未验）
+- `MANUAL_RELAY_IMPLEMENTED=true`（本地测试全绿）
+- `TWO_ROUND_SMOKE_VERIFIED=false`
+- `LIVE_SMOKE_TEST_PASSED=false`
 
 ## Acceptance criteria
 
-- 续读仅适用于已确认送达、`RESPONSE_PENDING`、保存了明确 Conversation 与原始 Work Item/Message ID 的 state。
-- 每次显式续读使用新操作预算，只读取保存的 Conversation，最多执行 detail 及必要时同源确认后的单次 read；不得 ask/send/new 或改变发送证据。
-- 持久记录 continuation count、最后检查时间和结果，默认最多三次；耗尽后返回 `BLOCKED_RESPONSE_TIMEOUT`。
-- 完整身份标准保持不变；稳定但错误的回复返回 `RESPONSE_IDENTITY_REJECTED`，不得进入正式 Parser。
-- 本地测试、受控 Runner、Docs、Help 与 Diff 全部通过后同步九文件 Skill 到 Lab，再恢复真实 Round 1。
+- `bootstrap` 由 Wrapper 读取 init+context 文件，去除 UTF-8 BOM、统一换行、发送前拒绝非法 UTF-8/孤立 surrogate，按固定顺序与唯一边界组装，manifest 含字节数/字符数/行数/SHA-256，复用现有 send+bounded recover，同一 Message ID 只发一次。
+- `manual-export` 不调用 OpenCLI、不建 Conversation、不增 send count；输出 `TRANSPORT_STATE: MANUAL_RELAY_REQUIRED`、`WORK_ITEM_STATE: IN_PROGRESS`、`send_attempted=false`，导出 hash 与准备发送正文一致。
+- 自动 Transport 恢复预算耗尽后进入 `MANUAL_RELAY_REQUIRED`，不得把 Work Item 标记为永久失败。
+- 新增 18 项纯本地回归全部通过；至少一个新测试在旧版本（0.4.14）上失败，在新版本（0.4.15）通过。
+- 本地验收、提交、重新安装与 Gate 1–5（Discovery/Bootstrap/ManualRelay/LiveACK/Smoke）全部通过后，才可声明 `LIVE_SMOKE_TEST_PASSED`。
 
 ## Completed
+
+- `BOOTSTRAP-MANUAL-RELAY-001` adds `opencli_transport.py bootstrap`（确定性拼装 init+context 的单次发送）与 `manual-export`（`MANUAL_RELAY_REQUIRED` 人工中转），以及自动恢复预算耗尽进入 `MANUAL_RELAY_REQUIRED`/`IN_PROGRESS` 的 fallback。VERSION 由 `0.4.14` 升至 `0.4.15`。
+- `bootstrap` 由 Wrapper 读取两个文件：去除 UTF-8 BOM、CRLF/LF 统一、发送前拒绝非法 UTF-8 与孤立 surrogate；按固定顺序组装 `BEGIN_RR_LEAD_INITIALIZATION`/`END_RR_LEAD_INITIALIZATION` 与 `BEGIN_CONTEXT_PACKET`/`END_CONTEXT_PACKET`；manifest 含 byte/char/line/SHA-256；复用现有 `send_command` 与 bounded recover，不新建第二套 Transport。
+- `manual-export` 不调用 OpenCLI、不建 Conversation、不增 send count；输出完整可复制包（Work Item/Message/Round/Type、字节数/行数/SHA-256、`BEGIN_MESSAGE`/`END_MESSAGE`、原文），state 置 `TRANSPORT_STATE: MANUAL_RELAY_REQUIRED`、`WORK_ITEM_STATE: IN_PROGRESS`、`send_attempted=false`，hash 与准备发送正文一致。
+- 新增 18 项相关纯本地回归；AST 发现、direct 列表、direct 执行与受控执行均为 169，Missing/Duplicate/Failed/Skipped 均 0。已用 `git stash` 证明 `test_bootstrap_same_inputs_produce_stable_hash`、`test_manual_export_packet_hash_matches_body`、`test_automatic_recovery_exhaustion_enters_manual_relay_required` 在旧版本（无 bootstrap/manual-export）上失败，在新版本通过。
+- 本地验收全部通过：`check_skill_package.py`（0.4.15，受控执行 169 项）、checker unittest 14/14、`check_docs.py`（14 个登记 Markdown）、`bootstrap --help` 与 `manual-export --help`、`git diff --check`。
+
+以下为先前 `RESPONSE-PENDING-RESUME-001` 的历史记录，保留作事实来源。
 
 - `RESPONSE-PENDING-RESUME-001` implements `recover --continue-pending` with a fresh per-invocation operation budget, a saved-Conversation-only detail and necessary same-source status/read fallback, and no ask/send/new path.
 - Runtime now persists `pending_response_continuation_count`, `pending_response_last_checked_at`, and `pending_response_last_result`; the default maximum is three explicit continuations, after which an incomplete response becomes `BLOCKED_RESPONSE_TIMEOUT` without deleting send evidence.
@@ -108,7 +129,10 @@
 
 ## Next action
 
-- Stop the first-use loop. Do not send Round 3 or perform additional changes under `FIRST-USE-LOOP-001`; wait for the user's first real project task.
+- 已提交并被安装到 `C:\Users\carll\.codex\skills\research-review-lead`；本地 `bootstrap`/`manual-export` 桌面验证（Gate 2/3）通过。
+- Gate 1（真实 Discovery）在本执行环境无法创建全新会话，状态为 `NEEDS_HUMAN_FRESH_SESSION`：请新建一个全新 Codex 会话，观察 `research-review-lead` 出现在 Skill 列表、description 正确、可被明确选择；不要用 frontmatter 合法代替运行时发现。
+- Gate 4/5（新版本 Live ACK 与两轮 Smoke）须在全新会话 + 真实 Browser RR Lead 会话中进行：以全新 Work Item/Message ID 跑 `bootstrap --prepare-new` 创建并发送一次，`recover` 确认，接收含 `MESSAGE_TYPE: RR_REVIEW`、`WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID` 的 envelope；不要复用 `ACCEPT-LIVE-001` 或 `6a74b7d0-...`。当前活动标签正是被禁用的历史 Conversation，故本轮不发送实况消息。
+- 在 Gate 1/4/5 与 Final Auditor 全部 PASS 前，不声明 `LIVE_SMOKE_TEST_PASSED`；暂不执行真实 `carllx-skills` 三轮架构评审。
 
 ## Files to read
 
@@ -120,6 +144,22 @@
 
 ## Last validation
 
+- **Command:** `python scripts/test_opencli_transport.py`
+- **Result:** Passed all 169 pure-local Transport tests; Missing 0, Duplicate 0, Failed 0, Skipped 0.
+- **Command:** `python scripts/check_skill_package.py`
+- **Result:** Passed; Version 0.4.15; controlled runner executed 169 tests exactly once.
+- **Command:** `python -m unittest -v scripts.test_check_skill_package`
+- **Result:** Passed 14/14.
+- **Command:** `python scripts/check_docs.py`
+- **Result:** Passed; 14 registered Markdown files.
+- **Command:** `python skills/research-review-lead/scripts/opencli_transport.py bootstrap --help`
+- **Result:** Passed; exposes `--prepare-new --work-item-id --message-id --init-file --context-file --state-file`.
+- **Command:** `python skills/research-review-lead/scripts/opencli_transport.py manual-export --help`
+- **Result:** Passed; exposes `--work-item-id --message-id --round --message-type --message-file --state-file`.
+- **Command:** `git diff --check`
+- **Result:** Passed.
+- **Fail-on-old proof:** with only the transport source stashed to 0.4.14, `test_bootstrap_same_inputs_produce_stable_hash`, `test_manual_export_packet_hash_matches_body`, and `test_automatic_recovery_exhaustion_enters_manual_relay_required` failed (AttributeError / FileNotFoundError / AssertionError); restored source passed.
+- **Last verified:** 2026-08-07
 - **Command:** `python -m unittest -v scripts.test_check_skill_package`
 - **Result:** Passed 14/14；成功输出版本断言动态读取权威 `VERSION` 文件并保持其余输出逐字断言。
 - **Command:** `python scripts/test_opencli_transport.py`
@@ -140,11 +180,11 @@
 - **Last verified:** 2026-08-06
 
 ## Installation Acceptance
-- **Platform Forensics:** PASS
-- **Installation:** PASS
-- **Discovery:** PASS
-- **Manual Invocation:** PASS
+- **Platform Forensics:** PASS（既有 0.4.14 九文件包核对一致）
+- **Installation:** PENDING（待重新安装 0.4.15）
+- **Discovery:** UNVERIFIED（待全新会话运行时观察）
+- **Manual Invocation:** PENDING
 - **Handoff:** PASS
-- **Browser Loop:** PASS
-- **Completion Index:** 100/100
+- **Browser Loop:** PENDING（待 Gate 4/5）
+- **Completion Index:** 未声明（须 Final Auditor 通过）
 
