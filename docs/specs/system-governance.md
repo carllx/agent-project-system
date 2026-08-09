@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Agent Project System 用于治理、初始化和持续推进不同类型的 Agent 项目。第一版优先建立能运行、能验证、能交接的最小治理骨架，不追求一次实现所有模块。
+Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解耦的 Agent Collaboration Framework（见 `docs/adr/0003-agent-collaboration-framework.md`）。本治理体系用于治理、初始化和持续推进该框架及其运行模块。第一版优先建立能运行、能验证、能交接的最小治理骨架，不追求一次实现所有模块。
 
 ## Core principles
 
