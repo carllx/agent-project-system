@@ -45,6 +45,7 @@ Agent Project System
 - **Workflow state:** `EXECUTING`
 - **Review Request ID:** `OPENCLI-SESSION-DISCOVERY-001-R1-INTERMEDIATE`
 - **Product baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`。
+- **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`（供 `OPENCLI-SESSION-IDENTITY-MIN-001` Lab 实验绑定）。
 - **Objective:** 建立 `CREATE → CAPTURE → VERIFY → SEND → VERIFY DELIVERY → RECOVER` 的 Session Discovery / Identity Contract，并据此修复 Product Transport 对 Conversation identity 的建立、验证、错投检测与 bounded recovery。
 - **Scope:** 现有 OpenCLI Transport 与历史 Evidence 审计；五类 identity、Evidence、状态和 no-resend Contract；Product Acceptance Criteria；真正未知机制的最小 Lab handoff；后续在 Evidence 基础上的 Product implementation 与 regression tests。
 - **Out of scope:** 重测普通 send/receive、修改 ACF-0.1、Hook、Completion Gate、Antigravity deployment、MCP、Plugin、GitHub automation、无界 Browser 调试或让 Lab 直接成为 Product source。

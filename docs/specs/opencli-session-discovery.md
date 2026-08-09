@@ -161,6 +161,7 @@ LAB_EXPERIMENT_HANDOFF
 WORK_ITEM_ID: OPENCLI-SESSION-DISCOVERY-001
 EXPERIMENT_ID: OPENCLI-SESSION-IDENTITY-MIN-001
 OWNER: rr-lead-skill-lab
+PRODUCT_BASELINE_SHA: d73314ad44e72ea78b8729b593a1b797362c46af
 PURPOSE: Determine the smallest reliable OpenCLI mechanism that yields and binds an exact Conversation identity for a newly created Browser session, and distinguish it from current-page and delivery identities.
 
 PRECONDITIONS:
@@ -175,6 +176,22 @@ QUESTIONS:
 3. For an explicit existing target, does the supported explicit-target write path deliver only to that ID when Browser status is on a different Conversation, and do returned identity, post-send status, and exact detail agree or conflict?
 4. On timeout/navigation error, which exact-ID evidence remains available without a second send?
 
+RULE_A_EXPLICIT_TARGET_MECHANISM:
+- Before an explicit-existing-target write, perform only the read-only static checks needed against CLI help, the installed OpenCLI command definition/source, and existing project Evidence.
+- Execute the second write only when an actually supported explicit-target write mechanism exists.
+- If none exists, report `EXPLICIT_TARGET_WRITE_MECHANISM: NOT_AVAILABLE` and `QUESTION_3: UNVERIFIED / NOT_AVAILABLE`.
+- Do not guess a flag, invent an API, modify OpenCLI, or implement a temporary target-write mechanism for the experiment.
+
+RULE_B_NO_MANUFACTURED_TIMEOUT:
+- Question 4 observes only timeout/navigation error that occurs naturally during an otherwise authorized write.
+- If both legal writes complete normally, report `TIMEOUT_RECOVERY_OBSERVATION: NOT_OBSERVED` and `QUESTION_4: UNVERIFIED`.
+- Do not add writes, polls, sleeps, network interference, or Browser manipulation to manufacture a timeout.
+
+RULE_C_EVIDENCE_FIRST:
+- Before every action record `ACTION_ID`, `COMMAND`, `INTENDED_IDENTITY_ROLE`, `PRE_STATUS_URL`, and `PRE_BOUNDED_ID_SET`.
+- After the action record `EXIT_CODE`, `STDOUT_STDERR_CLASSIFICATION`, `RETURNED_IDENTITY`, `POST_STATUS_URL`, `POST_BOUNDED_ID_SET`, and `EXACT_MARKER_RESULT`.
+- Perform identity classification only after those observations are recorded; never infer a Conversation ID first and backfill Evidence.
+
 ACTION_BUDGET:
 - At most two write attempts total: one new-session marker and one explicit-existing-target marker.
 - Each write uses a different MESSAGE_ID and is attempted once.
@@ -188,6 +205,7 @@ REQUIRED_EVIDENCE:
 - Exact Work Item/Message marker evidence only; redact unrelated message bodies.
 - Pre/post Browser status URLs and bounded pre/post Conversation ID sets.
 - A truth table showing which source can authoritatively establish each identity role.
+- `EXPLICIT_TARGET_WRITE_MECHANISM` and `TIMEOUT_RECOVERY_OBSERVATION`, including the required `NOT_AVAILABLE` / `NOT_OBSERVED` outcomes when applicable.
 
 STOP_CONDITIONS:
 - Any write timeout becomes DELIVERY_UNKNOWN until exact-ID recovery completes; never resend.
