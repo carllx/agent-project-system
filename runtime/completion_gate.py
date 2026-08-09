@@ -19,12 +19,31 @@ class GateDecision:
     work_item_completed: bool = False
 
 
-def _all_acceptance_met(decision: dict[str, Any]) -> bool:
+def _criterion_identities(items: Any) -> list[str] | None:
+    if not isinstance(items, list) or not items:
+        return None
+    identities: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        identity = item.get("CRITERION")
+        if not isinstance(identity, str) or not identity or identity != identity.strip():
+            return None
+        identities.append(identity)
+    if len(identities) != len(set(identities)):
+        return None
+    return identities
+
+
+def _all_acceptance_met(pending: dict[str, Any], decision: dict[str, Any]) -> bool:
+    agreed = _criterion_identities(pending.get("ACCEPTANCE_CRITERIA"))
     statuses = decision.get("ACCEPTANCE_STATUS")
+    covered = _criterion_identities(statuses)
     return bool(
-        isinstance(statuses, list)
-        and statuses
-        and all(isinstance(item, dict) and item.get("STATUS") == "MET" for item in statuses)
+        agreed is not None
+        and covered is not None
+        and set(agreed) == set(covered)
+        and all(item.get("STATUS") == "MET" for item in statuses)
     )
 
 
@@ -47,7 +66,7 @@ def final_approval_is_authoritative(state: dict[str, Any]) -> bool:
         and decision.get("IN_REPLY_TO_REVIEW_REQUEST_ID") == request_id
         and decision.get("REVIEW_KIND") == "FINAL"
         and decision.get("REVIEW_DECISION") == "APPROVE"
-        and _all_acceptance_met(decision)
+        and _all_acceptance_met(pending, decision)
         and decision.get("USER_DECISION_REQUIRED") in (None, False, "NONE", "")
         and state.get("UNRESOLVED_USER_DECISION") is False
         and decision.get("REVIEWED_STATE_CURRENT") is True

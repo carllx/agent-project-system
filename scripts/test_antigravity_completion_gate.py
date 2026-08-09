@@ -32,6 +32,7 @@ def base_state(workflow_state="EXECUTING"):
         "PENDING_REVIEW_REQUEST": {
             "REVIEW_REQUEST_ID": "WORK-001-R1-FINAL",
             "REVIEW_KIND": "FINAL",
+            "ACCEPTANCE_CRITERIA": [{"CRITERION": "AC1"}],
         },
         "AUTHORITATIVE_REVIEW_DECISION": {
             "PROTOCOL_VERSION": "ACF-0.1",
@@ -94,6 +95,49 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(field=field):
                 state = base_state("COMPLETED")
                 state["AUTHORITATIVE_REVIEW_DECISION"][field] = value
+                self.assertFalse(completion_gate.final_approval_is_authoritative(state))
+
+    def test_missing_agreed_criterion_is_not_authoritative(self):
+        state = base_state("COMPLETED")
+        state["PENDING_REVIEW_REQUEST"]["ACCEPTANCE_CRITERIA"] = [
+            {"CRITERION": "AC1"}, {"CRITERION": "AC2"}
+        ]
+        self.assertFalse(completion_gate.final_approval_is_authoritative(state))
+
+    def test_complete_agreed_criterion_coverage_is_authoritative(self):
+        state = base_state("COMPLETED")
+        state["PENDING_REVIEW_REQUEST"]["ACCEPTANCE_CRITERIA"] = [
+            {"CRITERION": "AC1"}, {"CRITERION": "AC2"}
+        ]
+        state["AUTHORITATIVE_REVIEW_DECISION"]["ACCEPTANCE_STATUS"] = [
+            {"CRITERION": "AC1", "STATUS": "MET"},
+            {"CRITERION": "AC2", "STATUS": "MET"},
+        ]
+        self.assertTrue(completion_gate.final_approval_is_authoritative(state))
+
+    def test_duplicate_or_malformed_criterion_identity_is_not_authoritative(self):
+        invalid_pairs = (
+            (
+                [{"CRITERION": "AC1"}, {"CRITERION": "AC1"}],
+                [{"CRITERION": "AC1", "STATUS": "MET"}],
+            ),
+            (
+                [{"CRITERION": "AC1"}],
+                [
+                    {"CRITERION": "AC1", "STATUS": "MET"},
+                    {"CRITERION": "AC1", "STATUS": "MET"},
+                ],
+            ),
+            (
+                [{"CRITERION": "AC1"}],
+                [{"CRITERION": "", "STATUS": "MET"}],
+            ),
+        )
+        for agreed, statuses in invalid_pairs:
+            with self.subTest(agreed=agreed, statuses=statuses):
+                state = base_state("COMPLETED")
+                state["PENDING_REVIEW_REQUEST"]["ACCEPTANCE_CRITERIA"] = agreed
+                state["AUTHORITATIVE_REVIEW_DECISION"]["ACCEPTANCE_STATUS"] = statuses
                 self.assertFalse(completion_gate.final_approval_is_authoritative(state))
 
 

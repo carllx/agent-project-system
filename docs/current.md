@@ -43,7 +43,7 @@ Agent Project System
 - **Name:** Antigravity Completion-Gate Adapter v0.1
 - **State:** `ACTIVE`
 - **Workflow state:** `FINAL_REVIEW_PENDING`
-- **Review Request ID:** `ACF-AG-ADAPTER-001-R1-FINAL`
+- **Review Request ID:** `ACF-AG-ADAPTER-001-R2-FINAL`
 - **Protocol baseline:** `ACF-0.1`，已完成并获 Browser Lead Final `APPROVE`。
 - **Product baseline:** `af5d84afe314efaf9ee7bd2ad6080a032026a00d`。
 - **Objective:** 把 Lab 已验证可行的 Antigravity Stop Hook、ACF Workflow State、bounded continuation 与 Final Review authority 纳入正式产品架构，形成第一版 Antigravity Completion-Gate Adapter。
@@ -74,10 +74,11 @@ Agent Project System
 ### Current execution assessment
 
 - **CLAIMED_STATUS:** `CLAIM_READY_FOR_REVIEW`
+- **R1 FINAL REVIEW:** `REVISE`；修复 pending agreed Acceptance Criteria 与 Decision coverage 未做完整、唯一、精确身份验证的问题。
 - **KNOWN_RISKS:** Lab evidence 仍位于独立实验目录；产品仓库只保存最小 provenance 和解释，不把外部路径误写成产品实现。
 - **UNVERIFIED:** DeepSeek premature-stop、stale approval enforcement、Global 与 workspace-local Hook 部署选择。
 - **OPEN_QUESTIONS:** 无阻塞当前设计的问题；三项未验证内容均作为后续 Issue/Validation 保留。
-- **PROPOSED_NEXT_ACTION:** 等待 Browser Lead 对 `ACF-AG-ADAPTER-001-R1-FINAL` 做 Final Review；Execution Agent 不自行批准完成。
+- **PROPOSED_NEXT_ACTION:** 完成 R1 correctness revision 验证后，等待 Browser Lead 对 `ACF-AG-ADAPTER-001-R2-FINAL` 做 Final Review；Execution Agent 不自行批准完成。
 
 ## Latest Completed Work Item
 
@@ -190,7 +191,7 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 ## Last validation
 
 - **Command:** `$env:PYTHONDONTWRITEBYTECODE='1'; python -m unittest -v scripts.test_antigravity_completion_gate`
-- **Result:** Passed；7/7（含 Policy、权威 Final Approval、stale/mismatched Approval、等待状态、bounded continuation、精确 route/Work Item 绑定与真实 CLI translation）。受限沙箱不能正确创建 Python 临时目录，因此相同测试在获批的沙箱外进程中运行；未执行真实 Hook 或 Browser 实验。
+- **Result:** Passed；10/10（含 pending agreed Acceptance Criteria 的缺失、完整、重复/malformed coverage 回归，以及 Policy、权威 Final Approval、stale/mismatched Approval、等待状态、bounded continuation、精确 route/Work Item 绑定与真实 CLI translation）。受限沙箱不能正确创建 Python 临时目录，因此相同测试在获批的沙箱外进程中运行；未执行真实 Hook 或 Browser 实验。
 - **Command:** `python scripts/check_docs.py`
 - **Result:** Passed（exit 0）；18 Markdown files registered；AGENTS.md 78/100；无禁用路径、垃圾副本或 `.DS_Store`。
 - **Command:** `git diff --check`

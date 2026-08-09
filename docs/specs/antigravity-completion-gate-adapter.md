@@ -68,6 +68,8 @@ WORKFLOW_STATE
 PENDING_REVIEW_REQUEST:
   REVIEW_REQUEST_ID
   REVIEW_KIND
+  ACCEPTANCE_CRITERIA:
+    - CRITERION
 AUTHORITATIVE_REVIEW_DECISION:
   PROTOCOL_VERSION
   WORK_ITEM_ID
@@ -96,6 +98,8 @@ STOP_RUNTIME_METADATA:
 ```
 
 与当前状态无关的复合字段可以显式为 `NONE`，但不得省略到无法区分 `NONE` 与未知。Antigravity 的 runtime metadata 只属于 Adapter 输入，不进入通用 ACF Protocol schema。
+
+`PENDING_REVIEW_REQUEST.ACCEPTANCE_CRITERIA` 是该 Final Review 的 agreed criteria snapshot/SSOT；不得另建需要同步的 Acceptance Criteria 副本。每个 `CRITERION` identity 必须是非空、无首尾空白且在各自集合内唯一的字符串。Final Approval validation 要求 pending snapshot 与 Decision `ACCEPTANCE_STATUS` 的 criterion identity 集合完全相等，且每个 Decision status 都是 `MET`；缺失、额外、重复或 malformed identity 均使 Approval 非权威。
 
 ### Runtime routing configuration
 
