@@ -7,7 +7,7 @@
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
 - **Branch:** `main`
-- **HEAD / baseline:** `388245228d0455653c6d58fd26b212a5d31c598c`（`docs: align project with agent collaboration framework`）
+- **HEAD / baseline:** `af5d84afe314efaf9ee7bd2ad6080a032026a00d`（`docs: define ACF review protocol v0.1`）
 - **Source Skill VERSION:** `0.4.15`。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
@@ -35,6 +35,49 @@ Agent Project System
 
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + 确定性 bootstrap + manual-export fallback），VERSION `0.4.15`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
+- `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者仍处于 `ACF-AG-ADAPTER-001` 审查前状态，尚未部署。
+
+## Active Work Item
+
+- **ID:** `ACF-AG-ADAPTER-001`
+- **Name:** Antigravity Completion-Gate Adapter v0.1
+- **State:** `ACTIVE`
+- **Workflow state:** `FINAL_REVIEW_PENDING`
+- **Review Request ID:** `ACF-AG-ADAPTER-001-R1-FINAL`
+- **Protocol baseline:** `ACF-0.1`，已完成并获 Browser Lead Final `APPROVE`。
+- **Product baseline:** `af5d84afe314efaf9ee7bd2ad6080a032026a00d`。
+- **Objective:** 把 Lab 已验证可行的 Antigravity Stop Hook、ACF Workflow State、bounded continuation 与 Final Review authority 纳入正式产品架构，形成第一版 Antigravity Completion-Gate Adapter。
+- **Scope:** Product 状态、Adapter Spec/Contract、Antigravity Stop Hook 正式实现及本地测试、ADR、最小 Lab Evidence provenance 与验证。
+- **Out of scope:** 修改 ACF-0.1 Protocol、复制 Lab Prototype、重跑 Hook/Browser 实验、修改 OpenCLI Transport、写入用户级 Hook 配置、Plugin、MCP、CLI、SDK 或部署裁决。
+
+### Evidence baseline
+
+- `ANTIGRAVITY_STOP_ADAPTER_FEASIBILITY=PROVEN`：Antigravity 2.6.0 Global Stop Hook 已真实触发；stdin 已观察到 `conversationId`、`workspacePaths`、`executionNum`、`terminationReason`、`fullyIdle`；返回 `decision=continue` 后，同一 Conversation 从 `executionNum=0` 自动恢复到 `executionNum=1`，无需用户追加消息或 `/goal` wrapper。
+- `ACF_COMPLETION_GATE_REVISION_CONTINUATION=PROVEN`：当 `WORKFLOW_STATE=REVISION_REQUIRED` 且 `FINAL_APPROVAL_VALID=false` 时，Stop Hook 已拦截自然停止、执行 bounded continue，并使 Agent 恢复执行 Browser `REQUIRED_ACTIONS`。
+- `OPENCLI_TRANSPORT=DELIVERY_UNKNOWN / BLOCKED`：Transport 是独立问题，不阻塞 Completion-Gate Productization。
+- **仍未证明：** 真实 DeepSeek 等第三方模型 premature-stop occurrence 的恢复、workspace-local Hook 部署的最终选择、stale approval enforcement。
+- **Lab provenance:** Bundle 使用 `EXPERIMENT_ID=ACF-AG-HOOK-GLOBAL-ANCHORED-005`；本机实际 Evidence 目录名为 `ACF-AG-HOOK-GLOBAL-ANCHORED-V260-005`，路径 `E:\PROJECTS\rr-lead-skill-lab\experiments\ACF-AG-HOOK-GLOBAL-ANCHORED-V260-005\`。系统实验为 `E:\PROJECTS\rr-lead-skill-lab\experiments\ACF-AG-COMPLETION-GATE-SYSTEM-001\`。Lab 是外部 Evidence Source，不是产品实现源码；标签与目录名差异不据此擅自归一化。
+
+### Acceptance Criteria
+
+1. Completion Authority 与 execution termination 明确解耦。
+2. Protocol、Workflow State、Completion-Gate Policy、Antigravity Adapter、Stop Hook 与 Transport 边界明确。
+3. `EXECUTING / REVISION_REQUIRED / INTERMEDIATE_REVIEW_PENDING / FINAL_REVIEW_PENDING / WAITING_FOR_USER / COMPLETED` 的 Stop 行为明确。
+4. 只有满足 ACF-0.1 权威绑定、全部 Acceptance Criteria 为 `MET`、无 unresolved User Decision 且批准未 stale 的 Final `APPROVE` 才能进入 `COMPLETED`。
+5. bounded continuation 有明确预算、重置条件和耗尽行为，不能无限唤醒。
+6. Adapter 输入、输出与失败/降级语义最小且已由无 Lab 硬编码的正式实现覆盖。
+7. Product 文档保存最小 Lab Evidence provenance，并区分已证明与未证明行为。
+8. DeepSeek premature stop、Transport、Deployment 三项后续验证明确且不阻塞本 Work Item。
+9. 不修改 ACF-0.1 Protocol，不复制 Lab Prototype，不实现 Transport；Hook 实现只承担 Antigravity runtime translation。
+10. 文档无重复 SSOT，并通过仓库文档检查。
+
+### Current execution assessment
+
+- **CLAIMED_STATUS:** `CLAIM_READY_FOR_REVIEW`
+- **KNOWN_RISKS:** Lab evidence 仍位于独立实验目录；产品仓库只保存最小 provenance 和解释，不把外部路径误写成产品实现。
+- **UNVERIFIED:** DeepSeek premature-stop、stale approval enforcement、Global 与 workspace-local Hook 部署选择。
+- **OPEN_QUESTIONS:** 无阻塞当前设计的问题；三项未验证内容均作为后续 Issue/Validation 保留。
+- **PROPOSED_NEXT_ACTION:** 等待 Browser Lead 对 `ACF-AG-ADAPTER-001-R1-FINAL` 做 Final Review；Execution Agent 不自行批准完成。
 
 ## Latest Completed Work Item
 
@@ -125,11 +168,12 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - **Blocker：** 无。
 - **Debt（不阻止旧 Work Item 完成）：** 后续证据应区分 `PROBE_CONVERSATION_ID` 与 `RR_LOOP_CONVERSATION_ID`，避免把独立探针 Conversation 误写为当前 Loop Conversation。
 
-## 下一阶段候选
+## 后续 Issue / Validation
 
-- `NEXT_PHASE_CANDIDATE: ACF Protocol v0.1 first falsifiable Lab experiment`
-- `STATUS: NOT_STARTED`
-- 候选实验尚未启动；未创建新的 Active Product Work Item。
+- `VALIDATION_CANDIDATE: THIRD_PARTY_PREMATURE_STOP`：验证真实 DeepSeek 等第三方模型异常停止是否进入同一 Stop lifecycle 并可由 Adapter 恢复。
+- `ISSUE_CANDIDATE: OPENCLI_TRANSPORT_RECOVERY`：独立解决 `DELIVERY_UNKNOWN / BLOCKED` 与 bounded recovery，不并入 Completion Gate。
+- `DECISION_CANDIDATE: ANTIGRAVITY_HOOK_DEPLOYMENT`：另行裁决 Global Hook 与 workspace-local Hook 的产品部署形式。
+- 三项均为 `NOT_STARTED`，不阻塞 `ACF-AG-ADAPTER-001`，也未被启动为并行 Active Work Item。
 
 ## Files to read
 
@@ -137,15 +181,21 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - `README.md`
 - `docs/index.md`
 - `docs/adr/0003-agent-collaboration-framework.md`
+- `docs/specs/agent-collaboration-protocol.md`
+- `docs/specs/antigravity-completion-gate-adapter.md`
+- `docs/adr/0004-antigravity-completion-gate-adapter.md`
+- `runtime/completion_gate.py`
+- `adapters/antigravity/stop_hook.py`
 
 ## Last validation
 
+- **Command:** `$env:PYTHONDONTWRITEBYTECODE='1'; python -m unittest -v scripts.test_antigravity_completion_gate`
+- **Result:** Passed；7/7（含 Policy、权威 Final Approval、stale/mismatched Approval、等待状态、bounded continuation、精确 route/Work Item 绑定与真实 CLI translation）。受限沙箱不能正确创建 Python 临时目录，因此相同测试在获批的沙箱外进程中运行；未执行真实 Hook 或 Browser 实验。
 - **Command:** `python scripts/check_docs.py`
-- **Result:** Passed；16 Markdown files registered；AGENTS.md 78/100；无禁用路径或垃圾副本。
+- **Result:** Passed（exit 0）；18 Markdown files registered；AGENTS.md 78/100；无禁用路径、垃圾副本或 `.DS_Store`。
 - **Command:** `git diff --check`
-- **Result:** Passed（exit 0；只有工作树换行转换提示，无 whitespace error）。
-- **Command:** `git status --short`
-- **Result:** 仅 `docs/current.md`、`docs/index.md`、`docs/specs/research-review-loop.md` 与新增 `docs/specs/agent-collaboration-protocol.md` 有变更；未暂存。
-- **Command:** `git diff --stat`
-- **Result:** Passed；默认 stat 覆盖三个已跟踪文件；新增且已登记的 Protocol Spec 因未跟踪不计入默认 stat。
+- **Result:** Passed（exit 0；只有工作树 LF→CRLF 提示，无 whitespace error）。
+- **Command:** `git status --short` / `git diff --stat`
+- **Result:** 变更仅为 `README.md`、`docs/current.md`、`docs/index.md`、`docs/adr/0004-antigravity-completion-gate-adapter.md`、`docs/specs/antigravity-completion-gate-adapter.md`、`runtime/`、`adapters/` 与 `scripts/test_antigravity_completion_gate.py`；全部未暂存。tracked stat 为 3 files changed、66 insertions、12 deletions；未跟踪文件不计入默认 stat。
+- **Artifact hygiene:** 仓库根无测试 `tmp*` 目录，无 `__pycache__`；产品代码与测试中无 Lab 路径、实验 ID、Lab Conversation ID、`gate_state.json` 或 `HAS_CONTINUED_THIS_REVISION` 硬编码。
 - **Last verified:** 2026-08-09

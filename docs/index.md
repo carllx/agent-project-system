@@ -10,10 +10,12 @@
 | `docs/current.md` | 当前唯一 Work Item 与事实状态 | 每次会话启动及状态流转时 | Active | 2026-08-05 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision 与 Completion Authority | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
+| `docs/specs/antigravity-completion-gate-adapter.md` | Antigravity Completion-Gate Adapter 的状态映射、Contract、bounded continuation 与失败语义 | 设计、实现或验证 Antigravity execution termination gate 时 | Candidate | 2026-08-09 |
 | `docs/specs/research-review-loop.md` | RR Loop 的角色、循环、状态和交接规则 | 执行或修改 RR Loop 时 | Active | 2026-08-05 |
 | `docs/adr/0001-general-system-with-modular-workflows.md` | 通用系统与模块化工作流的架构决定 | 质疑项目定位或模块边界时 | Accepted | 2026-08-05 |
 | `docs/adr/0002-self-contained-user-level-rr-lead-skill.md` | RR Lead 自包含用户级 Skill 的打包与部署决定 | 修改 RR Lead 包结构、安装或分发策略时 | Accepted | 2026-08-05 |
 | `docs/adr/0003-agent-collaboration-framework.md` | Agent Collaboration Framework 与 IDE/Transport 解耦的长期架构决定 | 质疑系统定位、IDE/Transport 边界或框架分层时 | Accepted | 2026-08-08 |
+| `docs/adr/0004-antigravity-completion-gate-adapter.md` | ACF Completion Authority 与 Antigravity execution termination 解耦的架构决定 | 质疑 Completion Gate、Stop Hook 或 Transport 边界时 | Proposed | 2026-08-09 |
 | `skills/research-review-lead/SKILL.md` | RR Lead 模块的操作准则 | 调用或维护 RR Lead 模块时 | Active | 2026-08-05 |
 | `skills/research-review-lead/assets/context-packet.md` | Context Packet 可复用模板 | 首次向 RR Lead 同步 Work Item 时 | Active | 2026-08-05 |
 | `skills/research-review-lead/assets/evidence-packet.md` | 通用 Evidence Packet 可复用模板 | 向 RR Lead 返回跨项目执行或调研证据时 | Active | 2026-08-05 |
