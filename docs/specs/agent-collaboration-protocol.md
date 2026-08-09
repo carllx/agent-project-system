@@ -79,6 +79,21 @@ Contract 规则：
 - `UNVERIFIED` 必须显式列出。未知事实不得被推断为已通过。
 - `PROPOSED_NEXT_ACTION` 是 Execution Agent 的建议，不约束 Browser Lead，也不授予新权限。
 
+### Non-normative review artifact access note
+
+Review Request 的既有 `EVIDENCE` 可以携带一个可选的 Review Artifact locator。此说明是 non-normative access guidance，不增加 ACF-0.1 的必填字段或 GitHub-specific schema；它只帮助 Browser Lead 取得被审查的真实产物，不改变 Review Decision、Completion Authority 或 Transport 语义。
+
+当项目使用 Git 且 Browser Lead 可访问对应 GitHub 仓库时，优先提供已 push 的独立 Review Branch 与不可变 Commit SHA，避免在聊天中人工复制大量代码或 Diff。最小 locator 可以包含：
+
+```text
+REPOSITORY
+REVIEW_BRANCH
+COMMIT_SHA
+BASELINE_SHA: optional
+```
+
+`COMMIT_SHA` 可作为本次 reviewed artifact identity，并是未来实现 stale approval enforcement 的候选输入；v0.1 不因此增加 hash、签名或 GitHub-specific Protocol 字段。GitHub 不是 Completion Authority、ACF Protocol 或实时 Transport，Branch/Commit 可访问也不等于 Review 已通过。没有 GitHub、Browser 无访问权或项目不使用 Git 时，继续使用 Evidence Packet 或 Manual Relay；不得为了使用该路径强制项目公开、上传或采用 Git。
+
 ## Review Decision Contract
 
 Browser Lead 必须针对一个具体 Review Request 返回：

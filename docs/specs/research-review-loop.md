@@ -6,6 +6,8 @@ Research Review Lead Loop（RR Loop）是 Agent Project System 的第一个正�
 
 通用 Review Trigger、Review Request/Decision Contract、Decision 行为与 Completion Authority 由 `docs/specs/agent-collaboration-protocol.md` 唯一规定。本 Spec 只保留 RR Lead 模块的角色、Packet、Transport、恢复与当前实现映射，不复制通用协议。
 
+OpenCLI 的 Session Discovery、五类 Conversation identity、发送前目标绑定、投递验证与 exact-ID recovery 由 `docs/specs/opencli-session-discovery.md` 唯一规定。本 Spec 中的 Transport 内容只记录 RR-specific envelope、当前实现映射与历史 Evidence，不另立身份 Contract。
+
 ```mermaid
 graph TD
     User([用户]) -- 目标与授权 --> RR[RR Lead]
@@ -34,6 +36,8 @@ Context Packet 必须定义所有参与者共同使用且不会被 RR Lead 静�
 模板随源 Skill 包位于 `skills/research-review-lead/assets/`。实际填写的 Packet 默认作为消息传递，不提交到目标项目。浏览器与 IDE 彼此隔离，不依赖自动文件上传。
 
 Evidence Packet 使用通用核心，将目标、范围、产物、验证、来源、不确定性、验收映射、Blocker 和 Debt 分开。Git Diff、命令和退出码只在项目实际使用这些证据时提供；备课、文档、调研和非 Git 项目使用其可复查的产物、来源、覆盖与观察结果。
+
+项目使用 Git 且 Browser Lead 可访问 GitHub 时，Evidence Packet 优先引用已 push 的 Review Branch、Commit SHA 与适用的 baseline SHA，让 Browser 直接审查真实代码和 Diff。该路径只是 `agent-collaboration-protocol.md` 所定义的 Review Artifact access path；没有 GitHub 时继续使用 Evidence Packet 正文或 Manual Relay，GitHub 不承担 RR Decision 或消息 Transport。
 
 ## Loop
 
@@ -126,7 +130,9 @@ Loop Driver 必须保存 Work Item ID、Conversation ID 或 URL、轮次、最�
 
 `TRANSPORT-RECOVERY-002` 又证明 `ask --new` 可能在两个发送前已存在的 Conversation 之间错投：命令报告目标 Conversation 与最终页面 URL 不同，Runtime 只记录 `DELIVERY_UNKNOWN`，而旧恢复逻辑排除了所有发送前 ID，导致已送达消息不可恢复。该实验随后发生计划外发送和探针污染，因此不得作为 A2 通过证据。
 
-### Delivery state and identity
+### Current OpenCLI delivery mapping
+
+以下字段和流程描述当前 RR Lead Wrapper 对 Session Discovery Contract 的实现映射与历史限制，不是第二套 Conversation identity 权威。`OPENCLI-SESSION-DISCOVERY-001` 将在不改变 RR Review authority 的前提下，使旧字段迁移到五类明确 identity。
 
 每个 Browser 消息必须包含 `WORK_ITEM_ID`、唯一 `MESSAGE_ID`、`ROUND` 和 `MESSAGE_TYPE`。同一个 `MESSAGE_ID` 在确认失败前不得重发。传输维护：
 

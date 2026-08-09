@@ -30,7 +30,7 @@ IDE-independent Completion-Gate Policy 位于 `runtime/`，正式 IDE Adapter �
 
 已完成第一版信息架构迁移、RR Lead 自包含源包重构，以及确定性 bootstrap 与 manual-export fallback。当前源包 VERSION `0.4.15`；本机观察到其安装副本位于 `C:\Users\carll\.codex\skills\research-review-lead`，但项目证据尚不能把该本机路径证明为所有平台通用的 canonical 部署规范。首个真实 RR Loop 已完成（`FIRST-USE-LOOP-001`，`FIRST_USABLE_VERSION: 0.4.14`）。
 
-ACF Protocol v0.1 已完成。独立 Lab 已证明 Antigravity Stop Hook 与 `REVISION_REQUIRED` bounded continuation 可行；当前 Product Work Item `ACF-AG-ADAPTER-001` 正把该证据产品化为 IDE-independent Completion-Gate Policy 与第一版 Antigravity Adapter，Transport 与部署裁决继续独立处理。
+ACF Protocol v0.1 与第一版 Antigravity Completion-Gate Adapter 已完成。当前唯一 Active Product Work Item 是 `OPENCLI-SESSION-DISCOVERY-001`，负责把 Conversation 的创建、目标、Browser 当前页面、实际投递与恢复身份拆成明确 Contract；未知 OpenCLI / Browser 机制只交给独立 Lab 做最小实验。GitHub Review Branch + Commit SHA 已登记为 Browser 可访问时优先采用的 Review Artifact access path，但 GitHub 不承担 Completion Authority 或实时 Transport。
 
 ## 阅读入口
 

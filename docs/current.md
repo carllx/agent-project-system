@@ -7,7 +7,7 @@
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
 - **Branch:** `main`
-- **HEAD / reviewed product baseline:** `79611c94f277997e30ecce152a483696107d42aa`（`fix: validate complete acceptance coverage`）
+- **HEAD / reviewed product baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）
 - **Source Skill VERSION:** `0.4.15`。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
@@ -36,6 +36,63 @@ Agent Project System
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + 确定性 bootstrap + manual-export fallback），VERSION `0.4.15`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
+
+## Active Work Item
+
+- **ID:** `OPENCLI-SESSION-DISCOVERY-001`
+- **Name:** OpenCLI Session Discovery and Identity Contract
+- **State:** `IN_PROGRESS`
+- **Workflow state:** `EXECUTING`
+- **Review Request ID:** `OPENCLI-SESSION-DISCOVERY-001-R1-INTERMEDIATE`
+- **Product baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`。
+- **Objective:** 建立 `CREATE → CAPTURE → VERIFY → SEND → VERIFY DELIVERY → RECOVER` 的 Session Discovery / Identity Contract，并据此修复 Product Transport 对 Conversation identity 的建立、验证、错投检测与 bounded recovery。
+- **Scope:** 现有 OpenCLI Transport 与历史 Evidence 审计；五类 identity、Evidence、状态和 no-resend Contract；Product Acceptance Criteria；真正未知机制的最小 Lab handoff；后续在 Evidence 基础上的 Product implementation 与 regression tests。
+- **Out of scope:** 重测普通 send/receive、修改 ACF-0.1、Hook、Completion Gate、Antigravity deployment、MCP、Plugin、GitHub automation、无界 Browser 调试或让 Lab 直接成为 Product source。
+
+### Session identities
+
+- `CREATED_CONVERSATION_ID`: 创建动作直接建立并证明的 identity；`/new`、根页面和 `EMPTY_RESULT` 不等于 ID。
+- `TARGET_CONVERSATION_ID`: 写入前绑定的预期目标。
+- `CURRENT_BROWSER_CONVERSATION_ID`: 某次 status 中精确 `/c/<id>` 页面，只证明当时 Browser 位置。
+- `DELIVERY_CONVERSATION_ID`: exact Work Item/Message marker 证明的实际投递位置。
+- `RECOVERED_CONVERSATION_ID`: timeout/缺失身份后 bounded recovery 选出的唯一候选；只有 marker 验证后才可成为 delivery identity。
+
+完整 Contract、已知/未知事实、Acceptance Criteria 与 `LAB_EXPERIMENT_HANDOFF` 的唯一权威为 `docs/specs/opencli-session-discovery.md`。
+
+### Current assessment
+
+- **Known:** `/new` 不是 exact Conversation；OpenCLI 1.8.6 `new` 只观察到 Status；status URL、ask identity、history candidate 与 actual delivery 不能混用；`EMPTY_RESULT` 只证明空页；timeout 为 `DELIVERY_UNKNOWN`；同一 Message ID 只允许一次写入；exact marker 错投到 pre-send Conversation 为 `MISROUTED_DELIVERY`。
+- **Unknown:** 新建后发送前取得稳定 exact ID 的机制；可靠 explicit-target write 的实际行为；第一条消息生成 ID 时如何原子证明 target intent 与 delivery；timeout/navigation error 下 ask identity、status 与 detail 的稳定关系。
+- **Lab:** `OPENCLI-SESSION-IDENTITY-MIN-001` handoff 已定义，等待 Browser Lead 审查后交给 Lab；本轮未运行 Browser/OpenCLI 实验。
+- **Product implementation:** 未开始；必须等待必要机制 Evidence，不以现有 Wrapper 行为冒充 Contract 已满足。
+
+### Intermediate Browser Review
+
+- **R1:** `APPROVE`；`PROTOCOL_VERSION=ACF-0.1`，`IN_REPLY_TO_REVIEW_REQUEST_ID=OPENCLI-SESSION-DISCOVERY-001-R1-INTERMEDIATE`，`REVIEW_KIND=INTERMEDIATE`。
+- **MET:** `AC1`、`AC2`、`AC5`、`AC6`、`AC7`、`AC9`、`AC10`。
+- **UNVERIFIED:** `AC3`、`AC4`，等待 `OPENCLI-SESSION-IDENTITY-MIN-001` Lab Evidence。
+- **NOT_MET:** `AC8`，Product implementation/tests 尚未开始且不得在 Lab Evidence 前开始。
+- **REQUIRED_ACTIONS / DEBT / USER_DECISION_REQUIRED:** `NONE`。
+- 本次 Intermediate `APPROVE` 只授权 Contract 进入 Lab validation，不批准 Work Item 完成。
+
+### Acceptance Criteria
+
+1. 五类 Conversation identity 在 Product Contract 与 Runtime State 中显式区分，来源和建立时点可审查。
+2. `CREATE → CAPTURE → VERIFY → SEND → VERIFY DELIVERY → RECOVER` 每一步的输入、成功证据与失败语义明确。
+3. 新 Conversation exact-ID 机制由现有 Evidence 或最小 Lab 实验证明；未证明时阻止需要 pre-send target 的正式发送。
+4. 发送前 target 绑定与 Browser current/target mismatch 检测明确。
+5. Delivery identity 只由 identity-bound exact Work Item/Message marker Evidence 建立。
+6. timeout、identity conflict、misroute、recovery 与 `DELIVERY_UNKNOWN` 的迁移明确且有界。
+7. 每个 Message ID 最多一次写入，delivery unknown/misroute/recovery failure 禁止 resend。
+8. Product implementation 与 regression tests 覆盖正常、错页、缺失、冲突、恢复、marker ambiguity 与 no-resend。
+9. 不改变 ACF Completion Authority，不把 OpenCLI、GitHub 或 Browser 当前标签提升为 authority。
+10. Lab 只验证未知 Session mechanism，文档无重复 SSOT。
+
+### Review artifact access path
+
+- GitHub 可用且 Browser 有权访问时，Review Request 优先携带 repository、Review Branch、Commit SHA 与适用的 baseline SHA，Browser 直接审查真实代码和 Diff。
+- GitHub 只是 Review Artifact access path，不是 Completion Authority、ACF Protocol 或实时 Transport；无 GitHub 时继续使用 Evidence Packet / Manual Relay。
+- 通用规则记录在 `docs/specs/agent-collaboration-protocol.md`；RR-specific 映射记录在 `docs/specs/research-review-loop.md`。
 
 ## Latest Completed Work Item
 
@@ -174,9 +231,9 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 ## 后续 Issue / Validation
 
 - `VALIDATION_CANDIDATE: THIRD_PARTY_PREMATURE_STOP`：验证真实 DeepSeek 等第三方模型异常停止是否进入同一 Stop lifecycle 并可由 Adapter 恢复。
-- `ISSUE_CANDIDATE: OPENCLI_TRANSPORT_RECOVERY`：独立解决 `DELIVERY_UNKNOWN / BLOCKED` 与 bounded recovery，不并入 Completion Gate。
+- `PRODUCT_CANDIDATE: CODEX-COMPLETION-GATE-ADAPTER`：为 Codex 寻找可验证的 runtime/lifecycle mechanism，并映射同一 IDE-independent Completion-Gate Contract；`NOT_STARTED`，不阻塞 Session Discovery。
 - `DECISION_CANDIDATE: ANTIGRAVITY_HOOK_DEPLOYMENT`：另行裁决 Global Hook 与 workspace-local Hook 的产品部署形式。
-- 三项均为 `NOT_STARTED`，不阻塞 `ACF-AG-ADAPTER-001`，也未被启动为并行 Active Work Item。
+- 两项均为 `NOT_STARTED`，不阻塞 `OPENCLI-SESSION-DISCOVERY-001`，也未被启动为并行 Active Work Item。
 
 ## Files to read
 
@@ -185,12 +242,13 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - `docs/index.md`
 - `docs/adr/0003-agent-collaboration-framework.md`
 - `docs/specs/agent-collaboration-protocol.md`
+- `docs/specs/opencli-session-discovery.md`
 - `docs/specs/antigravity-completion-gate-adapter.md`
 - `docs/adr/0004-antigravity-completion-gate-adapter.md`
 - `runtime/completion_gate.py`
 - `adapters/antigravity/stop_hook.py`
 
-## Last validation
+## Previous validation baseline
 
 - **Command:** `$env:PYTHONDONTWRITEBYTECODE='1'; python -m unittest -v scripts.test_antigravity_completion_gate`
 - **Result:** Passed；10/10（含 pending agreed Acceptance Criteria 的缺失、完整、重复/malformed coverage 回归，以及 Policy、权威 Final Approval、stale/mismatched Approval、等待状态、bounded continuation、精确 route/Work Item 绑定与真实 CLI translation）。受限沙箱不能正确创建 Python 临时目录，因此相同测试在获批的沙箱外进程中运行；未执行真实 Hook 或 Browser 实验。
