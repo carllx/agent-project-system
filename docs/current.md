@@ -7,7 +7,7 @@
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
 - **Branch:** `main`
-- **HEAD / baseline:** `af5d84afe314efaf9ee7bd2ad6080a032026a00d`（`docs: define ACF review protocol v0.1`）
+- **HEAD / reviewed product baseline:** `79611c94f277997e30ecce152a483696107d42aa`（`fix: validate complete acceptance coverage`）
 - **Source Skill VERSION:** `0.4.15`。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
@@ -35,14 +35,14 @@ Agent Project System
 
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + 确定性 bootstrap + manual-export fallback），VERSION `0.4.15`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
-- `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者仍处于 `ACF-AG-ADAPTER-001` 审查前状态，尚未部署。
+- `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
 
-## Active Work Item
+## Latest Completed Work Item
 
 - **ID:** `ACF-AG-ADAPTER-001`
 - **Name:** Antigravity Completion-Gate Adapter v0.1
-- **State:** `ACTIVE`
-- **Workflow state:** `FINAL_REVIEW_PENDING`
+- **State:** `ACHIEVED`
+- **Workflow state:** `COMPLETED`
 - **Review Request ID:** `ACF-AG-ADAPTER-001-R2-FINAL`
 - **Protocol baseline:** `ACF-0.1`，已完成并获 Browser Lead Final `APPROVE`。
 - **Product baseline:** `af5d84afe314efaf9ee7bd2ad6080a032026a00d`。
@@ -71,16 +71,18 @@ Agent Project System
 9. 不修改 ACF-0.1 Protocol，不复制 Lab Prototype，不实现 Transport；Hook 实现只承担 Antigravity runtime translation。
 10. 文档无重复 SSOT，并通过仓库文档检查。
 
-### Current execution assessment
+### Final Browser Review
 
-- **CLAIMED_STATUS:** `CLAIM_READY_FOR_REVIEW`
 - **R1 FINAL REVIEW:** `REVISE`；修复 pending agreed Acceptance Criteria 与 Decision coverage 未做完整、唯一、精确身份验证的问题。
+- **R2 FINAL REVIEW:** `APPROVE`；`PROTOCOL_VERSION=ACF-0.1`，`IN_REPLY_TO_REVIEW_REQUEST_ID=ACF-AG-ADAPTER-001-R2-FINAL`，`REVIEW_KIND=FINAL`。
+- **ACCEPTANCE_STATUS:** `AC1` 至 `AC10` 全部 `MET`。
+- **REQUIRED_ACTIONS:** `NONE`。
 - **KNOWN_RISKS:** Lab evidence 仍位于独立实验目录；产品仓库只保存最小 provenance 和解释，不把外部路径误写成产品实现。
 - **UNVERIFIED:** DeepSeek premature-stop、stale approval enforcement、Global 与 workspace-local Hook 部署选择。
 - **OPEN_QUESTIONS:** 无阻塞当前设计的问题；三项未验证内容均作为后续 Issue/Validation 保留。
-- **PROPOSED_NEXT_ACTION:** 完成 R1 correctness revision 验证后，等待 Browser Lead 对 `ACF-AG-ADAPTER-001-R2-FINAL` 做 Final Review；Execution Agent 不自行批准完成。
+- **Completion authority:** Browser Lead 已在用户授权与 agreed Acceptance Criteria 范围内批准技术完成；Execution Agent 未自行批准。
 
-## Latest Completed Work Item
+## Previous Completed Work Item
 
 - **ID:** `ACF-PROTOCOL-001`
 - **Name:** Agent Collaboration Protocol Candidate v0.1
@@ -117,7 +119,7 @@ Agent Project System
 - 本次批准不表示 Antigravity Adapter、Stop Hook 或 Transport integration 已验证，也不表示 ACF 已产品化完成。
 - 当前没有 Active Product Work Item。
 
-## Previous Completed Work Item
+## Earlier Completed Work Item
 
 - **ID:** `BOOTSTRAP-MANUAL-RELAY-001`
 - **Name:** 确定性 Browser Bootstrap 与 Manual Relay fallback
@@ -197,6 +199,6 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - **Command:** `git diff --check`
 - **Result:** Passed（exit 0；只有工作树 LF→CRLF 提示，无 whitespace error）。
 - **Command:** `git status --short` / `git diff --stat`
-- **Result:** 变更仅为 `README.md`、`docs/current.md`、`docs/index.md`、`docs/adr/0004-antigravity-completion-gate-adapter.md`、`docs/specs/antigravity-completion-gate-adapter.md`、`runtime/`、`adapters/` 与 `scripts/test_antigravity_completion_gate.py`；全部未暂存。tracked stat 为 3 files changed、66 insertions、12 deletions；未跟踪文件不计入默认 stat。
+- **Result:** 合并后收口变更仅为 `docs/current.md`、`docs/index.md` 与 `docs/adr/0004-antigravity-completion-gate-adapter.md`；未暂存。stat 为 3 files changed、16 insertions、14 deletions。
 - **Artifact hygiene:** 仓库根无测试 `tmp*` 目录，无 `__pycache__`；产品代码与测试中无 Lab 路径、实验 ID、Lab Conversation ID、`gate_state.json` 或 `HAS_CONTINUED_THIS_REVISION` 硬编码。
 - **Last verified:** 2026-08-09

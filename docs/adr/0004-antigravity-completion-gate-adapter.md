@@ -1,6 +1,6 @@
 # ADR 0004: Antigravity Completion-Gate Adapter
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-08-09
 
 ## Context
