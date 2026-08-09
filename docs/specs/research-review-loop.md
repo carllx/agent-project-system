@@ -4,6 +4,8 @@
 
 Research Review Lead Loop（RR Loop）是 Agent Project System 的第一个正式运行模块。它让用户、浏览器端 RR Lead 与本地 IDE Agent 在不能直接互相控制的情况下，通过轻量 Packet、真实执行证据和明确下一步持续推进一个 Work Item。
 
+通用 Review Trigger、Review Request/Decision Contract、Decision 行为与 Completion Authority 由 `docs/specs/agent-collaboration-protocol.md` 唯一规定。本 Spec 只保留 RR Lead 模块的角色、Packet、Transport、恢复与当前实现映射，不复制通用协议。
+
 ```mermaid
 graph TD
     User([用户]) -- 目标与授权 --> RR[RR Lead]
@@ -39,11 +41,13 @@ Evidence Packet 使用通用核心，将目标、范围、产物、验证、来�
 2. RR Lead 检查目标、进行必要调研并下发可执行的 `NEXT_WORK_ORDER` 与验证标准。
 3. IDE 在授权范围内执行，用适合当前项目类型的真实证据形成 Evidence Packet。
 4. RR Lead 分别给出本轮审查结论和整个任务状态，区分 Blocker 与 Debt，并给出下一步。
-5. 达到验收标准时任务进入 `ACHIEVED`；需要用户决定时进入 `NEEDS_DECISION`；否则继续推进。
+5. 当 IDE Agent 声称已达到验收标准时，必须按通用协议提交 Final Review；只有 Browser Lead 返回匹配的 Final `APPROVE` 后任务才可进入 `ACHIEVED`。需要用户决定时进入 `NEEDS_DECISION`；否则继续推进。
 
 只要 Work Item 为 `IN_PROGRESS`、存在可执行的 `NEXT_WORK_ORDER`、没有用户决定或安全风险，并且存在新增证据或合理新路径，循环就继续。协议不使用“无限循环”：`ACHIEVED`、`BLOCKED`、`NEEDS_DECISION`、`STALLED` 和 `UNSAFE` 都会停止本地执行。
 
 ## Review decision and work item state
+
+以下字段是 RR Lead 模块现有实现 Contract，不是 ACF 通用协议的第二套权威。Protocol Candidate v0.1 使用 `APPROVE / REVISE / ESCALATE_TO_USER`，并把 Debt 作为独立字段；当前 RR Envelope 的迁移和兼容映射留给后续实现 Work Item，本轮不修改 Transport。
 
 两个字段不得混用：
 
@@ -57,7 +61,7 @@ IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 
 例如 `REVIEW_DECISION: PASS_WITH_DEBT` 与 `WORK_ITEM_STATE: IN_PROGRESS` 表示本轮实现通过但整个任务仍需继续。
 
-RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、`MET / NOT_MET / UNVERIFIED`、Evidence，并包含 `FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成；只有所有原验收条件都有充分证据且为 `MET` 才能进入 `ACHIEVED`。
+RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、`MET / NOT_MET / UNVERIFIED`、Evidence，并包含 `FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成；只有所有原验收条件都有充分证据且为 `MET`，并满足 ACF Protocol 的 Final Review Completion invariant，才允许进入 `ACHIEVED`。
 
 ## Sixth-round health checkpoint
 

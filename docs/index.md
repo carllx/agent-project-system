@@ -9,6 +9,7 @@
 | `docs/index.md` | 长期 Markdown 唯一登记表 | 查找权威资料或创建文档前 | Active | 2026-08-05 |
 | `docs/current.md` | 当前唯一 Work Item 与事实状态 | 每次会话启动及状态流转时 | Active | 2026-08-05 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
+| `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision 与 Completion Authority | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
 | `docs/specs/research-review-loop.md` | RR Loop 的角色、循环、状态和交接规则 | 执行或修改 RR Loop 时 | Active | 2026-08-05 |
 | `docs/adr/0001-general-system-with-modular-workflows.md` | 通用系统与模块化工作流的架构决定 | 质疑项目定位或模块边界时 | Accepted | 2026-08-05 |
 | `docs/adr/0002-self-contained-user-level-rr-lead-skill.md` | RR Lead 自包含用户级 Skill 的打包与部署决定 | 修改 RR Lead 包结构、安装或分发策略时 | Accepted | 2026-08-05 |

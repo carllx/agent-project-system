@@ -7,7 +7,7 @@
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
 - **Branch:** `main`
-- **HEAD:** `1d2c44b`（`feat: deterministic bootstrap and manual relay for RR Lead (0.4.15)`）
+- **HEAD / baseline:** `388245228d0455653c6d58fd26b212a5d31c598c`（`docs: align project with agent collaboration framework`）
 - **Source Skill VERSION:** `0.4.15`。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
@@ -36,7 +36,44 @@ Agent Project System
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + 确定性 bootstrap + manual-export fallback），VERSION `0.4.15`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 
-## Completed Work Item
+## Latest Completed Work Item
+
+- **ID:** `ACF-PROTOCOL-001`
+- **Name:** Agent Collaboration Protocol Candidate v0.1
+- **Protocol version:** `ACF-0.1`
+- **Review decision:** `APPROVE`
+- **Work Item state:** `ACHIEVED`
+- **Baseline commit:** `388245228d0455653c6d58fd26b212a5d31c598c`
+- **Prerequisites:** `BOOTSTRAP-MANUAL-RELAY-001=ACHIEVED`；`LAB-REPO-REVIEW-001=ACHIEVED`。
+- **Objective:** 只定义足以支持下一阶段真实实验的通用 Review Protocol，使 Execution Agent 与 Browser Lead 能执行 `Execute → Review → Revise → Review → Approve`，并禁止 Execution Agent 自行批准 Work Item 完成。
+- **Scope:** Protocol v0.1、独立 Spec、RR-specific 映射说明、文档验证。
+- **Out of scope:** Hook、OpenCLI Transport、MCP、Plugin、Lab Harness、Browser/Antigravity 实验。
+
+### Acceptance Criteria
+
+1. 明确 Intermediate 与 Final Review 的区别。
+2. Execution Agent 不能 self-approve completion。
+3. Review Request 有最小稳定 Contract。
+4. Browser Decision 有最小稳定 Contract。
+5. `APPROVE / REVISE / ESCALATE_TO_USER` 行为明确。
+6. User Authority 边界明确。
+7. Protocol 不依赖 OpenCLI。
+8. Protocol 不依赖 Antigravity-specific schema。
+9. 能被下一阶段 Lab 转化为可证伪 Hypothesis。
+10. 文档不存在重复 SSOT。
+
+### Final Browser Review
+
+- `PROTOCOL_VERSION: ACF-0.1`
+- `IN_REPLY_TO_REVIEW_REQUEST_ID: ACF-PROTOCOL-001-R3-FINAL`
+- `REVIEW_KIND: FINAL`
+- `REVIEW_DECISION: APPROVE`
+- 所有 agreed Acceptance Criteria 已满足。
+- 批准含义：ACF Protocol v0.1 已达到可交给 Lab 做第一轮真实可证伪实验的设计基线。
+- 本次批准不表示 Antigravity Adapter、Stop Hook 或 Transport integration 已验证，也不表示 ACF 已产品化完成。
+- 当前没有 Active Product Work Item。
+
+## Previous Completed Work Item
 
 - **ID:** `BOOTSTRAP-MANUAL-RELAY-001`
 - **Name:** 确定性 Browser Bootstrap 与 Manual Relay fallback
@@ -88,10 +125,11 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - **Blocker：** 无。
 - **Debt（不阻止旧 Work Item 完成）：** 后续证据应区分 `PROBE_CONVERSATION_ID` 与 `RR_LOOP_CONVERSATION_ID`，避免把独立探针 Conversation 误写为当前 Loop Conversation。
 
-## 下一 Work Item 候选
+## 下一阶段候选
 
-- `NEXT_WORK_ITEM_CANDIDATE: ACF-PROTOCOL-001`
-- 候选项尚未启动，不是 Active Work Item。
+- `NEXT_PHASE_CANDIDATE: ACF Protocol v0.1 first falsifiable Lab experiment`
+- `STATUS: NOT_STARTED`
+- 候选实验尚未启动；未创建新的 Active Product Work Item。
 
 ## Files to read
 
@@ -103,11 +141,11 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 ## Last validation
 
 - **Command:** `python scripts/check_docs.py`
-- **Result:** Passed；15 Markdown files registered；AGENTS.md 78/100；无禁用路径或垃圾副本。
+- **Result:** Passed；16 Markdown files registered；AGENTS.md 78/100；无禁用路径或垃圾副本。
 - **Command:** `git diff --check`
 - **Result:** Passed（exit 0；只有工作树换行转换提示，无 whitespace error）。
 - **Command:** `git status --short`
-- **Result:** 仅 README、current、index、system-governance 与 ADR-0003 五个授权文件有变更；ADR-0002 历史正文未修改。
+- **Result:** 仅 `docs/current.md`、`docs/index.md`、`docs/specs/research-review-loop.md` 与新增 `docs/specs/agent-collaboration-protocol.md` 有变更；未暂存。
 - **Command:** `git diff --stat`
-- **Result:** Passed；默认 stat 覆盖四个已跟踪治理文件；未跟踪且已登记的 ADR-0003 在暂存后计入 commit stat。
+- **Result:** Passed；默认 stat 覆盖三个已跟踪文件；新增且已登记的 Protocol Spec 因未跟踪不计入默认 stat。
 - **Last verified:** 2026-08-09
