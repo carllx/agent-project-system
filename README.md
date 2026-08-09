@@ -1,5 +1,24 @@
 # Agent Project System
 
+## BROWSER_NEW_CONVERSATION_START_HERE
+
+新 Browser Agent 的唯一外部入口：
+
+```text
+REPOSITORY: carllx/agent-project-system
+START_HERE: README.md
+```
+
+必须从用户提供的 exact `HANDOFF_COMMIT_SHA` 读取本文件，再按以下顺序恢复项目：
+
+1. `AGENTS.md`
+2. `README.md`
+3. `docs/index.md`
+4. `docs/current.md`
+5. 根据 `docs/index.md` 的 `Read when` 读取当前 Work Item 适用的 Spec、ADR、Skill 或模板
+
+不得从旧聊天记忆猜测项目状态。GitHub exact ref 中的真实文件、当前状态和证据优先；`main` 不一定包含尚未完成的 Active Work Item。若 exact ref 不可读取或上述入口互相冲突，停止并把冲突报告给用户，不得自行补全。
+
 Agent Project System 的北极星是一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。它既不是单独的 RR Lead Skill，也不是 OpenCLI Transport。
 
 目标关系：
@@ -30,7 +49,7 @@ IDE-independent Completion-Gate Policy 位于 `runtime/`，正式 IDE Adapter �
 
 已完成第一版信息架构迁移、RR Lead 自包含源包重构，以及确定性 bootstrap 与 manual-export fallback。当前源包 VERSION `0.4.15`；本机观察到其安装副本位于 `C:\Users\carll\.codex\skills\research-review-lead`，但项目证据尚不能把该本机路径证明为所有平台通用的 canonical 部署规范。首个真实 RR Loop 已完成（`FIRST-USE-LOOP-001`，`FIRST_USABLE_VERSION: 0.4.14`）。
 
-ACF Protocol v0.1 与第一版 Antigravity Completion-Gate Adapter 已完成。当前唯一 Active Product Work Item 是 `OPENCLI-SESSION-DISCOVERY-001`，负责把 Conversation 的创建、目标、Browser 当前页面、实际投递与恢复身份拆成明确 Contract；未知 OpenCLI / Browser 机制只交给独立 Lab 做最小实验。GitHub Review Branch + Commit SHA 已登记为 Browser 可访问时优先采用的 Review Artifact access path，但 GitHub 不承担 Completion Authority 或实时 Transport。
+ACF Protocol v0.1 与第一版 Antigravity Completion-Gate Adapter 已完成。当前唯一 Active Product Work Item 是 `OPENCLI-SESSION-DISCOVERY-001`。Lab 已证明新 Session 可在首条 write 后捕获并验证 exact identity，再把该 delivery identity 提升为后续明确 target；Product implementation 与 tests 尚未完成，timeout recovery 和无额外 Conversation 副作用仍未验证。GitHub Review Branch + Commit SHA 是 Browser 可访问时优先采用的 Review Artifact access path，但 GitHub 不承担 Completion Authority 或实时 Transport。
 
 ## 阅读入口
 

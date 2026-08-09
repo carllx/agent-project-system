@@ -106,7 +106,7 @@ Local OpenCLI `1.8.6` help and the Transport Smoke incidents established:
 - `new` is a separate read-class command but reports only `Status`; `status` reports the current URL and `read` reports current-page messages;
 - history ordering is not a reliable newest-first contract, and scanning every pre-send conversation is prohibited.
 
-`opencli chatgpt send` exists according to help and appears non-waiting, but its creation, targeting, identity capture, and delivery behavior remain `UNVERIFIED`. Do not use it as the trusted runtime path before Experiment A3 passes. Never use `ask --new` to send a real Work Item from an unknown page state.
+Lab `OPENCLI-SESSION-IDENTITY-MIN-001-R2` observed that `opencli chatgpt send` can perform the first write on `/new`, after which `status` and current-page `read` expose one exact Conversation ID and marker; a subsequent `send --conversation <TARGET>` kept the same delivery Conversation. This proves the technical identity-promotion hypothesis, not full Product integration: no bounded post-write history delta proved absence of extra Conversations, no natural timeout occurred, and the Lab Agent violated the zero-schedule rule. The current Wrapper still uses `ask`; do not claim it implements the proven `send` path until the Product Work Item aligns code and tests. Never use `ask --new` to send a real Work Item from an unknown page state.
 
 ## Identify every Browser message
 

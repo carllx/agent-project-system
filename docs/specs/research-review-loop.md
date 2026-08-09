@@ -24,6 +24,20 @@ graph TD
 
 RR Lead 监督方向和质量；IDE Agent 用本地事实监督并纠正纸面判断。真实文件、测试输出和 Git Diff 优先于未验证的外部推测。
 
+### Browser / Product / Lab collaboration
+
+```text
+Browser Lead
+↔ Product Agent
+↔ Lab Agent
+```
+
+- **Product Agent** owns the Product Problem、Contract、Acceptance Criteria、implementation 与 regression tests；它不得把 Lab prototype 直接当作 Product source。
+- **Lab Agent** 只接受边界明确的 `LAB_EXPERIMENT_HANDOFF`，对不确定的外部 runtime/Browser 机制做最小实验，保存 raw Evidence 并返回 Reference Probe；不得直接修改 Product 仓库或扩大 Product Contract。
+- **Browser Lead** 审查 Product Contract 与 Lab Evidence，明确区分技术结果、实验合规和未验证项，再把清理后的 Review Decision / Work Order 交回 Product Agent；不得把 Lab 自报 PASS 直接提升为 Product 事实。
+
+GitHub Review Branch + exact Commit SHA 是 Browser 可访问时优先的 Artifact Review Path，不是实时 Transport。跨 Browser Conversation 时，新的 Browser Lead 必须从 Handoff 给出的 exact ref 读取 `README.md` 及其 startup order，而不是依赖旧聊天摘要。
+
 ## Goal Contract and information exchange
 
 Context Packet 必须定义所有参与者共同使用且不会被 RR Lead 静默扩大的 Goal Contract：`WORK_ITEM_ID`、`SHARED_OBJECTIVE`、`ACCEPTANCE_CRITERIA`、`SCOPE`、`CONSTRAINTS`、`EVIDENCE_REQUIRED` 和 `STOP_CONDITIONS`。新发现但不阻塞本目标的改进进入 Debt；改变验收条件必须由用户明确决定。
@@ -170,7 +184,7 @@ PREPARE_MESSAGE
 → PARSE_RR_REVIEW
 ```
 
-新 Conversation 的正式发送必须由单一 `send --prepare-new` Wrapper 调用完成：先保存有限 recent history 基线，再执行一次 `opencli chatgpt new`，用 `status` 证明当前 URL 为 ChatGPT 根页面或 `/new`，并用 `read` 证明当前页面为空；只有这些条件全部满足才执行一次 `ask`，随后解析 ask 身份并检查发送后 status。不得使用 `ask --new`，不得要求用户预先打开 `/new`，也不得把创建验证与发送拆成两个正式实验。
+当前 Wrapper 的正式发送仍由单一 `send --prepare-new` 调用完成：保存有限 recent history 基线，执行 `opencli chatgpt new`，用 `status` 与 current-page `read` 验证空白环境，再执行一次 `ask` 并做发送后身份处理。Lab `OPENCLI-SESSION-IDENTITY-MIN-001-R2` 已独立证明的最小机制则是一次 `opencli chatgpt send` 首写、发送后 exact identity/marker 验证、将 delivery identity 提升为下一轮 target，再用 `send --conversation <TARGET>` 续写。二者的 Product 对齐属于 `OPENCLI-SESSION-DISCOVERY-001` 下一实现动作；在完成前不得把当前 `ask` 路径描述成已由该 Lab 证明。`ask --new` 继续禁止。
 
 正常恢复不得扫描全部 pre-send Conversation。NEW 模式必须先保存有限 recent history 基线；ask 无可用 Conversation ID 时依次执行一次发送后 status、一次相同窗口的 history refresh、排除基线 ID 的 `NEW_CANDIDATE_DIFF`，再选择 ask 身份、当前发送后 Conversation 或唯一新增候选中的最强目标执行最多一次 detail。只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，命中立即停止，不保存无关正文；不得扩大候选数量或无限轮询。当前发送后目标若属于发送前 ID 且精确命中两个标识，仍为 `MISROUTED_DELIVERY`；找不到则保持 `DELIVERY_UNKNOWN` 并永久禁止该 Message ID 重发。
 
@@ -205,7 +219,7 @@ URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码�
 
 集成 Runtime 记录 `operation=START_NEW_AND_SEND`、`prepare_new=true`、基线、new/read 验证、ask 身份、发送后 status、可选 history diff/detail、全部预算与最终 delivery state。Wrapper 自身无法观察的外层 Agent 工具计数仍必须标记为 `UNAVAILABLE`，不得伪报整个实验为零。
 
-本机 OpenCLI `1.8.6` help 已确认 `new` 只声明输出 `Status`，`status` 声明输出当前 URL，`read` 可检查当前页面消息；因此集成调用仍必须组合 URL 与空页面验证，且不得依赖未验证的 `opencli chatgpt send`。
+本机 OpenCLI `1.8.6` 中，Lab 已观察到：`new` 只返回 Status 并进入 `/new`；首条 `send` 后 `status` 进入 exact `/c/<id>`，current-page `read` 可验证 marker；随后 `send --conversation <TARGET>` 与第二次 marker read 保持同一 Conversation。`read` 仍绑定当前 Browser 页面，不是 arbitrary exact-ID read。该轮没有 bounded post-write history delta，也没有自然 timeout，因此不得据此声明无额外 Conversation 或 timeout recovery 已通过。
 
 ### 实验 Agent 协议
 

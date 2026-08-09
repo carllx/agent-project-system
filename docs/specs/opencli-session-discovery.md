@@ -56,13 +56,13 @@ MESSAGE_ID: when applicable
 
 ### 3. VERIFY
 
-发送前必须建立一个明确的 `TARGET_CONVERSATION_ID`。Existing 模式要求显式目标 ID，并通过受限 status/history/detail Evidence 证明该 identity 存在且与当前发送机制可绑定。New 模式只有在创建/捕获机制产生可验证 exact ID 时才能在发送前绑定；如果 OpenCLI 只能在第一条消息写入后才生成 ID，则该能力缺口必须由 Lab 明确，Product 不得伪造 pre-send target。
+Existing 模式发送前必须建立明确的 `TARGET_CONVERSATION_ID`，并证明该 identity 与受支持的 explicit-target write 机制可绑定。New 模式已证明在 `/new` 首写前没有 exact ID：此唯一 bootstrap 例外必须显式记录 `TARGET_CONVERSATION_ID=UNAVAILABLE` 与 `TARGET_BINDING_MODE=NEW_SESSION_FIRST_WRITE`，只允许在已验证空白页执行一次写入；不得伪造 pre-send target。
 
-`CURRENT_BROWSER_CONVERSATION_ID == TARGET_CONVERSATION_ID` 只在发送机制依赖当前页面时是必要条件；若未来命令有被真实验证的 explicit target 参数，则 Browser 可以打开其他页面，但命令返回与投递仍必须证明目标一致。当前是否存在这种可靠机制为 `UNVERIFIED`。
+首写后必须先由 post-send exact Conversation identity 与 current-page marker Evidence 建立 `DELIVERY_CONVERSATION_ID`，然后才把它提升为下一轮 `TARGET_CONVERSATION_ID`。已证明的 `send --conversation <TARGET>` 会导航 Browser 到目标 Conversation；发送后的 current、delivery 与 target 仍须分别记录并核对，不能以导航成功代替 marker Evidence。
 
 ### 4. SEND
 
-发送前持久化 `WORK_ITEM_ID`、`MESSAGE_ID`、`TARGET_CONVERSATION_ID`、目标 Evidence、`send_attempt_count=0` 与状态。实际写命令调用边界必须先原子记录 `send_attempt_count=1`。
+发送前持久化 `WORK_ITEM_ID`、`MESSAGE_ID`、`TARGET_CONVERSATION_ID` 或允许的 `UNAVAILABLE` bootstrap 状态、target binding mode、目标 Evidence、`send_attempt_count=0` 与状态。实际写命令调用边界必须先原子记录 `send_attempt_count=1`。
 
 同一 `MESSAGE_ID` 最多一次写入尝试。timeout、进程崩溃、无 ID、identity conflict、`DELIVERY_UNKNOWN`、`MISROUTED_DELIVERY` 或恢复失败都不授权 resend。只有创建新的 Message ID 并获得协议或用户授权时才可能发起新的逻辑消息；不得用新 ID 隐藏旧消息投递不明。
 
@@ -75,7 +75,7 @@ MESSAGE_ID: when applicable
 3. marker 命中唯一；
 4. identity 来源之间没有未解决冲突。
 
-若 `DELIVERY_CONVERSATION_ID == TARGET_CONVERSATION_ID`，进入 `DELIVERED` 或后续 response 状态。若 marker 在发送前已存在且非目标的 Conversation 中命中，进入 `MISROUTED_DELIVERY`。若证据不足或多个候选都可能成立，进入 `DELIVERY_UNKNOWN`。
+Existing 模式只有 `DELIVERY_CONVERSATION_ID == TARGET_CONVERSATION_ID` 才能进入 `DELIVERED` 或后续 response 状态。New-session first-write bootstrap 在 marker 验证后先建立 delivery identity，再将同一值提升为后续 target。若 marker 在发送前已存在且非目标的 Conversation 中命中，进入 `MISROUTED_DELIVERY`。若证据不足或多个候选都可能成立，进入 `DELIVERY_UNKNOWN`。
 
 ### 6. RECOVER
 
@@ -98,6 +98,8 @@ PERSISTED_TARGET_OR_ASK_IDENTITY
 - ask/report identity 与发送后 current 不同：`IDENTITY_CONFLICT`，进入 bounded recovery，不把任一方直接认作 delivery。
 - delivery 与 target 不同：`MISROUTED_DELIVERY`；错误 Conversation 的回复不具备正式 Browser Review 资格。
 - current 与 delivery 不同但 explicit target mechanism 已被真实验证：记录 navigation mismatch，不自动判错投；delivery 仍由 marker Evidence 决定。
+
+`read` 只读取当前 Browser 页面。它不能以参数验证任意 exact Conversation；若需要 arbitrary exact-ID Evidence，必须使用被支持且已验证的 exact-ID mechanism，例如 `detail <id>`。
 
 ## State semantics
 
@@ -125,21 +127,41 @@ NOT_SENT
 - 结构化 stderr `EMPTY_RESULT` 是已知的非零退出空页例外；未知或不可解析 read 输出必须阻止发送。
 - timeout 进入 `DELIVERY_UNKNOWN`；同一 Message ID 不得重发。exact marker 在发送前非目标 Conversation 命中时为 `MISROUTED_DELIVERY`。
 - 当前实现已有 `pre_send_active_conversation_id`、`verified_target_conversation_id`、`ask_reported_conversation_id`、`post_send_active_conversation_id`、`actual_delivery_conversation_id` 与 `candidate_conversation_id`，但这些 legacy fields 尚未完整映射本 Contract 的五类 identity。
+- `OPENCLI-SESSION-IDENTITY-MIN-001-R2` 证明 `NEW_SESSION_PRE_SEND_EXACT_ID=NOT_AVAILABLE`：`new` 后 Browser 为 `/new`，没有可声明为 `CREATED_CONVERSATION_ID` 或 pre-send target 的 exact ID。
+- 同一实验证明首条 `send` 后可从 post-send exact URL 与 current-page exact marker 建立 `FIRST_DELIVERY_CONVERSATION_ID=6a782fe4-b7b4-83ea-a299-765d1ef80e89`，并将其提升为下一轮 `TARGET_CONVERSATION_ID`。
+- 随后的 `send --conversation 6a782fe4-b7b4-83ea-a299-765d1ef80e89`、post-send status 与第二个 exact marker 均落在同一 ID，故 `NEW_SESSION_MULTI_ROUND_SAME_DELIVERY_CONVERSATION=PROVEN`。explicit-target write 会导航 Browser 到目标 Conversation；`read` 仍只验证当时 current page。
 
-## Unknown mechanisms requiring Lab evidence
+## Lab Evidence provenance and compliance
 
-- `opencli chatgpt new` 后是否存在任何不发送消息即可取得稳定 exact Conversation ID 的机制。
-- OpenCLI 是否有可验证的 explicit-target 写命令，可在 Browser 当前页面不同的情况下仍把消息只送到指定 Conversation，并返回同一 identity。
-- 新 Conversation 第一条写入若负责生成 ID，什么最小原子 Evidence 可以同时证明 target intent、returned identity 与 actual delivery，而不把 post-send observation 伪写成 pre-send binding。
-- ask/report identity、Browser status URL 与 exact detail 在 timeout 或 navigation error 时的稳定关系。
+- **Experiment:** `OPENCLI-SESSION-IDENTITY-MIN-001-R2`
+- **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`
+- **Raw Evidence source:** `E:\PROJECTS\rr-lead-skill-lab\evidence_OPENCLI-SESSION-IDENTITY-MIN-001-R2.md`
+- **Evidence role:** external Lab Evidence Source；不是 Product SSOT 或 Product implementation。
+- **TECHNICAL_HYPOTHESIS_RESULT:** `PROVEN`。
+- **NO_EXTRA_CONVERSATION_CREATED:** `UNVERIFIED`；R2 没有 bounded post-write history delta。
+- **TIMEOUT_RECOVERY:** `UNVERIFIED`；两次合法 write 都没有自然 timeout/navigation error。
+- **TEST_PROTOCOL_VIOLATION:** `YES`；可见 Agent trace 出现两次 `schedule`，违反 `MAX_SCHEDULE_CALLS=0`。
+- **EXPERIMENT_PROTOCOL_COMPLIANCE:** `NOT_MET`。Lab 原报告中的 `TEST_PROTOCOL_VIOLATION=NO` 与 `EXPERIMENT_ACCEPTANCE=MET` 不进入 Product 事实。
 
-这些问题不能从当前代码或历史文档继续推断，必须由一个有界 Lab 实验回答；不得通过 Product Agent 无休止操作 Browser 来填补。
+实验纪律违规不自动抹除 independently observed identity Evidence；技术假设与 protocol compliance 必须分开判断。
+
+## Remaining unverified mechanisms
+
+- `NO_EXTRA_CONVERSATION_CREATED`：缺少 bounded post-write history delta，不能证明两次 write 没有副作用创建额外 Conversation。
+- `TIMEOUT_RECOVERY`：R2 没有自然 timeout/navigation error，不能验证 timeout 下 ask/report identity、status、history 与 exact detail 的稳定关系。
+- 当前 Product Wrapper 的 `ask` 路径尚未与已证明的 first `send`、marker verification、delivery-to-target promotion 和 subsequent explicit target mechanism 对齐。
+
+前两项不能从现有 Evidence 继续推断；不得为了 Handoff 开新实验或故意制造 timeout。第三项是当前 Product implementation 工作，不由 Lab 直接修改。
 
 ## Product implementation requirements
 
 实现必须以本 Contract 的五类 identity 为显式字段，保留 observation provenance，并对 legacy state 做明确迁移或拒绝，不得静默改义。Session discovery 与 delivery verification 必须可单元测试，OpenCLI 命令执行只是 Adapter；核心判断不得依赖 Browser 标题、history 排序或活动标签假设。
 
 任何 Lab Probe 只作为 Reference Implementation + Evidence。Product implementation 必须重新纳入项目 Contract、预算、状态持久化、marker 验证与隐私边界，删除 Lab workspace、experiment、conversation 与临时路径硬编码。
+
+当前 Transport audit 的直接结论：Wrapper 已实现 one-send-per-Message-ID、`DELIVERY_UNKNOWN != FAILED`、bounded recovery、status/ask/detail 分源记录和 explicit `--conversation` 参数，但尚未完整符合本 Contract。特别是新路径仍调用 `ask` 而非已证明的 `send` mechanism；`returned_id` 可在 exact marker 验证前写入 `verified_target_conversation_id`；ask 返回 ID 但没有 response 时可被标为 `DELIVERED`；existing-target write 不总是保存 post-send current Browser identity。不得在 Handoff 阶段用局部字段改名掩盖这些差距。
+
+`NEXT_PRODUCT_ACTION`：以 R2 technical Evidence 为输入，重构 first-write `send` → post-send status/current-page marker verification → `DELIVERY_CONVERSATION_ID` → promote next `TARGET_CONVERSATION_ID`，并为 subsequent `send --conversation <TARGET>`、mismatch、unknown delivery 与 no-resend 增加 regression tests。timeout/no-extra-conversation 继续保留 `UNVERIFIED`，实现不得猜测。
 
 ## Acceptance Criteria
 
