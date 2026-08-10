@@ -124,6 +124,7 @@ NOT_SENT
 - OpenCLI 1.8.6 `new` 只观察到 `Status`；`status` 可返回当前 URL；`history` 返回 ID/URL 但顺序不是可靠 newest-first contract；显式 ID `detail` 可读取已观察到的 timed-out Conversation。
 - `ask --new` 曾 timeout 后实际创建并投递到两个不同 Conversation，也曾把消息送入发送前已存在的非目标 Conversation；因此已从正式路径禁止。
 - Product Wrapper `send --prepare-new` 已实现 pre-send bounded history、`new`、URL/empty-read verification、单次 `opencli chatgpt send`、post-send status/current-page marker verification 与必要的一次 exact-ID recovery。
+- `new` 的 command result 只记录导航尝试结果，不建立 Conversation identity，也不单独决定是否允许 write；即使它 timeout、nonzero 或没有可解析 row，Wrapper 仍必须用紧随其后的 exact status `/new`（或 root）与 empty-read Evidence 验证真实 Browser 状态。status 仍在旧 `/c/<id>`、页面非空或 read 不可解析时必须在 write 前停止。
 - 结构化 stderr `EMPTY_RESULT` 是已知的非零退出空页例外；未知或不可解析 read 输出必须阻止发送。
 - timeout 进入 `DELIVERY_UNKNOWN`；同一 Message ID 不得重发。exact marker 在发送前非目标 Conversation 命中时为 `MISROUTED_DELIVERY`。
 - Runtime schema v5 已显式承载五类 identity 与 provenance；legacy fields 仅为兼容 alias/candidate，不能覆盖 v5 establishment semantics。

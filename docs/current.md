@@ -46,8 +46,8 @@ Agent Project System
 - **ID:** `OPENCLI-SESSION-DISCOVERY-001`
 - **Name:** OpenCLI Session Discovery and Identity Contract
 - **State:** `IN_PROGRESS`
-- **Workflow state:** `FINAL_REVIEW_PENDING`
-- **Review Request ID:** `OPENCLI-SESSION-DISCOVERY-001-MVP0-R1-FINAL`
+- **Workflow state:** `REVISION_REQUIRED`
+- **Review Request ID:** `OPENCLI-SESSION-DISCOVERY-001-MVP0-R1-FINAL`（Browser Final `REVISE` 已收到；尚未提交新的 Final Review Request）
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`（供 `OPENCLI-SESSION-IDENTITY-MIN-001` Lab 实验绑定）。
 - **Objective:** 建立 `CREATE → CAPTURE → VERIFY → SEND → VERIFY DELIVERY → RECOVER` 的 Session Discovery / Identity Contract，并据此修复 Product Transport 对 Conversation identity 的建立、验证、错投检测与 bounded recovery。
@@ -89,15 +89,17 @@ Agent Project System
 - 每次 write 后都捕获 status/current page，并只在 current-page read 或 bounded exact detail 中出现唯一 exact `WORK_ITEM_ID + MESSAGE_ID` marker 时建立 `DELIVERY_CONVERSATION_ID`。OpenCLI 返回的 identity 只作候选 observation。
 - Runtime schema v5 显式承载五类 identity、`target_conversation_id_at_send`、binding mode、append-only observations 与 establishment provenance；legacy delivery/recovery identity 迁移时只保留为候选，不重置发送计数。
 - 已保护 same Message ID 最多一次 write、`DELIVERY_UNKNOWN != FAILED`、target/delivery mismatch 为 `MISROUTED_DELIVERY`、missing/duplicate/conflicting identity 不得提升 delivery/target。
-- 新增 17 项原生 MVP regression，并保留既有 169 项回归；完整 `186/186 PASS`。其中包括 canonical write receipt 跨 state-file 防重、existing target 优先 recovery、写后 budget exhaustion/Manual Export 不得导致同 ID relay，以及 timeout+marker recovered provenance。
+- 新增 19 项原生 MVP regression，并保留既有 169 项回归；完整 `188/188 PASS`。其中包括 canonical write receipt 跨 state-file 防重、existing target 优先 recovery、写后 budget exhaustion/Manual Export 不得导致同 ID relay、timeout+marker recovered provenance，以及不信任 `new` command result、只由 post-new status/empty-read 决定是否允许 write。
 
 ### Next immediate action
 
-`TRANSPORT_IMPLEMENTATION_READY=YES`、`TRANSPORT_REGRESSION_READY=YES`、`TRANSPORT_REAL_E2E_VALIDATED=NO`：Product implementation、186 项 regression 与 package check 已证明正式 Transport 实现覆盖 `/new → first write once → verified delivery A → persist/promote A → second write --conversation A → verify delivery in A`，并机器保护 same Message ID at-most-once write 与 `DELIVERY_UNKNOWN != FAILED`；但这只是 MVP candidate，不等于已经通过真实 Product Browser 场景验证。Transport 主动开发范围在此冻结；`NO_EXTRA_CONVERSATION_CREATED` 与真实自然 timeout recovery 保持 `UNVERIFIED`，除非未来 bounded Product E2E 暴露其为直接 blocker，否则不继续扩展。
+`TRANSPORT_IMPLEMENTATION_READY=YES`、`TRANSPORT_REGRESSION_READY=YES`、`TRANSPORT_REAL_E2E_VALIDATED=NO`：Product implementation、188 项 regression 与 package check 已证明正式 Transport 实现覆盖 `/new → first write once → verified delivery A → persist/promote A → second write --conversation A → verify delivery in A`，并机器保护 same Message ID at-most-once write 与 `DELIVERY_UNKNOWN != FAILED`；但这只是 MVP candidate，不等于已经通过真实 Product Browser 场景验证。Transport 主动开发范围在此冻结；`NO_EXTRA_CONVERSATION_CREATED` 与真实自然 timeout recovery 保持 `UNVERIFIED`，除非未来 bounded Product E2E 暴露其为直接 blocker，否则不继续扩展。
 
 `NEXT_PRODUCT_ACTION_CANDIDATE`：在 Browser Lead 完成本 Work Item Final Review 后，启动一次真实 Agent Review Loop MVP，把现有 ACF Review Contract、Review Artifact、RR Transport、Browser Decision、revision execution 与 Completion Gate 串成 `Execute → Review → Revise → Review → Approve`。当前不创建第二个 Active Work Item。
 
-一次 bounded Product E2E 已启动，但在 first write 前以 `CREATE_NEW_CONVERSATION_UNVERIFIED` 停止：持久状态显示 `send_attempted=false`、两个 send count 均为 `0`、`external_command_count=3`，因此未发送第二条且没有重发；临时 Runtime 已清理。该结果不推翻已通过的 Product regression，也不得表述成真实 Product 两消息 E2E PASS。
+Browser Final `REVISE` 指出的 first-write 前 blocker 已归类为 `PRODUCT_VALIDATION_BUG`：旧实现错误地把 `new` command result row 当成继续验证的前置条件，而真正的 write gate 应是 post-new exact status `/new`（或 root）与 empty read。最小修复已完成并由两条新增 regression 覆盖。
+
+修复后只运行了一次新的 bounded Product E2E。Message 1 使用 repository source `0.4.16` 与全新 Message ID；`new` 返回 0、status 为 `/new`、read 为 `EMPTY_RESULT`，随后 `send` 返回 0/`Success` 且写入计数为 1。但 post-send status 仍为 `/new`，bounded history 没有新增 Conversation，无法建立 `DELIVERY_CONVERSATION_ID`，因此进入 `DELIVERY_UNKNOWN` 且禁止同 ID resend；Message 2 未启动。OpenCLI 1.8.6 本地 source 显示 `send` 在点击 send button 后立即返回，不等待导航完成；Lab R2 的 immediate status 曾取得 exact ID，而本次没有。该外部时序差异目前为直接 E2E blocker，现有 Evidence 不足以决定非任意等待的可靠 completion signal。
 
 ### Intermediate Browser Review
 
@@ -123,13 +125,13 @@ Agent Project System
 
 ### MVP-0 Review readiness
 
-- **Claimed state:** `IN_PROGRESS / CLAIM_READY_FOR_REVIEW`；Execution Agent 不自批完成。
+- **Claimed state:** `IN_PROGRESS`；Browser Final `REVISE` 后尚未提交新的 Final Review Request，Execution Agent 不自批完成。
 - **Implementation:** `MET`；正式 write 为 `send`，五身份/provenance、唯一 marker、target promotion、existing target recovery 和 canonical no-resend receipt 已实现。
-- **Regression:** `186/186 PASS`；Skill package checker 的受控 runner 需使用 240 秒 execution timeout，Transport 自身的 9-command/60-second budgets 未放宽。
+- **Regression:** `188/188 PASS`；Skill package checker 的受控 runner 需使用 240 秒 execution timeout，Transport 自身的 9-command/60-second budgets 未放宽。
 - **Transport readiness:** `TRANSPORT_IMPLEMENTATION_READY=YES`；`TRANSPORT_REGRESSION_READY=YES`；`TRANSPORT_REAL_E2E_VALIDATED=NO`。
-- **Product E2E:** `BLOCKED_BEFORE_WRITE`；本机真实尝试停在 create verification，未建立 Message 1 write receipt，未开始 Message 2。不得把它表述成 PASS，也不得盲目重试。
-- **Known unverified:** `NO_EXTRA_CONVERSATION_CREATED`、真实自然 timeout recovery、真实 Product Browser two-message E2E。
-- **Work Item state:** 继续 `IN_PROGRESS`，等待 Browser Lead Final Review。
+- **Product E2E:** `DELIVERY_UNKNOWN_AFTER_MESSAGE_1_WRITE`；Message 1 `send_return_code=0`、`message_send_count=1`，但 post-send status 仍为 `/new` 且 bounded history delta 为空；Message 2 未启动，同一 Message ID 不得重发。
+- **Known unverified:** `POST_SEND_ASYNC_NAVIGATION_COMPLETION_SIGNAL`、`NO_EXTRA_CONVERSATION_CREATED`、真实自然 timeout recovery、真实 Product Browser two-message E2E。
+- **Work Item state:** 继续 `IN_PROGRESS`，停止 Product implementation 并等待 `POST_SEND_ASYNC_NAVIGATION_COMPLETION_SIGNAL` 的 Lab Evidence。
 
 ### Current Acceptance status
 

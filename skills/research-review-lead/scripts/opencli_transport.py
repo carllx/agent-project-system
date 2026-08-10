@@ -1589,9 +1589,17 @@ def verify_new_conversation(
         before_new_count = state["external_command_count"]
         created = command(state, state_path, "new", ["chatgpt", "new", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
         state["new_command_called"] = state["external_command_count"] > before_new_count
-        if not result_rows(created):
-            stop(state, "CREATE_NEW_CONVERSATION_UNVERIFIED")
+        if created is None:
             return False
+        created_rows = result_rows(created)
+        state["new_command_return_code"] = created.get("returncode")
+        state["new_command_timed_out"] = bool(created.get("timed_out"))
+        state["new_command_result_classification"] = (
+            "STATUS_ROWS_RETURNED" if created_rows
+            else "TIMEOUT" if created.get("timed_out")
+            else "NONZERO" if created.get("returncode") != 0
+            else "EMPTY_OR_UNPARSEABLE_SUCCESS"
+        )
         set_state(state, "VERIFYING_CONVERSATION", "verify URL changed and blank page has no messages")
         status = command(state, state_path, "status-new", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
         if status is None:

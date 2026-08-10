@@ -2737,6 +2737,41 @@ def test_mvp_new_session_first_write_uses_send_once() -> None:
     assert state["delivery_conversation_id"] == NEW_ID
 
 
+def test_mvp_uncertain_new_result_uses_status_and_empty_read_before_write() -> None:
+    sequence = mvp_new_sequence(marker=mvp_marker_result(ready=True))
+    sequence[2] = legacy_result(
+        "", returncode=75,
+        stderr="ok: false\nerror:\n  code: TIMEOUT\n",
+        timed_out=True,
+    )
+    completed, state, calls, _, _ = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+    )
+    assert completed.returncode == 0
+    assert [call[1] for call in calls] == [
+        "history", "status", "new", "status", "read", "send", "status", "read",
+    ]
+    assert state["new_command_result_classification"] == "TIMEOUT"
+    assert state["blank_environment_verified"] is True
+    assert state["message_send_count"] == 1
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_mvp_uncertain_new_result_old_page_still_blocks_before_write() -> None:
+    sequence = mvp_new_sequence()
+    sequence[2] = legacy_result("", returncode=1, stderr="navigation result unavailable")
+    sequence[3] = legacy_status(f"https://chatgpt.com/c/{OLD_ID}")
+    completed, state, calls, _, _ = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+    )
+    assert completed.returncode == 2
+    assert [call[1] for call in calls] == ["history", "status", "new", "status"]
+    assert state["new_command_result_classification"] == "NONZERO"
+    assert state["send_attempted"] is False
+    assert state["message_send_count"] == 0
+    assert state["stop_reason"].startswith("VERIFY_NEW_CONVERSATION_FAILED")
+
+
 def test_mvp_verified_delivery_promotes_next_target_with_provenance() -> None:
     _, state, _, _, _ = run_send_case(
         mvp_new_sequence(), prepare_new=True, legacy_sequence=False,
@@ -3161,6 +3196,8 @@ def main() -> int:
         test_automatic_recovery_exhaustion_enters_manual_relay_required,
         test_send_command_still_accepts_normal_message_file,
         test_mvp_new_session_first_write_uses_send_once,
+        test_mvp_uncertain_new_result_uses_status_and_empty_read_before_write,
+        test_mvp_uncertain_new_result_old_page_still_blocks_before_write,
         test_mvp_verified_delivery_promotes_next_target_with_provenance,
         test_mvp_second_explicit_target_stays_in_promoted_conversation,
         test_mvp_current_target_mismatch_without_marker_is_unknown,
