@@ -9,7 +9,7 @@
 - **Active branch:** `work/real-agent-review-loop-mvp-001`；未完成 Work Item 不在 `main`。
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（上一 Work Item closeout）；它不是当前 Work Item 的初始化 commit。
-- **Work Item initialization commit / current Git HEAD:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；本轮 Product 修改尚未 commit 时，Git HEAD 仍保持该值。
+- **Work Item initialization commit:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；它不是 Phase baseline。当前 Git HEAD 由 Git/交接消息提供，本文件不自包含其所在 commit 的 SHA。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
 - **Source Skill VERSION:** `0.4.18`。
