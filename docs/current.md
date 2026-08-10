@@ -6,7 +6,7 @@
 - **North star:** 建立一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。见 `docs/adr/0003-agent-collaboration-framework.md`。
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
-- **Active branch:** `work/opencli-session-discovery-001`；未完成 Work Item 不在 `main`。
+- **Active branch:** `work/real-agent-review-loop-mvp-001`；未完成 Work Item 不在 `main`。
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
@@ -41,7 +41,37 @@ Agent Project System
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
 
-## Latest Completed Work Item
+## Active Work Item
+
+- **ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001`
+- **Name:** Real Agent Review Loop MVP
+- **State:** `IN_PROGRESS`
+- **Workflow state:** `EXECUTING`
+- **Review Request ID:** `NONE`
+- **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
+- **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
+- **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
+- **Scope:** 选择一个安全、真实、可快速复查的小任务；建立最小 Loop Driver/状态桥接；提交 identity-bound Review Request 与 Evidence；接收并执行 Browser `REVISE`；重新 Review；把匹配的 Final `APPROVE` 映射到 Completion Gate 与 Work Item completion。
+- **Out of scope:** 主动扩展 OpenCLI Transport、补证 timeout/no-extra-conversation、Codex Adapter、MCP、Plugin、通用 orchestration、UI、多 Browser Lead、并发、quorum 或长期 Hook deployment 裁决。
+
+### Acceptance Criteria
+
+1. 一个真实小任务由 Antigravity Execution Agent 在明确 Goal、Scope 与 Acceptance Criteria 下执行，不以模拟结果替代。
+2. Execution Agent 生成最小 ACF-0.1 Review Request 与可复查 Evidence，并通过冻结的 Product Transport 绑定到唯一 Browser Conversation。
+3. Browser Lead 返回与 Protocol、Work Item、Request ID 和 Review Kind 匹配的 `REVISE`，且含可执行 `REQUIRED_ACTIONS`。
+4. Browser Decision 被可靠带回 IDE execution state；Execution Agent 不自行批准，按 Required Actions 修订并使用新 Request ID 重新提交同类 Review。
+5. Browser Lead 对修订后的 Final Request 返回权威 `APPROVE`，全部 agreed Acceptance Criteria 为 `MET`，无 unresolved User Decision。
+6. Completion Gate 只在该匹配且未 stale 的 Final `APPROVE` 后允许 Work Item 完成；execution termination 不等于 Completion Authority。
+7. 两轮传输保持 identity、same-Message-ID no-resend 和 `DELIVERY_UNKNOWN != FAILED`；Transport 若未暴露直接 blocker则不修改。
+8. 真实 Loop Evidence、状态迁移、测试/检查与 Git artifact 可由 Browser Lead 独立复查，文档无重复 SSOT。
+
+### Immediate execution boundary
+
+- 先审计现有 Protocol、Completion Gate、Antigravity Adapter、RR Skill 和冻结 Transport 之间阻塞真实 Loop 的最小缺口。
+- 只实现第一条真实 Loop 所必需的 bridge/driver；不得把下一阶段扩展成完整 orchestration framework。
+- Browser Review 与用户权限必须继续分离；任何 IDE tool approval 不得解释为 ACF Review approval。
+
+## Latest Completed Work Item: OPENCLI-SESSION-DISCOVERY-001
 
 - **ID:** `OPENCLI-SESSION-DISCOVERY-001`
 - **Name:** OpenCLI Session Discovery and Identity Contract

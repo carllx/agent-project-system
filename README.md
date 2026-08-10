@@ -49,7 +49,7 @@ IDE-independent Completion-Gate Policy 位于 `runtime/`，正式 IDE Adapter �
 
 已完成第一版信息架构迁移、RR Lead 自包含源包重构、确定性 bootstrap、manual-export fallback，以及 Reliable Product Transport MVP-0。当前源包 VERSION `0.4.18`；本机观察到的安装副本仍为 VERSION `0.4.15`，位于 `C:\Users\carll\.codex\skills\research-review-lead`，但项目证据尚不能把该本机路径证明为所有平台通用的 canonical 部署规范。首个真实 RR Loop 已完成（`FIRST-USE-LOOP-001`，`FIRST_USABLE_VERSION: 0.4.14`）。
 
-ACF Protocol v0.1、第一版 Antigravity Completion-Gate Adapter 与 `OPENCLI-SESSION-DISCOVERY-001` 均已完成。Reliable Product Transport MVP-0 已通过 194 项 regression 和一次真实两消息同 Conversation E2E；状态为 `TRANSPORT_IMPLEMENTATION_READY=YES`、`TRANSPORT_REGRESSION_READY=YES`、`TRANSPORT_REAL_E2E_VALIDATED=YES`，并冻结为 `FROZEN_AT_MVP_0`。timeout recovery 和无额外 Conversation 副作用仍为非阻塞 `UNVERIFIED`。下一阶段是把现有 Protocol、Completion Gate、冻结的 Transport 与 Browser Review 串成一次 `Execute → Review → Revise → Review → Approve` 的真实 Agent Review Loop MVP。GitHub Review Branch + Commit SHA 是 Browser 可访问时优先采用的 Review Artifact access path，但 GitHub 不承担 Completion Authority 或实时 Transport。
+ACF Protocol v0.1、第一版 Antigravity Completion-Gate Adapter 与 `OPENCLI-SESSION-DISCOVERY-001` 均已完成。Reliable Product Transport MVP-0 已通过 194 项 regression 和一次真实两消息同 Conversation E2E；状态为 `TRANSPORT_IMPLEMENTATION_READY=YES`、`TRANSPORT_REGRESSION_READY=YES`、`TRANSPORT_REAL_E2E_VALIDATED=YES`，并冻结为 `FROZEN_AT_MVP_0`。timeout recovery 和无额外 Conversation 副作用仍为非阻塞 `UNVERIFIED`。当前唯一 Active Product Work Item 是 `REAL-AGENT-REVIEW-LOOP-MVP-001`：把现有 Protocol、Completion Gate、冻结的 Transport 与 Browser Review 串成一次 `Execute → Review → Revise → Review → Approve` 的真实 Agent Review Loop MVP。GitHub Review Branch + Commit SHA 是 Browser 可访问时优先采用的 Review Artifact access path，但 GitHub 不承担 Completion Authority 或实时 Transport。
 
 ## 阅读入口
 
