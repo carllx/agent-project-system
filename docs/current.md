@@ -359,7 +359,59 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - `PRODUCT_CANDIDATE: CODEX-COMPLETION-GATE-ADAPTER`：为 Codex 寻找可验证的 runtime/lifecycle mechanism，并映射同一 IDE-independent Completion-Gate Contract；`NOT_STARTED`，不阻塞 Session Discovery。
 - `VALIDATION_CANDIDATE: OPENCLI_TIMEOUT_RECOVERY`：只观察未来合法 Product flow 自然出现的 timeout/navigation error；不为制造 timeout 增加 write、poll、sleep、网络干扰或 Browser manipulation。
 - `DECISION_CANDIDATE: ANTIGRAVITY_HOOK_DEPLOYMENT`：另行裁决 Global Hook 与 workspace-local Hook 的产品部署形式。
-- 四项均未启动为并行 Active Work Item；当前唯一 Active Work Item 仍为 `OPENCLI-SESSION-DISCOVERY-001`。
+- `NEXT_REQUIREMENT_CANDIDATE: ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001`：边界见下节；等待当前真实 Agent Review Loop E2E 获 Browser Final `APPROVE` 后再决定是否激活。
+- 以上候选均未启动为并行 Active Work Item；当前唯一 Active Work Item 仍为 `REAL-AGENT-REVIEW-LOOP-MVP-001`。
+
+### Next Requirement Candidate: Antigravity Bounded Autonomous Experiment Batch MVP
+
+- **ID:** `ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001`。
+- **State:** `NEXT_REQUIREMENT_CANDIDATE / NOT_ACTIVE`。
+- **Activation gate:** `REAL-AGENT-REVIEW-LOOP-MVP-001` 必须先完成真实 `Execute → Final Review → REVISE → Revision → Final Review → APPROVE`，并取得 Browser Final `APPROVE`；之后仅由 Browser Lead 决定是否激活。本候选不改变当前 Work Item 的 Goal、Acceptance Criteria、Execution Packet 或 Workflow State。
+- **Problem:** 当前 Lab 常以单个小实验往返 Browser，启动与协调成本过高。候选目标是在一个显式有界的 Experiment Batch 内，让 Antigravity Experiment Coordinator 连续选择并执行若干可归因实验，最后一次性向 Browser Lead 汇报。
+- **First-version proof target:** 一个 Antigravity Experiment Coordinator 能在一个 bounded Batch 内自主完成若干有因果可归属的实验，保留完整 Evidence chain；不以此证明通用 orchestration 或替代 Browser supervision。
+
+关键架构边界：
+
+```text
+INTERNAL ANTIGRAVITY LOOP
+Experiment Coordinator ↔ Sub-Agents ↔ Runtime Experiment
+
+EXTERNAL SUPERVISION LOOP
+Browser Lead ↔ Antigravity Experiment Coordinator
+```
+
+External Loop 仍属于正在验证的 Product 能力，不得成为 Internal Batch 的假定可靠基础设施。内部自主循环必须在 Browser 预先给定的 Batch Contract 内独立有界终止。
+
+并行硬原则为 `Cognitive work parallel; shared Runtime mutation serial`。Hypothesis design、static investigation、environment/evidence audit、result analysis 和 counter-hypothesis review 可并行；Antigravity Session、Conversation identity、Global/workspace Hook、`hooks.json`、Runtime/Workflow State、shared Evidence path、Stop/Resume lifecycle 等无法物理隔离的共享资源必须串行。未来 Contract 使用最小 resource classification：`READ_ONLY / ISOLATED_MUTATION / SHARED_RUNTIME_SERIAL`；只有前两类在实际隔离成立时允许并行。
+
+Experiment Coordinator 是 Batch 唯一决策整合者。它可按需调用 Hypothesis、Environment/Evidence Audit、Runtime Experiment、Evidence Analysis、Counter-Hypothesis/Reviewer 等 Sub-Agent，但不得机械固定数量。Coordinator 负责合并 Evidence、判断 attribution、选择下一实验、控制全部 hard budget 并形成唯一 Batch Final Output。
+
+每个 Batch 启动前必须固定：
+
+```text
+BATCH_ID
+OBJECTIVE
+UNKNOWN_SET
+INITIAL_HYPOTHESES
+MAX_EXPERIMENTS
+MAX_ROUNDS
+MAX_RUNTIME_WRITES
+MAX_SHARED_STATE_MUTATIONS
+MAX_WALLCLOCK
+ALLOWED_ACTIONS
+FORBIDDEN_ACTIONS
+STOP_CONDITIONS
+```
+
+内部循环可执行 `Hypothesis → Prepare → Execute → Evidence → Classify → Analyse → Select Next Experiment`，但不得改变上述 hard Contract。Mandatory Stop 至少覆盖：hypothesis 明确 `PASS/FAIL`；新未知要求改变 Batch Contract；Evidence attribution 无法确定；共享环境污染；需要架构改变或人工操作；下一实验可能破坏有效 Evidence；任一 hard action budget、experiment、round 或 wall-clock 上限耗尽。
+
+每个 Experiment 的最小 Evidence chain 为：`EXPERIMENT_ID`、`HYPOTHESIS`、`WHY_THIS_EXPERIMENT`、`PRECONDITIONS`、`SHARED_STATE_BEFORE`、`PROCEDURE`、`RAW_EVIDENCE`、`RESULT`、`ALTERNATIVE_EXPLANATIONS`、`ATTRIBUTION_CONFIDENCE`、`PROTOCOL_VIOLATION`、`SHARED_STATE_AFTER`、`NEW_UNKNOWNS`、`NEXT_EXPERIMENT_CANDIDATE`。`RESULT` 只能是 `PASS / FAIL / INCONCLUSIVE`；Evidence strength 不得自动升级。Protocol violation 不删除独立 Evidence，但必须降低并显式记录 experiment compliance。
+
+Batch Final Output 必须综合回答：`WHAT_WE_DID_NOT_KNOW_BEFORE`、`FACTS_PROVEN`、`FACTS_DISPROVEN`、`FACTS_INCONCLUSIVE`、`NEW_MECHANISMS_DISCOVERED`、`ALTERNATIVE_EXPLANATIONS`、`EVIDENCE_ATTRIBUTION_STATUS`、`ENVIRONMENT_CONTAMINATION_STATUS`、`PROTOCOL_VIOLATIONS`、`PRODUCT_CONSTRAINTS_DISCOVERED`、`NEXT_HIGHEST_VALUE_EXPERIMENT_BATCH`；不得只罗列实验。
+
+Autonomy hierarchy 是 hard invariant：`Sub-Agent autonomy < Experiment Coordinator Batch Contract < Browser Lead hard budgets / forbidden actions / stop conditions`。内部自主权可以调整 task decomposition、Sub-Agent allocation、hypothesis ordering 和 next-experiment selection；不得改变 hard budget、forbidden actions、Evidence requirements、安全边界或 Browser-defined stop conditions。
+
+明确 Out of scope：generic multi-agent scheduler、universal orchestration framework、unlimited autonomous research、共享 Runtime 的同时 mutation、替代 Browser supervision、Transport redesign、Hook redesign，以及在当前 Work Item 内实现完整 Experiment Batch framework。
 
 ## Files to read
 
@@ -387,4 +439,4 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - **Command:** `git diff --check`
 - **Result:** Passed（exit 0；只有工作树 LF→CRLF 提示，无 whitespace error）。
 - **Artifact hygiene:** 未创建日期 Handoff 文档，未修改 Transport、Hook 或 Adapter，未运行 Browser/Lab；仓库根无 `__pycache__` 或测试 temp artifact。
-- **Last verified:** 2026-08-10
+- **Last verified:** 2026-08-11
