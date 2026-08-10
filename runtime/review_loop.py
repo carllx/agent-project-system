@@ -8,6 +8,7 @@ ACF-0.1 Decision, and advances the Product workflow through the completion gate.
 from __future__ import annotations
 
 import copy
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -30,6 +31,7 @@ DECISION_MAP = {
 }
 ACCEPTANCE_STATUSES = {"MET", "NOT_MET", "UNVERIFIED"}
 NONE_VALUES = {"", "NONE", "NO", "FALSE", "N/A", "NOT_APPLICABLE"}
+WINDOWS_CMD_METACHARACTERS = "<>|&^%"
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,125 @@ class TransitionResult:
     authoritative: bool
     outcome: str
     reason: str
+
+
+def render_browser_review_message(state: dict[str, Any]) -> str:
+    """Render the one canonical Browser body for the pending Review Request.
+
+    The renderer intentionally uses prose enums instead of shell-like placeholder
+    syntax.  It does not choose a Browser decision and it never mutates state.
+    """
+    pending = state.get("PENDING_REVIEW_REQUEST")
+    if not isinstance(pending, dict):
+        raise ValueError("a pending Review Request is required")
+    kind = pending.get("REVIEW_KIND")
+    expected_state = PENDING_BY_KIND.get(kind)
+    if expected_state is None or state.get("WORKFLOW_STATE") != expected_state:
+        raise ValueError("workflow state does not match the pending Review Request")
+    request_id = pending.get("REVIEW_REQUEST_ID")
+    work_item_id = state.get("WORK_ITEM_ID")
+    criteria = _normalized_criteria(pending.get("ACCEPTANCE_CRITERIA"))
+    if (
+        not isinstance(request_id, str)
+        or not request_id
+        or not isinstance(work_item_id, str)
+        or not work_item_id
+        or criteria is None
+    ):
+        raise ValueError("pending Review Request identity or criteria are invalid")
+
+    criterion_ids = [item["CRITERION"] for item in criteria]
+    identity_values = [state.get("PROTOCOL_VERSION"), work_item_id, request_id, kind, *criterion_ids]
+    if any(
+        not isinstance(value, str)
+        or any(character in value for character in WINDOWS_CMD_METACHARACTERS)
+        for value in identity_values
+    ):
+        raise ValueError("Review identity contains a Windows command metacharacter")
+    criteria_lines = "\n".join(f"- {identity}" for identity in criterion_ids)
+    status_template = "\n".join(
+        f"- CRITERION: {identity}\n"
+        "  STATUS: write exactly one of MET, NOT_MET, UNVERIFIED\n"
+        "  EVIDENCE: write concrete evidence; use NONE only when status is not MET"
+        for identity in criterion_ids
+    )
+    request_json = json.dumps(pending, ensure_ascii=False, indent=2, sort_keys=True)
+    for character in WINDOWS_CMD_METACHARACTERS:
+        request_json = request_json.replace(character, f"\\u{ord(character):04x}")
+    return f"""ACF REVIEW REQUEST
+
+Independently review the supplied request and evidence. Do not infer a required decision.
+
+PROTOCOL_VERSION: {state['PROTOCOL_VERSION']}
+WORK_ITEM_ID: {work_item_id}
+REVIEW_REQUEST_ID: {request_id}
+REVIEW_KIND: {kind}
+
+AGREED_ACCEPTANCE_CRITERIA
+{criteria_lines}
+
+REVIEW_REQUEST_PAYLOAD
+{request_json}
+
+STRICT_BROWSER_RESPONSE_CONTRACT
+Return only one complete RR wire response. Do not return JSON or Markdown fences.
+The first nonempty line must be RR_REVIEW_BEGIN.
+The last nonempty line must be RR_REVIEW_END.
+
+Allowed top-level fields, each exactly once and in this order:
+WORK_ITEM_ID
+IN_REPLY_TO_MESSAGE_ID
+ROUND
+REVIEW_DECISION
+WORK_ITEM_STATE
+ACCEPTANCE_STATUS
+FINDINGS
+BLOCKERS
+DEBT
+NEXT_WORK_ORDER
+VALIDATION
+USER_DECISION_REQUIRED
+
+REVIEW_DECISION must be exactly one of APPROVE, REVISE, ESCALATE_TO_USER.
+IN_REPLY_TO_MESSAGE_ID must be {request_id}.
+ACCEPTANCE_STATUS must cover every agreed criterion exactly once and no others:
+{status_template}
+
+For APPROVE, every criterion must be MET with concrete Evidence, and BLOCKERS,
+NEXT_WORK_ORDER, and USER_DECISION_REQUIRED must each be NONE.
+For REVISE, NEXT_WORK_ORDER must contain concrete executable Required Actions.
+For ESCALATE_TO_USER, USER_DECISION_REQUIRED must state the decision reserved to the user.
+
+VALIDATION must contain the following binding block. In the wire response, indent
+every binding line by two spaces so it remains part of VALIDATION:
+  ACF_BINDING_BEGIN
+  PROTOCOL_VERSION: {state['PROTOCOL_VERSION']}
+  IN_REPLY_TO_REVIEW_REQUEST_ID: {request_id}
+  REVIEW_KIND: {kind}
+  ACF_BINDING_END
+
+Required response shape:
+RR_REVIEW_BEGIN
+WORK_ITEM_ID: {work_item_id}
+IN_REPLY_TO_MESSAGE_ID: {request_id}
+ROUND: copy the ROUND from the outer Transport packet
+REVIEW_DECISION: make one independent allowed decision
+WORK_ITEM_STATE: IN_PROGRESS
+ACCEPTANCE_STATUS:
+{status_template}
+FINDINGS: write review findings or NONE
+BLOCKERS: write blocking findings or NONE
+DEBT: write nonblocking debt or NONE
+NEXT_WORK_ORDER: write executable Required Actions or NONE
+VALIDATION:
+  ACF_BINDING_BEGIN
+  PROTOCOL_VERSION: {state['PROTOCOL_VERSION']}
+  IN_REPLY_TO_REVIEW_REQUEST_ID: {request_id}
+  REVIEW_KIND: {kind}
+  ACF_BINDING_END
+USER_DECISION_REQUIRED: write the reserved user decision or NONE
+RR_REVIEW_END
+"""
 
 
 def initialize_loop_state(

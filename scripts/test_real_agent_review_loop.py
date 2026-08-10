@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from runtime.completion_gate import ALLOW_STOP, CONTINUE_BOUNDED, evaluate_completion_gate
 from runtime.review_loop import (
@@ -13,8 +14,11 @@ from runtime.review_loop import (
     initialize_loop_state,
     mark_reviewed_state_stale,
     record_revision_applied,
+    render_browser_review_message,
     submit_review_request,
 )
+from scripts import acf_review_loop
+from scripts.test_opencli_transport import TRANSPORT_MODULE
 
 
 WORK_ITEM_ID = "REAL-LOOP-001"
@@ -98,6 +102,129 @@ def transport_state(request_id, review):
 
 
 class RealAgentReviewLoopTests(unittest.TestCase):
+    def test_canonical_browser_message_is_deterministic_and_complete(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-CANONICAL-R1-FINAL"
+        request = final_request(request_id)
+        request["EVIDENCE"].append("source syntax: value < limit | fallback & audit ^ proof % complete")
+        submit_review_request(state, request, "artifact-1")
+        first = render_browser_review_message(state)
+        second = render_browser_review_message(copy.deepcopy(state))
+        self.assertEqual(first, second)
+        self.assertIn("STRICT_BROWSER_RESPONSE_CONTRACT", first)
+        self.assertIn(f"IN_REPLY_TO_MESSAGE_ID: {request_id}", first)
+        self.assertIn(f"IN_REPLY_TO_REVIEW_REQUEST_ID: {request_id}", first)
+        self.assertIn("CRITERION: AC1", first)
+        self.assertIn("CRITERION: AC2", first)
+        self.assertIn("\n- CRITERION: AC1\n  STATUS:", first)
+        self.assertNotIn("\nCRITERION: AC1\nSTATUS:", first)
+        self.assertIn("VALIDATION:\n  ACF_BINDING_BEGIN\n  PROTOCOL_VERSION:", first)
+        self.assertIn("APPROVE, REVISE, ESCALATE_TO_USER", first)
+        self.assertIn("Do not infer a required decision", first)
+        for metacharacter in "<>|&^%":
+            self.assertNotIn(metacharacter, first)
+        self.assertIn("\\u003c", first)
+        self.assertIn("\\u007c", first)
+
+    def test_canonical_wire_shape_is_accepted_by_frozen_transport_parser(self):
+        request_id = f"{WORK_ITEM_ID}-WIRE-SHAPE-R1-FINAL"
+        response = "\n".join((
+            "RR_REVIEW_BEGIN",
+            f"WORK_ITEM_ID: {WORK_ITEM_ID}",
+            f"IN_REPLY_TO_MESSAGE_ID: {request_id}",
+            "ROUND: 1",
+            "REVIEW_DECISION: REVISE",
+            "WORK_ITEM_STATE: IN_PROGRESS",
+            "ACCEPTANCE_STATUS:",
+            "- CRITERION: AC1",
+            "  STATUS: MET",
+            "  EVIDENCE: artifact diff",
+            "- CRITERION: AC2",
+            "  STATUS: NOT_MET",
+            "  EVIDENCE: missing regression",
+            "FINDINGS: AC2 is missing",
+            "BLOCKERS: AC2 is missing",
+            "DEBT: NONE",
+            "NEXT_WORK_ORDER: add the AC2 regression",
+            "VALIDATION:",
+            "  ACF_BINDING_BEGIN",
+            "  PROTOCOL_VERSION: ACF-0.1",
+            f"  IN_REPLY_TO_REVIEW_REQUEST_ID: {request_id}",
+            "  REVIEW_KIND: FINAL",
+            "  ACF_BINDING_END",
+            "USER_DECISION_REQUIRED: NONE",
+            "RR_REVIEW_END",
+        ))
+        parsed = TRANSPORT_MODULE.rr_response_fields(
+            response,
+            expected_message_id=request_id,
+            expected_work_item_id=WORK_ITEM_ID,
+            expected_round=1,
+        )
+        self.assertNotIn("PROTOCOL_ERROR", parsed)
+        self.assertNotIn("REPLY_IDENTITY_ERROR", parsed)
+        self.assertIn("ACF_BINDING_BEGIN", parsed["VALIDATION"])
+        self.assertIn("CRITERION: AC2", parsed["ACCEPTANCE_STATUS"])
+
+    def test_send_review_uses_one_fail_closed_canonical_path(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:
+            directory = Path(temporary_directory)
+            state = loop_state()
+            request_id = f"{WORK_ITEM_ID}-SEND-R1-FINAL"
+            submit_review_request(state, final_request(request_id), "artifact-1")
+            state_path = directory / "loop-state.json"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            runtime_dir = directory / "round-1"
+            argv = [
+                "acf_review_loop.py", "send-review", "--state", str(state_path),
+                "--runtime-dir", str(runtime_dir), "--prepare-new",
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                acf_review_loop, "run_product_transport", return_value=0
+            ) as transport:
+                self.assertEqual(acf_review_loop.main(), 0)
+            arguments = transport.call_args.args[0]
+            self.assertEqual(arguments.count("send"), 1)
+            self.assertIn("--prepare-new", arguments)
+            self.assertIn(request_id, arguments)
+            self.assertFalse(any("budget" in item or item.startswith("--max-") for item in arguments))
+            message_path = runtime_dir / f"{request_id}.message.txt"
+            self.assertEqual(message_path.read_text(encoding="utf-8"), render_browser_review_message(state))
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                acf_review_loop, "run_product_transport", return_value=0
+            ) as second_transport:
+                with self.assertRaisesRegex(FileExistsError, "same Request ID write is forbidden"):
+                    acf_review_loop.main()
+                second_transport.assert_not_called()
+
+    def test_send_review_derives_verified_continuation_target(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:
+            directory = Path(temporary_directory)
+            state = loop_state()
+            request_id = f"{WORK_ITEM_ID}-SEND-R2-FINAL"
+            submit_review_request(state, final_request(request_id), "artifact-2")
+            state_path = directory / "loop-state.json"
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            conversation_id = "conversation-a"
+            previous_path = directory / "round-1.transport.json"
+            previous_path.write_text(json.dumps({
+                "delivery_state": "RESPONSE_READY",
+                "delivery_conversation_id": conversation_id,
+                "target_conversation_id": conversation_id,
+            }), encoding="utf-8")
+            argv = [
+                "acf_review_loop.py", "send-review", "--state", str(state_path),
+                "--runtime-dir", str(directory / "round-2"),
+                "--previous-transport-state", str(previous_path),
+            ]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(
+                acf_review_loop, "run_product_transport", return_value=0
+            ) as transport:
+                self.assertEqual(acf_review_loop.main(), 0)
+            arguments = transport.call_args.args[0]
+            self.assertNotIn("--prepare-new", arguments)
+            self.assertEqual(arguments[arguments.index("--conversation") + 1], conversation_id)
+
     def test_full_final_revise_revision_final_approve_loop(self):
         state = loop_state()
         first_id = f"{WORK_ITEM_ID}-E2E-R1-FINAL"

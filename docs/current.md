@@ -78,7 +78,7 @@ Agent Project System
 
 **ALREADY_AVAILABLE:** ACF-0.1 Request/Decision 与 Completion invariant；五类 Conversation identity 和冻结 Product Transport；identity-bound RR response；Completion-Gate Policy；Antigravity Stop Hook 的动态 route 与 bounded continuation。
 
-**MINIMUM BRIDGE IMPLEMENTED:** `runtime/review_loop.py` 现在保存 pending Request snapshot 和 reviewed artifact identity，把唯一 identity-verified RR envelope 严格映射为 ACF Decision，并驱动 `FINAL_REVIEW_PENDING → REVISION_REQUIRED → EXECUTING → FINAL_REVIEW_PENDING → COMPLETED`。错 Protocol、Work Item、Request ID、Review Kind、Acceptance coverage、wire/ACF binding、stale artifact 或未验证 Transport response 均为 `NON_AUTHORITATIVE`，不得改变 pending Workflow State。Transport 的旧 `work_item_state=ACHIEVED` 明确不具有 Product completion authority。只有 bridge 本地推导 `REVIEWED_STATE_CURRENT` 后，现有 Completion Gate 复验 Final `APPROVE` 才能写入 `COMPLETED`。
+**MINIMUM BRIDGE IMPLEMENTED:** `runtime/review_loop.py` 现在保存 pending Request snapshot 和 reviewed artifact identity，把唯一 identity-verified RR envelope 严格映射为 ACF Decision，并驱动 `FINAL_REVIEW_PENDING → REVISION_REQUIRED → EXECUTING → FINAL_REVIEW_PENDING → COMPLETED`。它同时从 pending Request 确定性渲染包含 strict RR response contract、完整 agreed AC 和 exact ACF binding 的 canonical Browser body，不再要求 Execution Agent 手工拼 message。`scripts/acf_review_loop.py` 的受限 `send-review / recover-review` 路径只使用冻结 Transport 默认预算，自动绑定 Request ID/Round/verified continuation target，并在同一 Request artifact 已存在时 fail closed。错 Protocol、Work Item、Request ID、Review Kind、Acceptance coverage、wire/ACF binding、stale artifact 或未验证 Transport response 均为 `NON_AUTHORITATIVE`，不得改变 pending Workflow State。Transport 的旧 `work_item_state=ACHIEVED` 明确不具有 Product completion authority。只有 bridge 本地推导 `REVIEWED_STATE_CURRENT` 后，现有 Completion Gate 复验 Final `APPROVE` 才能写入 `COMPLETED`。
 
 **ANTIGRAVITY RETURN PATH:** Browser `REVISE` 被保存为单个当前 `ACTION_ID`、完整 `REQUIRED_ACTIONS`、`CURRENT_REQUIRED_ACTION` 与一次 bounded `CONTINUATION_STATE`。Antigravity Adapter 的 `decision=continue` reason 现在携带当前动作说明，真实 Execution Agent 仍必须从配置的 state path 读取权威状态。修订 Evidence 记录后回到 `EXECUTING`，重新 Review 强制使用新 Request ID 并保持原 Review Kind。
 
@@ -86,7 +86,7 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、tests 和完整 Execution Packet 已达到可以启动一次真实 Antigravity/Browser 两轮 E2E 的位置；它不表示真实 Loop 已执行或本 Work Item 已完成。Work Item 继续为 `IN_PROGRESS / EXECUTING`，Review Request 仍为 `NONE`。
+**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、canonical Browser message path、fail-closed Product Transport command path、tests 和完整 Execution Packet 已达到可以启动一次干净 Attempt 3 的位置；它不表示真实 Loop 已完成或本 Work Item 已完成。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效，已保存于 repo 外 incident archive，不作为 Product completion Evidence。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
 ### First real E2E task
 
@@ -94,7 +94,7 @@ Agent Project System
 
 ### Local integration validation
 
-- Review Loop + Completion Gate suites：24/24 PASS。
+- Review Loop + Completion Gate suites：28/28 PASS，包含 canonical renderer、strict contract completeness、frozen wire-parser compatibility、metacharacter-safe JSON rendering、fail-closed first send 与 verified continuation target regression。
 - 冻结 Transport suite：194/194 PASS；`skills/research-review-lead/scripts/opencli_transport.py` 零修改。
 - Package checker unit suite：14/14 PASS。完整 `check_skill_package.py` 的隔离 Transport subprocess 在既有 240 秒 runner 上限处 timeout；同一 194-test suite 已独立全绿。本 Work Item 不为此放宽 Transport 或 checker timeout。
 - `check_docs.py` 与 `git diff --check`：PASS。

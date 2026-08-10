@@ -83,7 +83,25 @@ RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、
 
 ### ACF-0.1 compatibility bridge
 
-`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；`scripts/acf_review_loop.py` 只负责其 JSON 状态的原子持久化。它们不发送消息、不建立 Conversation，也不翻译 Antigravity lifecycle。正式回复只有在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，并且 Transport Work Item/Message ID 与当前 pending Request 精确相等时，才允许进入该 bridge。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
+`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；它负责状态转换和从 pending Request 确定性渲染 canonical Browser Review body，但不发送消息、不建立 Conversation，也不翻译 IDE lifecycle。`scripts/acf_review_loop.py` 负责 JSON 状态的原子持久化，并提供受限的 `send-review / recover-review` Product command path；该路径只把 canonical body 和当前 binding 交给冻结 Transport，不暴露 budget override，也不改变 Transport 或 Completion Authority。正式回复只有在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，并且 Transport Work Item/Message ID 与当前 pending Request 精确相等时，才允许进入该 bridge。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
+
+### Canonical Browser Review message path
+
+Execution Agent 不得手工拼 Browser prompt 或 response wire contract。提交 pending Request 后，Product 必须从当前 Work Item、完整 Request snapshot、agreed Acceptance Criteria 和 exact ACF binding 生成唯一 Browser body。该 body 自动包含 strict RR response fields、每个 Criterion 的 `STATUS / EVIDENCE` 结构、exact Request ID 与 Review Kind，但只列出允许的 Decision，不能预先要求 Browser 返回某个 Decision。
+
+正式命令路径为：
+
+```text
+submit-review
+→ send-review --prepare-new
+   或 send-review --previous-transport-state <verified prior state>
+→ recover-review（仅在同一 Transport state 已进入 pending response 时）
+→ ingest-review
+```
+
+`send-review` 从 pending Request 推导 Message ID 和 Round，生成不可覆盖的 canonical message/Transport state path，并使用冻结 Transport 默认预算；同一 Request 的本地发送 artifact 已存在时 fail closed。`recover-review` 只接受与当前 pending Work Item/Request 匹配、且已有一次 write 的 Transport state，并只调用 no-write pending recovery。Execution Agent 不得删除 canonical write receipt、删除或重建 Transport state、直接编辑 Loop/Transport JSON，或扩大任何 retry/recovery budget。
+
+为避免 Windows `.cmd` 路径中未验证的 payload metacharacter 风险，renderer 自身不生成尖括号或竖线占位语法；Request JSON 中的 Windows command metacharacter 使用 JSON Unicode escape 表示，identity 字段包含这些字符时直接拒绝。此 serializer 约束不等于已证明 `.cmd` root cause，也不授权修改冻结 Transport。
 
 为不向冻结 RR wire parser 增加 ACF-specific 顶层字段，Browser Lead 在现有 `VALIDATION` 多行字段中返回以下精确 compatibility binding：
 
