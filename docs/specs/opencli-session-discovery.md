@@ -125,6 +125,9 @@ NOT_SENT
 - `ask --new` 曾 timeout 后实际创建并投递到两个不同 Conversation，也曾把消息送入发送前已存在的非目标 Conversation；因此已从正式路径禁止。
 - Product Wrapper `send --prepare-new` 已实现 pre-send bounded history、`new`、URL/empty-read verification、单次 `opencli chatgpt send`、post-send status/current-page marker verification 与必要的一次 exact-ID recovery。
 - `new` 的 command result 只记录导航尝试结果，不建立 Conversation identity，也不单独决定是否允许 write；即使它 timeout、nonzero 或没有可解析 row，Wrapper 仍必须用紧随其后的 exact status `/new`（或 root）与 empty-read Evidence 验证真实 Browser 状态。status 仍在旧 `/c/<id>`、页面非空或 read 不可解析时必须在 write 前停止。
+- Browser-cleaned R3 technical Evidence 证明 `send` click 成功后 immediate status 仍可能为 `/new`，而 bounded read-only URL observation 随后可出现 `/c/<id>`。因此仅对 `NEW_SESSION_FIRST_WRITE + send success + immediate /new or root` 启用 `POST_SEND_NAVIGATION_WAIT`：最多 30 秒、最多 10 次、只调用 `chatgpt status`，首次观察到 exact `/c/<id>` 即停止。外部 status process 的完成速度不是 correctness assumption；deadline 与 attempt limit 同时约束 phase。该 phase 不消耗普通 9-command gate，且其 elapsed time 从旧 60 秒 operation budget 中显式排除，所以 qualifying operation 的物理 wall-clock 最多增加 30 秒；write/recovery/detail budget不变。该 Evidence 不重新证明 explicit-target continuation，也不证明 Product exact marker。
+- Navigation wait 使用独立只读 sub-budget，不消耗 9-command 普通 operation budget、recovery budget、detail budget或 write budget；每次 status 仍计入总 `external_command_count`，且等待受 60 秒总 operation wall-clock 约束，并为随后一次 marker read 保留 command-wait 窗口。deadline、总预算不足、status error 或 invalid identity 均进入 `DELIVERY_UNKNOWN` 并禁止同 ID resend；不得再转为 broad history polling。
+- URL completion 只建立 `CURRENT_BROWSER_CONVERSATION_ID` / navigation candidate。只有 current-page read 中唯一 exact `WORK_ITEM_ID + MESSAGE_ID` marker 才能建立 `DELIVERY_CONVERSATION_ID` 并把它提升为下一 `TARGET_CONVERSATION_ID`。
 - 结构化 stderr `EMPTY_RESULT` 是已知的非零退出空页例外；未知或不可解析 read 输出必须阻止发送。
 - timeout 进入 `DELIVERY_UNKNOWN`；同一 Message ID 不得重发。exact marker 在发送前非目标 Conversation 命中时为 `MISROUTED_DELIVERY`。
 - Runtime schema v5 已显式承载五类 identity 与 provenance；legacy fields 仅为兼容 alias/candidate，不能覆盖 v5 establishment semantics。
@@ -150,7 +153,7 @@ NOT_SENT
 
 - `NO_EXTRA_CONVERSATION_CREATED`：缺少 bounded post-write history delta，不能证明两次 write 没有副作用创建额外 Conversation。
 - `TIMEOUT_RECOVERY`：R2 没有自然 timeout/navigation error，不能验证 timeout 下 ask/report identity、status、history 与 exact detail 的稳定关系。
-- Product Wrapper 已对齐 first `send`、marker verification、delivery-to-target promotion 与 subsequent explicit target mechanism；真实 Product Browser 两消息 E2E 仍需在本 Work Item 内给出 Evidence。
+- Product Wrapper 已对齐 first `send`、marker verification、delivery-to-target promotion 与 subsequent explicit target mechanism；repository source `0.4.18` 已真实完成两消息同 Conversation Product Browser E2E。
 
 前两项不能从现有 Evidence 继续推断；不得为了 Handoff 开新实验或故意制造 timeout。第三项是当前 Product implementation 工作，不由 Lab 直接修改。
 
@@ -162,7 +165,7 @@ NOT_SENT
 
 MVP-0 implementation 已使 Wrapper 符合本 Contract 的正常路径：one-write-per-Message-ID、`DELIVERY_UNKNOWN != FAILED`、五类 identity/provenance、first `send` 后唯一 marker 建立 delivery、delivery-to-target promotion，以及 explicit target continuation 后重新验证 current/delivery/target。returned identity 只作候选；missing、duplicate、conflict、misroute 与 recovery failure 均不授权 resend。timeout 与无额外 Conversation 仍保持 `UNVERIFIED`，不得由本地回归推断为已证明。
 
-`NEXT_PRODUCT_ACTION`：完成 Product Browser 两消息 E2E 与 Browser Final Review。timeout/no-extra-conversation 继续保留 `UNVERIFIED`，实现不得猜测。
+`NEXT_PRODUCT_ACTION`：等待 Browser Final Review；Transport scope 冻结。timeout/no-extra-conversation 继续保留 `UNVERIFIED`，实现不得猜测。
 
 ## Acceptance Criteria
 

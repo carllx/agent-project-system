@@ -723,6 +723,9 @@ def send_cli_command(
     root: Path, *, max_external_commands: int = 9, manual_new_url: str | None = None,
     conversation: str | None = None, prepare_new: bool = False,
     max_recovery_attempts: int = 1,
+    max_navigation_wait_seconds: float = 1.5,
+    max_navigation_status_checks: int = 10,
+    navigation_poll_interval_seconds: float = 0.1,
 ) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
@@ -739,6 +742,9 @@ def send_cli_command(
         "--max-detail-checks", "1",
         "--max-external-commands", str(max_external_commands),
         "--max-experiment-seconds", "60",
+        "--max-post-send-navigation-wait-seconds", str(max_navigation_wait_seconds),
+        "--max-navigation-status-checks", str(max_navigation_status_checks),
+        "--post-send-navigation-poll-interval-seconds", str(navigation_poll_interval_seconds),
         "--recent-candidate-limit", "3",
     ]
     if manual_new_url:
@@ -755,6 +761,9 @@ def run_send_case(
     manual_new_url: str | None = None, conversation: str | None = None,
     prepare_new: bool = False, legacy_sequence: bool = True,
     max_recovery_attempts: int = 1,
+    max_navigation_wait_seconds: float = 1.5,
+    max_navigation_status_checks: int = 10,
+    navigation_poll_interval_seconds: float = 0.1,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
@@ -780,13 +789,16 @@ def run_send_case(
         root, max_external_commands=max_external_commands, manual_new_url=manual_new_url,
         conversation=conversation, prepare_new=prepare_new,
         max_recovery_attempts=max_recovery_attempts,
+        max_navigation_wait_seconds=max_navigation_wait_seconds,
+        max_navigation_status_checks=max_navigation_status_checks,
+        navigation_poll_interval_seconds=navigation_poll_interval_seconds,
     )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
     )
     state = json.loads((root / "state.json").read_text(encoding="utf-8"))
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert len(calls) <= max_external_commands
+    assert len(calls) <= max_external_commands + state.get("navigation_poll_count", 0)
     return completed, state, calls, command, env
 
 
@@ -832,6 +844,9 @@ def run_bootstrap_case(
         "--max-detail-checks", "1",
         "--max-external-commands", str(max_external_commands),
         "--max-experiment-seconds", "60",
+        "--max-post-send-navigation-wait-seconds", "1.5",
+        "--max-navigation-status-checks", "10",
+        "--post-send-navigation-poll-interval-seconds", "0.1",
         "--recent-candidate-limit", "3",
     ]
     if prepare_new:
@@ -841,7 +856,7 @@ def run_bootstrap_case(
     )
     state = json.loads((root / "state.json").read_text(encoding="utf-8"))
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert len(calls) <= max_external_commands
+    assert len(calls) <= max_external_commands + state.get("navigation_poll_count", 0)
     return completed, state, calls, command, env
 
 
@@ -1684,24 +1699,35 @@ def test_ask_without_id_status_new_id_uses_post_history_and_exact_detail() -> No
     assert [call[1] for call in calls][-1:] == ["detail"]
 
 
-def test_status_without_id_uses_single_new_history_candidate() -> None:
-    completed, state, _, _, _ = run_send_case(
-        recovery_sequence(), manual_new_url="https://chatgpt.com/new"
+def test_status_without_id_navigation_deadline_does_not_scan_history() -> None:
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_status("https://chatgpt.com/new") for _ in range(100)],
+        ),
+        prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=0.5, max_navigation_status_checks=10,
     )
-    assert completed.returncode == 0
-    assert state["post_send_page_mode"] == "ROOT"
-    assert state["new_candidate_diff"] == [NEW_ID]
-    assert state["recovery_target_source"] == "POST_SEND_HISTORY_NEW_CANDIDATE_DIFF"
-    assert state["actual_delivery_conversation_id"] == NEW_ID
+    assert state["navigation_wait_stop_reason"] == (
+        "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_DEADLINE_BUDGET"
+    )
+    assert state["post_send_history_called"] is False
+    assert [call[1] for call in calls].count("history") == 1
+    assert state["delivery_conversation_id"] is None
 
 
-def test_new_history_candidate_requires_both_exact_identifiers() -> None:
-    completed, state, _, _, _ = run_send_case(
-        recovery_sequence(), manual_new_url="https://chatgpt.com/new"
+def test_navigation_deadline_never_uses_unobserved_history_marker() -> None:
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_status("https://chatgpt.com/new") for _ in range(100)],
+        ),
+        prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=0.5, max_navigation_status_checks=10,
     )
-    assert completed.returncode == 0
-    assert state["delivery_state"] == "RESPONSE_READY"
-    assert state["detail_check_count"] == 1
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["detail_check_count"] == 0
+    assert [call[1] for call in calls].count("detail") == 0
 
 
 def test_new_history_candidate_without_identifiers_stays_unknown() -> None:
@@ -1766,16 +1792,19 @@ def test_post_send_exact_status_skips_unneeded_history() -> None:
     assert state["detail_check_count"] == 1
 
 
-def test_recovery_and_detail_budgets_remain_one() -> None:
-    completed, state, calls, _, _ = run_send_case(
-        recovery_sequence(detail_result=legacy_result([])),
-        manual_new_url="https://chatgpt.com/new",
+def test_navigation_wait_has_independent_budget_without_recovery_consumption() -> None:
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_status("https://chatgpt.com/new") for _ in range(100)],
+        ),
+        prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=3.0, max_navigation_status_checks=10,
     )
-    assert completed.returncode == 2
-    assert state["recovery_attempt_count"] == 1
-    assert state["detail_check_count"] == 1
-    assert [call[1] for call in calls].count("history") == 2
-    assert [call[1] for call in calls].count("detail") == 1
+    assert state["navigation_poll_count"] >= 1
+    assert state["recovery_attempt_count"] == 0
+    assert state["detail_check_count"] == 0
+    assert len(calls) <= 9 + state["navigation_poll_count"]
 
 
 def test_detail_count_only_increments_on_real_invocation() -> None:
@@ -1793,15 +1822,18 @@ def test_detail_count_only_increments_on_real_invocation() -> None:
     assert [call[1] for call in calls].count("detail") == 0
 
 
-def test_multiple_new_history_candidates_stay_unknown_without_detail() -> None:
-    completed, state, calls, _, _ = run_send_case(
-        recovery_sequence(post_history=legacy_history(OLD_ID, NEW_ID, "second-new")),
-        manual_new_url="https://chatgpt.com/new",
+def test_navigation_deadline_never_promotes_unobserved_history_candidates() -> None:
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_status("https://chatgpt.com/new") for _ in range(100)],
+        ),
+        prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=0.5, max_navigation_status_checks=10,
     )
-    assert completed.returncode == 2
     assert state["delivery_state"] == "DELIVERY_UNKNOWN"
-    assert state["new_candidate_diff"] == [NEW_ID, "second-new"]
-    assert state["recovery_target_source"] == "AMBIGUOUS_NEW_CANDIDATE_DIFF"
+    assert state["new_candidate_diff"] == []
+    assert state["candidate_conversation_id"] is None
     assert state["detail_check_count"] == 0
     assert [call[1] for call in calls].count("detail") == 0
 
@@ -2735,6 +2767,141 @@ def test_mvp_new_session_first_write_uses_send_once() -> None:
     assert state["target_conversation_id_at_send"] is None
     assert state["current_browser_conversation_id"] == NEW_ID
     assert state["delivery_conversation_id"] == NEW_ID
+    assert state["navigation_poll_count"] == 0
+    assert state["navigation_wait_started_at"] is None
+
+
+def test_mvp_delayed_new_navigation_establishes_candidate_then_delivery() -> None:
+    sequence = mvp_new_sequence(post_id=None, recovery_tail=[
+        legacy_status("https://chatgpt.com/new"),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        mvp_marker_result(ready=True),
+    ])
+    completed, state, calls, _, _ = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=5.0,
+    )
+    assert completed.returncode == 0
+    assert sum(call[1] == "send" for call in calls) == 1
+    assert state["navigation_poll_count"] == 2
+    assert state["navigation_status_attempt_count"] == 2
+    assert state["navigation_status_success_count"] == 2
+    assert state["navigation_status_error_count"] == 0
+    assert state["navigation_completion_conversation_id"] == NEW_ID
+    assert state["current_browser_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["target_conversation_id"] == NEW_ID
+    assert state["identity_establishment"]["DELIVERY"]["exact_marker_verified"] is True
+
+
+def test_mvp_navigation_deadline_is_unknown_and_same_id_no_resend() -> None:
+    sequence = mvp_new_sequence(post_id=None, recovery_tail=[
+        *[legacy_status("https://chatgpt.com/new") for _ in range(100)],
+    ])
+    _, state, calls, command, env = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=3.0, max_navigation_status_checks=10,
+    )
+    assert state["navigation_wait_stop_reason"] == (
+        "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_DEADLINE_BUDGET"
+    )
+    assert state["navigation_poll_count"] >= 1
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["message_send_count"] == 1
+    before = len(calls)
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    after = len(Path(env["OPENCLI_FAKE_LOG"]).read_text(encoding="utf-8").splitlines())
+    assert repeated.returncode == 1
+    assert after == before
+
+
+def test_mvp_navigation_attempt_budget_is_unknown_and_no_resend() -> None:
+    sequence = mvp_new_sequence(post_id=None, recovery_tail=[
+        legacy_status("https://chatgpt.com/new"),
+    ])
+    _, state, calls, command, env = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=5.0, max_navigation_status_checks=1,
+    )
+    assert state["navigation_wait_stop_reason"] == (
+        "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_ATTEMPT_BUDGET"
+    )
+    assert state["navigation_status_attempt_count"] == 1
+    assert state["navigation_status_success_count"] == 1
+    assert state["navigation_status_error_count"] == 0
+    assert state["message_send_count"] == 1
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    before = len(calls)
+    repeated = subprocess.run(
+        command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    after = len(Path(env["OPENCLI_FAKE_LOG"]).read_text(encoding="utf-8").splitlines())
+    assert repeated.returncode == 1
+    assert after == before
+
+
+def test_mvp_navigation_actual_status_error_is_distinct_from_unexecuted_budget() -> None:
+    status_error = legacy_result(
+        "", returncode=75, stderr="status failed", timed_out=True,
+    )
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(post_id=None, recovery_tail=[status_error]),
+        prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=5.0,
+    )
+    assert state["navigation_wait_stop_reason"] == "ACTUAL_STATUS_COMMAND_ERROR"
+    assert state["navigation_status_attempt_count"] == 1
+    assert state["navigation_status_success_count"] == 0
+    assert state["navigation_status_error_count"] == 1
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["message_send_count"] == 1
+
+
+def test_mvp_navigation_identity_conflict_never_promotes_delivery() -> None:
+    returned = legacy_result([{
+        "conversationId": OLD_ID,
+        "conversationUrl": f"https://chatgpt.com/c/{OLD_ID}",
+    }])
+    sequence = mvp_new_sequence(
+        post_id=None, send_result=returned,
+        recovery_tail=[legacy_status(f"https://chatgpt.com/c/{NEW_ID}")],
+    )
+    _, state, _, _, _ = run_send_case(
+        sequence, prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=3.0,
+    )
+    assert state["navigation_completion_conversation_id"] == NEW_ID
+    assert state["write_reported_conversation_id"] == OLD_ID
+    assert state["delivery_conversation_id"] is None
+    assert state["target_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_delayed_navigation_marker_ambiguity_forbids_resend() -> None:
+    for marker in (legacy_result([]), mvp_marker_result(occurrences=2)):
+        recovery_tail = [
+            legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+            marker,
+        ]
+        if marker == legacy_result([]):
+            recovery_tail.append(legacy_result([]))
+        _, state, calls, command, env = run_send_case(
+            mvp_new_sequence(post_id=None, recovery_tail=recovery_tail),
+            prepare_new=True, legacy_sequence=False,
+            max_navigation_wait_seconds=3.0,
+        )
+        assert state["navigation_completion_conversation_id"] == NEW_ID
+        assert state["delivery_conversation_id"] is None
+        assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+        before = len(calls)
+        repeated = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+        )
+        after = len(Path(env["OPENCLI_FAKE_LOG"]).read_text(encoding="utf-8").splitlines())
+        assert repeated.returncode == 1
+        assert after == before
 
 
 def test_mvp_uncertain_new_result_uses_status_and_empty_read_before_write() -> None:
@@ -2875,15 +3042,16 @@ def test_mvp_delivery_target_mismatch_is_misroute() -> None:
     assert state["delivery_state"] == "MISROUTED_DELIVERY"
 
 
-def test_mvp_recovery_candidate_without_marker_is_not_promoted() -> None:
+def test_mvp_navigation_deadline_does_not_promote_history_candidate() -> None:
     _, state, _, _, _ = run_send_case(
         mvp_new_sequence(
             post_id=None,
-            recovery_tail=[legacy_history(OLD_ID, NEW_ID), legacy_result([])],
+            recovery_tail=[legacy_status("https://chatgpt.com/new") for _ in range(100)],
         ),
         prepare_new=True, legacy_sequence=False,
+        max_navigation_wait_seconds=0.5, max_navigation_status_checks=10,
     )
-    assert state["recovered_conversation_id"] == NEW_ID
+    assert state["recovered_conversation_id"] is None
     assert state["delivery_conversation_id"] is None
     assert state["target_conversation_id"] is None
     assert state["delivery_state"] == "DELIVERY_UNKNOWN"
@@ -3109,16 +3277,16 @@ def main() -> int:
         test_ask_yaml_body_cannot_spoof_identity_or_ready_response,
         test_ask_identity_rejects_mismatch_and_non_chatgpt_url,
         test_ask_without_id_status_new_id_uses_post_history_and_exact_detail,
-        test_status_without_id_uses_single_new_history_candidate,
-        test_new_history_candidate_requires_both_exact_identifiers,
+        test_status_without_id_navigation_deadline_does_not_scan_history,
+        test_navigation_deadline_never_uses_unobserved_history_marker,
         test_new_history_candidate_without_identifiers_stays_unknown,
         test_work_item_only_without_message_id_stays_unknown,
         test_message_id_prefix_collision_does_not_match,
         test_work_item_id_prefix_collision_does_not_match,
         test_post_send_exact_status_skips_unneeded_history,
-        test_recovery_and_detail_budgets_remain_one,
+        test_navigation_wait_has_independent_budget_without_recovery_consumption,
         test_detail_count_only_increments_on_real_invocation,
-        test_multiple_new_history_candidates_stay_unknown_without_detail,
+        test_navigation_deadline_never_promotes_unobserved_history_candidates,
         test_existing_conversation_recovery_is_not_misroute,
         test_prepare_and_send_use_one_shared_read_classifier,
         test_send_manual_real_empty_result_sends_once_without_new,
@@ -3196,6 +3364,12 @@ def main() -> int:
         test_automatic_recovery_exhaustion_enters_manual_relay_required,
         test_send_command_still_accepts_normal_message_file,
         test_mvp_new_session_first_write_uses_send_once,
+        test_mvp_delayed_new_navigation_establishes_candidate_then_delivery,
+        test_mvp_navigation_deadline_is_unknown_and_same_id_no_resend,
+        test_mvp_navigation_attempt_budget_is_unknown_and_no_resend,
+        test_mvp_navigation_actual_status_error_is_distinct_from_unexecuted_budget,
+        test_mvp_navigation_identity_conflict_never_promotes_delivery,
+        test_mvp_delayed_navigation_marker_ambiguity_forbids_resend,
         test_mvp_uncertain_new_result_uses_status_and_empty_read_before_write,
         test_mvp_uncertain_new_result_old_page_still_blocks_before_write,
         test_mvp_verified_delivery_promotes_next_target_with_provenance,
@@ -3206,7 +3380,7 @@ def main() -> int:
         test_mvp_returned_identity_without_marker_is_candidate_only,
         test_mvp_delivery_unknown_is_not_failed,
         test_mvp_delivery_target_mismatch_is_misroute,
-        test_mvp_recovery_candidate_without_marker_is_not_promoted,
+        test_mvp_navigation_deadline_does_not_promote_history_candidate,
         test_mvp_all_post_write_failures_forbid_same_id_resend,
         test_mvp_runtime_exposes_all_five_identity_roles,
         test_mvp_existing_target_recovery_prefers_persisted_target,

@@ -36,6 +36,10 @@ MAX_RECOVERY_ATTEMPTS = 1
 MAX_DETAIL_CHECKS = 1
 MAX_EXTERNAL_COMMANDS = 9
 MAX_EXPERIMENT_SECONDS = 60
+MAX_POST_SEND_NAVIGATION_WAIT_SECONDS = 30
+MAX_NAVIGATION_STATUS_CHECKS = 10
+MIN_NAVIGATION_STATUS_COMMAND_BUDGET_SECONDS = 3
+POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS = 1
 MAX_PENDING_RESPONSE_CONTINUATIONS = 3
 PREPARE_MAX_SEND_ATTEMPTS = 0
 PREPARE_MAX_RECOVERY_ATTEMPTS = 0
@@ -399,7 +403,11 @@ def begin_operation(state: dict[str, Any], operation: str) -> None:
 def operation_elapsed_seconds(state: dict[str, Any]) -> float:
     started_at = state.get("current_operation_started_at") or state["started_at"]
     started = datetime.fromisoformat(started_at)
-    return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+    physical_elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+    navigation_excluded = float(
+        state.get("operation_budget_excluded_navigation_seconds", 0.0)
+    )
+    return max(0.0, physical_elapsed - navigation_excluded)
 
 
 def command(
@@ -1179,6 +1187,17 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "candidate_conversation_conflict": False,
         "candidate_conversation_conflicts": [],
         "last_observed_status_conversation_id": None,
+        "navigation_wait_started_at": None,
+        "navigation_wait_deadline": None,
+        "navigation_wait_elapsed": 0.0,
+        "navigation_poll_count": 0,
+        "navigation_status_attempt_count": 0,
+        "navigation_status_success_count": 0,
+        "navigation_status_error_count": 0,
+        "navigation_completion_url": None,
+        "navigation_completion_conversation_id": None,
+        "navigation_wait_stop_reason": None,
+        "operation_budget_excluded_navigation_seconds": 0.0,
         "parameters": {
             "command_wait_seconds": args.command_wait_seconds,
             "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
@@ -1186,6 +1205,27 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
             "max_detail_checks": args.max_detail_checks,
             "max_external_commands": args.max_external_commands,
             "max_experiment_seconds": args.max_experiment_seconds,
+            "max_post_send_navigation_wait_seconds": min(
+                max(float(getattr(
+                    args, "max_post_send_navigation_wait_seconds",
+                    MAX_POST_SEND_NAVIGATION_WAIT_SECONDS,
+                )), 0.0),
+                MAX_POST_SEND_NAVIGATION_WAIT_SECONDS,
+            ),
+            "max_navigation_status_checks": min(
+                max(int(getattr(
+                    args, "max_navigation_status_checks",
+                    MAX_NAVIGATION_STATUS_CHECKS,
+                )), 0),
+                MAX_NAVIGATION_STATUS_CHECKS,
+            ),
+            "post_send_navigation_poll_interval_seconds": min(
+                max(float(getattr(
+                    args, "post_send_navigation_poll_interval_seconds",
+                    POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS,
+                )), 0.1),
+                POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS,
+            ),
             "recent_candidate_limit": args.recent_candidate_limit,
             "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
         },
@@ -1430,6 +1470,13 @@ def capture_post_send_status(
     state: dict[str, Any], state_path: Path
 ) -> dict[str, Any] | None:
     status = command(state, state_path, "status-after-send", ["chatgpt", "status", "-f", "json", "--window", "background"], state["parameters"]["command_wait_seconds"])
+    apply_post_send_status(state, status, "POST_SEND_STATUS")
+    return status
+
+
+def apply_post_send_status(
+    state: dict[str, Any], status: dict[str, Any] | None, source_kind: str,
+) -> tuple[str | None, str | None]:
     current_url = status_url(status)
     current_id = conversation_id_from_url(current_url or "")
     state["last_observed_status_conversation_id"] = current_id
@@ -1439,12 +1486,110 @@ def capture_post_send_status(
         state["post_send_active_conversation_id"] = current_id
         state["current_browser_conversation_id"] = current_id
         record_identity_observation(
-            state, "CURRENT_BROWSER", current_id, "POST_SEND_STATUS",
+            state, "CURRENT_BROWSER", current_id, source_kind,
             state["raw_outputs"][-1] if status is not None else None,
         )
-    observe_candidate(state, current_id, "POST_SEND_STATUS")
+    observe_candidate(state, current_id, source_kind)
     state["post_send_page_mode"] = page_mode(current_url)
-    return status
+    return current_url, current_id
+
+
+def wait_for_post_send_navigation(
+    state: dict[str, Any], state_path: Path,
+) -> dict[str, Any] | None:
+    """Observe NEW-session URL completion without consuming the write/recovery budgets."""
+    state["navigation_wait_started_at"] = utc_now()
+    started = time.monotonic()
+    configured = state["parameters"]["max_post_send_navigation_wait_seconds"]
+    wait_budget = float(configured)
+    deadline_at = datetime.now(timezone.utc).timestamp() + wait_budget
+    state["navigation_wait_deadline"] = datetime.fromtimestamp(
+        deadline_at, timezone.utc,
+    ).isoformat(timespec="seconds")
+    interval = state["parameters"]["post_send_navigation_poll_interval_seconds"]
+    max_attempts = state["parameters"]["max_navigation_status_checks"]
+    state["navigation_wait_budget_seconds"] = round(wait_budget, 3)
+    write_json(state_path, state)
+
+    while True:
+        elapsed = time.monotonic() - started
+        state["navigation_wait_elapsed"] = round(elapsed, 3)
+        state["operation_budget_excluded_navigation_seconds"] = round(elapsed, 3)
+        remaining = wait_budget - elapsed
+        if remaining <= 0:
+            state["navigation_wait_stop_reason"] = (
+                "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_DEADLINE"
+            )
+            write_json(state_path, state)
+            return None
+        minimum_status_budget = min(
+            float(state["parameters"]["command_wait_seconds"]),
+            float(MIN_NAVIGATION_STATUS_COMMAND_BUDGET_SECONDS),
+        )
+        if remaining < minimum_status_budget:
+            state["navigation_wait_stop_reason"] = (
+                "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_DEADLINE_BUDGET"
+            )
+            write_json(state_path, state)
+            return None
+        if state["navigation_status_attempt_count"] >= max_attempts:
+            state["navigation_wait_stop_reason"] = (
+                "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_ATTEMPT_BUDGET"
+            )
+            write_json(state_path, state)
+            return None
+        time.sleep(min(float(interval), remaining))
+        elapsed = time.monotonic() - started
+        state["navigation_wait_elapsed"] = round(elapsed, 3)
+        state["operation_budget_excluded_navigation_seconds"] = round(elapsed, 3)
+        remaining = wait_budget - elapsed
+        if remaining <= 0:
+            state["navigation_wait_stop_reason"] = (
+                "STATUS_OBSERVATION_NOT_EXECUTED_DUE_TO_DEADLINE"
+            )
+            write_json(state_path, state)
+            return None
+
+        state["external_command_count"] += 1
+        state["navigation_status_attempt_count"] += 1
+        state["navigation_poll_count"] += 1
+        timeout = min(
+            float(state["parameters"]["command_wait_seconds"]),
+            remaining,
+        )
+        result = run_opencli(
+            ["chatgpt", "status", "-f", "json", "--window", "background"],
+            timeout,
+        )
+        save_raw(
+            state, state_path,
+            f"status-navigation-{state['navigation_poll_count']}", result,
+        )
+        state["navigation_wait_elapsed"] = round(time.monotonic() - started, 3)
+        state["operation_budget_excluded_navigation_seconds"] = state[
+            "navigation_wait_elapsed"
+        ]
+        if result.get("timed_out") or result.get("returncode") != 0:
+            state["navigation_status_error_count"] += 1
+            state["navigation_wait_stop_reason"] = "ACTUAL_STATUS_COMMAND_ERROR"
+            write_json(state_path, state)
+            return None
+        state["navigation_status_success_count"] += 1
+        current_url, current_id = apply_post_send_status(
+            state, result, "POST_SEND_NAVIGATION_STATUS",
+        )
+        mode = page_mode(current_url)
+        if current_id:
+            state["navigation_completion_url"] = current_url
+            state["navigation_completion_conversation_id"] = current_id
+            state["navigation_wait_stop_reason"] = "EXACT_CONVERSATION_ID_OBSERVED"
+            write_json(state_path, state)
+            return result
+        if mode not in {"NEW", "ROOT"}:
+            state["navigation_wait_stop_reason"] = "INVALID_NAVIGATION_IDENTITY"
+            write_json(state_path, state)
+            return None
+        write_json(state_path, state)
 
 
 def recovery_attempt_key(recovery_kind: str) -> str:
@@ -1766,6 +1911,23 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         write_json(state_path, state)
         return output_state(state)
     post_status_id = state.get("post_send_active_conversation_id")
+    if (
+        not post_status_id
+        and state.get("target_binding_mode") == "NEW_SESSION_FIRST_WRITE"
+        and result.get("returncode") == 0
+        and not state.get("send_timed_out")
+        and state.get("post_send_page_mode") in {"NEW", "ROOT"}
+    ):
+        post_status = wait_for_post_send_navigation(state, state_path)
+        post_status_id = state.get("post_send_active_conversation_id")
+        if not post_status_id:
+            set_state(
+                state, "DELIVERY_UNKNOWN",
+                "bounded post-send navigation wait did not expose an exact Conversation identity",
+            )
+            stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
+            write_json(state_path, state)
+            return output_state(state)
     identity_conflict = bool(returned_id and post_status_id and returned_id != post_status_id)
     if identity_conflict:
         set_state(state, "DELIVERY_UNKNOWN", "send result identity conflicts with post-send Browser identity")
@@ -2145,6 +2307,18 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
     send.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
     send.add_argument("--max-experiment-seconds", type=int, default=MAX_EXPERIMENT_SECONDS)
+    send.add_argument(
+        "--max-post-send-navigation-wait-seconds", type=float,
+        default=MAX_POST_SEND_NAVIGATION_WAIT_SECONDS,
+    )
+    send.add_argument(
+        "--max-navigation-status-checks", type=int,
+        default=MAX_NAVIGATION_STATUS_CHECKS,
+    )
+    send.add_argument(
+        "--post-send-navigation-poll-interval-seconds", type=float,
+        default=POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS,
+    )
     send.add_argument("--recent-candidate-limit", type=int, default=RECENT_CANDIDATE_LIMIT)
     send.set_defaults(handler=send_command)
     recover = sub.add_parser("recover", help="bounded delivery recovery or pending-response continuation without sending")
@@ -2180,6 +2354,18 @@ def parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
     bootstrap.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
     bootstrap.add_argument("--max-experiment-seconds", type=int, default=MAX_EXPERIMENT_SECONDS)
+    bootstrap.add_argument(
+        "--max-post-send-navigation-wait-seconds", type=float,
+        default=MAX_POST_SEND_NAVIGATION_WAIT_SECONDS,
+    )
+    bootstrap.add_argument(
+        "--max-navigation-status-checks", type=int,
+        default=MAX_NAVIGATION_STATUS_CHECKS,
+    )
+    bootstrap.add_argument(
+        "--post-send-navigation-poll-interval-seconds", type=float,
+        default=POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS,
+    )
     bootstrap.add_argument("--recent-candidate-limit", type=int, default=RECENT_CANDIDATE_LIMIT)
     bootstrap.set_defaults(handler=bootstrap_command)
     manual_export = sub.add_parser(
