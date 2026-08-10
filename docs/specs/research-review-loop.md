@@ -184,11 +184,11 @@ PREPARE_MESSAGE
 → PARSE_RR_REVIEW
 ```
 
-当前 Wrapper 的正式发送仍由单一 `send --prepare-new` 调用完成：保存有限 recent history 基线，执行 `opencli chatgpt new`，用 `status` 与 current-page `read` 验证空白环境，再执行一次 `ask` 并做发送后身份处理。Lab `OPENCLI-SESSION-IDENTITY-MIN-001-R2` 已独立证明的最小机制则是一次 `opencli chatgpt send` 首写、发送后 exact identity/marker 验证、将 delivery identity 提升为下一轮 target，再用 `send --conversation <TARGET>` 续写。二者的 Product 对齐属于 `OPENCLI-SESSION-DISCOVERY-001` 下一实现动作；在完成前不得把当前 `ask` 路径描述成已由该 Lab 证明。`ask --new` 继续禁止。
+当前 Wrapper 的正式发送由单一 `send --prepare-new` 调用完成：保存有限 recent history 基线，执行 `opencli chatgpt new`，用 `status` 与 current-page `read` 验证空白环境，再执行一次 `opencli chatgpt send`。发送后必须重新捕获 exact current identity，并以唯一 exact Work Item/Message marker 建立 delivery；new-session delivery 随后才可提升为下一轮 target。后续轮次使用 `send --conversation <TARGET>`，仍须重新验证 current、delivery 与 target。`ask --new` 继续禁止。
 
-正常恢复不得扫描全部 pre-send Conversation。NEW 模式必须先保存有限 recent history 基线；ask 无可用 Conversation ID 时依次执行一次发送后 status、一次相同窗口的 history refresh、排除基线 ID 的 `NEW_CANDIDATE_DIFF`，再选择 ask 身份、当前发送后 Conversation 或唯一新增候选中的最强目标执行最多一次 detail。只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，命中立即停止，不保存无关正文；不得扩大候选数量或无限轮询。当前发送后目标若属于发送前 ID 且精确命中两个标识，仍为 `MISROUTED_DELIVERY`；找不到则保持 `DELIVERY_UNKNOWN` 并永久禁止该 Message ID 重发。
+正常恢复不得扫描全部 pre-send Conversation。existing-target write 必须先 exact-detail 持久 target，即使 post-send Browser current 仍位于其他 Conversation；new-session 发送后 status 若给出 exact current ID，恢复只对该 exact ID 执行最多一次 detail。status 无 exact ID 时，才刷新同一 bounded history window、排除基线并要求唯一 `NEW_CANDIDATE_DIFF`。只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，且必须恰好命中一个 user marker；returned identity、current identity 和 history candidate 都只是 observation，不能单独建立 delivery。当前发送后目标若属于发送前 ID，或 existing-target delivery 与 target 不同，且 exact marker 命中，则为 `MISROUTED_DELIVERY`；找不到或 marker 重复则保持 `DELIVERY_UNKNOWN` 并永久禁止该 Message ID 重发。
 
-Runtime State 至少记录 `work_item_id`、`message_id`、`expected_conversation_mode`、`pre_send_active_conversation_id`、`verified_target_conversation_id`、`actual_delivery_conversation_id`、`delivery_state`、`send_attempt_count`、`recovery_attempt_count`、`misroute_detected`、`started_at`、`stopped_at` 和 `stop_reason`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
+Runtime State 至少记录 `work_item_id`、`message_id`、五类 Conversation identity、target-at-send、identity observations/establishment、`delivery_state`、`send_attempt_count`、`recovery_attempt_count`、`misroute_detected`、`started_at`、`stopped_at` 和 `stop_reason`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
 
 默认实验预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=9`、`MAX_EXPERIMENT_SECONDS=60`。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
 
@@ -202,22 +202,22 @@ PRE_SEND_HISTORY_BASELINE
 → VERIFY_NEW_URL
 → VERIFY_EMPTY_READ
 → SEND_ONCE
-→ PARSE_ASK_IDENTITY
+→ RECORD_SEND_OBSERVATIONS
 → POST_SEND_STATUS
 → POST_SEND_HISTORY_DIFF_IF_NEEDED
 → AT_MOST_ONE_DETAIL
 → FINAL_STATE
 ```
 
-发送前验证失败时必须在 ask 前停止，两个发送计数保持零。ask 只允许调用一次，并在实际调用边界同时持久化两个发送计数；崩溃、timeout、`DELIVERY_UNKNOWN` 或 `MISROUTED_DELIVERY` 均不得允许同一 Message ID 再次发送。
+发送前验证失败时必须在 write 前停止，两个发送计数保持零。`opencli chatgpt send` 只允许调用一次，并在实际调用边界同时持久化两个发送计数与 canonical write receipt；该 receipt 由 Work Item ID + Message ID 定位且独立于可选 state-file path。崩溃、timeout、`DELIVERY_UNKNOWN`、recovery budget exhaustion 或 `MISROUTED_DELIVERY` 均不得允许同一 Message ID 再次发送或 Manual Relay。
 
 URL 为 `/new` 不足以单独证明页面为空。结构化 OpenCLI 错误码精确为 `EMPTY_RESULT` 时，即使 CLI 返回非零退出码，也允许作为空页面证据；空 JSON 对象或数组同样为空。其他错误码、未知结构或不可解析输出必须以 `READ_UNPARSEABLE` 阻止发送；可识别的真实 ChatGPT 消息必须以 `READ_NOT_EMPTY` 阻止发送。
 
-集成路径必须调用唯一共享的 `classify_chatgpt_read_result`。`ask` 身份解析同时接受 OpenCLI 的 JSON 与真实 flat YAML `conversationId` / `conversationUrl` 输出，不得因输出格式分叉把明确身份降级为 `DELIVERY_UNKNOWN`。ask 后必须执行一次 status；只有身份缺失、传输错误或身份冲突时才执行一次发送后 history 差集与最多一次 detail。
+集成路径必须调用唯一共享的 `classify_chatgpt_read_result`。write 后必须执行一次 status；exact current ID 存在时读取 current page，并只以唯一 exact marker 建立 delivery。send 输出中的 JSON/flat-YAML identity 只记录为候选 observation；若与 post-send current 冲突，不得选择任一方作为 delivery。只有 current-page Evidence 不足时才执行一次 bounded exact detail，或在 current ID 缺失时执行一次 history 差集后再 detail。
 
 不得把 `send --manual-new-url` 作为正式流程或要求用户调整 Browser 页面。旧参数与独立 `prepare-new` 仅保留向后兼容和本地诊断，不是下一次真实实验的前置步骤或验收项。
 
-集成 Runtime 记录 `operation=START_NEW_AND_SEND`、`prepare_new=true`、基线、new/read 验证、ask 身份、发送后 status、可选 history diff/detail、全部预算与最终 delivery state。Wrapper 自身无法观察的外层 Agent 工具计数仍必须标记为 `UNAVAILABLE`，不得伪报整个实验为零。
+集成 Runtime schema v5 记录 `operation=START_NEW_AND_SEND`、`prepare_new=true`、基线、new/read 验证、五类 Conversation identity、target-at-send、identity observations/establishment provenance、发送后 status/current-page read、可选 history diff/detail、全部预算与最终 delivery state。Wrapper 自身无法观察的外层 Agent 工具计数仍必须标记为 `UNAVAILABLE`，不得伪报整个实验为零。
 
 本机 OpenCLI `1.8.6` 中，Lab 已观察到：`new` 只返回 Status 并进入 `/new`；首条 `send` 后 `status` 进入 exact `/c/<id>`，current-page `read` 可验证 marker；随后 `send --conversation <TARGET>` 与第二次 marker read 保持同一 Conversation。`read` 仍绑定当前 Browser 页面，不是 arbitrary exact-ID read。该轮没有 bounded post-write history delta，也没有自然 timeout，因此不得据此声明无额外 Conversation 或 timeout recovery 已通过。
 
@@ -248,7 +248,7 @@ Shell 在 `COMMAND_WAIT_SECONDS=15` 内直接返回 `exit code`、`stdout` 和 `
 
 ### Final integrated transport experiment
 
-本地验证完成后只运行一次真实 `send --prepare-new` 端到端实验，使用新的 Work Item ID、Message ID 和 Runtime，并在单一 Wrapper 调用内验证 new、空页、一次 ask、发送后 status、必要的一次恢复以及最终 Conversation ID 和回复。不得再运行独立 A2.1/A2.2 微型实验，不得要求用户先打开 `/new`。若在现有有限预算内仍不能取得明确 Conversation ID 和回复，立即停止继续修补 OpenCLI 1.8.6 Transport，并把该路线标记为当前不可可靠使用。
+本地验证完成后运行一次 bounded Product 两消息端到端实验：第一条使用新的 Work Item ID、Message ID 和 Runtime，在单一 Wrapper 调用内验证 new、空页、一次 send、发送后 exact identity/marker 与 target promotion；第二条使用新的 Message ID 和独立 Runtime，显式 `--conversation <promoted-target>` 并验证 delivery 仍为同一 Conversation。不得再运行独立 A2.1/A2.2 微型实验，不得要求用户先打开 `/new`。任一消息进入 `DELIVERY_UNKNOWN` 或 misroute 后立即停止，绝不 resend。
 
 ### Experiment B: Two-round Loop
 

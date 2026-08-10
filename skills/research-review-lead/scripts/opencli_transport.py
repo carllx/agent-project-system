@@ -148,6 +148,35 @@ def default_state_path(work_item_id: str, message_id: str) -> Path:
     return Path(tempfile.gettempdir()) / "research-review-lead" / safe_name(work_item_id) / f"{safe_name(message_id)}.json"
 
 
+def write_receipt_path(work_item_id: str, message_id: str) -> Path:
+    root = Path(
+        os.environ.get("OPENCLI_TRANSPORT_RECEIPT_DIR")
+        or (Path(tempfile.gettempdir()) / "research-review-lead" / "write-receipts")
+    )
+    return root / safe_name(work_item_id) / f"{safe_name(message_id)}.json"
+
+
+def create_write_receipt(
+    path: Path, work_item_id: str, message_id: str, state_path: Path,
+) -> None:
+    """Atomically claim the sole Product write for a logical Message ID."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps({
+        "work_item_id": work_item_id,
+        "message_id": message_id,
+        "state_file": str(state_path),
+        "write_claimed_at": utc_now(),
+    }, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+    except FileExistsError as error:
+        raise ValueError("MESSAGE_ID already has a canonical write receipt; same-ID resend is forbidden") from error
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 def read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
@@ -616,6 +645,19 @@ def inspect_messages(messages: list[dict[str, Any]], work_item_id: str, message_
     return True, bool(text), bool(text) and not generating and stable
 
 
+def exact_delivery_marker_count(
+    messages: list[dict[str, Any]], work_item_id: str, message_id: str
+) -> int:
+    """Count exact outbound markers; delivery requires exactly one match."""
+    return sum(
+        1
+        for message in messages
+        if str(pick(message, "Role") or "").lower() == "user"
+        and has_exact_header(str(pick(message, "Text") or ""), "MESSAGE_ID", message_id)
+        and has_exact_header(str(pick(message, "Text") or ""), "WORK_ITEM_ID", work_item_id)
+    )
+
+
 def rr_response_fields(
     text: str,
     expected_message_id: str | None = None,
@@ -1082,12 +1124,22 @@ def bootstrap_body(args: argparse.Namespace) -> str:
 def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
     started = utc_now()
     return {
-        "schema_version": 4, "work_item_id": args.work_item_id, "message_id": args.message_id,
+        "schema_version": 5, "work_item_id": args.work_item_id, "message_id": args.message_id,
         "operation": "START_NEW_AND_SEND" if args.prepare_new else "SEND",
         "prepare_new": bool(args.prepare_new),
         "round": args.round, "message_type": args.message_type,
         "expected_conversation_mode": "EXISTING" if args.conversation else "NEW",
-        "pre_send_active_conversation_id": None, "verified_target_conversation_id": args.conversation,
+        "created_conversation_id": None,
+        "target_conversation_id": args.conversation,
+        "target_conversation_id_at_send": args.conversation,
+        "current_browser_conversation_id": None,
+        "delivery_conversation_id": None,
+        "recovered_conversation_id": None,
+        "target_binding_mode": "EXISTING_EXPLICIT" if args.conversation else "NEW_SESSION_FIRST_WRITE",
+        "identity_observations": [],
+        "identity_establishment": {},
+        "delivery_marker_status": "NOT_CHECKED",
+        "pre_send_active_conversation_id": None, "verified_target_conversation_id": None,
         "actual_delivery_conversation_id": None, "verified_target_url": None,
         "delivery_state": "NOT_SENT", "work_item_state": "IN_PROGRESS",
         "send_attempted": False,
@@ -1205,14 +1257,141 @@ def establish_verified_target(state: dict[str, Any], identity: str) -> bool:
     return True
 
 
+def record_identity_observation(
+    state: dict[str, Any], role: str, identity: str | None, source_kind: str,
+    raw_output_path: str | None = None,
+) -> None:
+    if not identity:
+        return
+    state.setdefault("identity_observations", []).append({
+        "role": role,
+        "value": identity,
+        "source_kind": source_kind,
+        "observed_at": utc_now(),
+        "raw_output_path": raw_output_path,
+        "work_item_id": state.get("work_item_id"),
+        "message_id": state.get("message_id"),
+    })
+
+
+def establish_identity(
+    state: dict[str, Any], role: str, identity: str, source_kind: str,
+    raw_output_path: str | None = None, *, exact_marker_verified: bool = False,
+) -> bool:
+    field = f"{role.lower()}_conversation_id"
+    existing = state.setdefault("identity_establishment", {}).get(role)
+    if existing and existing.get("value") != identity:
+        state.setdefault("identity_establishment_conflicts", []).append({
+            "role": role,
+            "preserved_value": existing.get("value"),
+            "rejected_value": identity,
+            "source_kind": source_kind,
+            "observed_at": utc_now(),
+        })
+        return False
+    state[field] = identity
+    record = {
+        "value": identity,
+        "source_kind": source_kind,
+        "established_at": utc_now(),
+        "raw_output_path": raw_output_path,
+        "work_item_id": state.get("work_item_id"),
+        "message_id": state.get("message_id"),
+    }
+    if role == "DELIVERY":
+        record["exact_marker_verified"] = exact_marker_verified
+        state["actual_delivery_conversation_id"] = identity
+    state["identity_establishment"][role] = record
+    return True
+
+
+def ensure_identity_schema(state: dict[str, Any]) -> dict[str, Any]:
+    """Conservatively expose v5 identity roles without upgrading candidates to facts."""
+    if state.get("schema_version", 0) >= 5:
+        return state
+    legacy_version = state.get("schema_version")
+    state["legacy_schema_version"] = legacy_version
+    state["schema_version"] = 5
+    state.setdefault("created_conversation_id", None)
+    legacy_target = (
+        state.get("verified_target_conversation_id")
+        if state.get("expected_conversation_mode") == "EXISTING"
+        else None
+    )
+    state.setdefault("target_conversation_id", legacy_target)
+    state.setdefault("target_conversation_id_at_send", legacy_target)
+    state.setdefault(
+        "current_browser_conversation_id",
+        state.get("post_send_active_conversation_id")
+        or state.get("last_observed_status_conversation_id")
+        or state.get("pre_send_active_conversation_id"),
+    )
+    state.setdefault("delivery_conversation_id", None)
+    state.setdefault("recovered_conversation_id", None)
+    state.setdefault(
+        "target_binding_mode",
+        "EXISTING_EXPLICIT" if legacy_target else "NEW_SESSION_FIRST_WRITE",
+    )
+    state.setdefault("identity_observations", [])
+    state.setdefault("identity_establishment", {})
+    state.setdefault("delivery_marker_status", "NOT_CHECKED")
+    state.setdefault("migration_notes", []).append(
+        "Legacy delivery/recovery identities retained as candidates pending exact-marker re-verification."
+    )
+    return state
+
+
+def establish_verified_delivery(
+    state: dict[str, Any], response_batch: ResponseMessageBatch,
+) -> bool:
+    """Establish delivery only from one exact marker and a non-conflicting identity."""
+    identity = response_batch.conversation_id
+    marker_count = exact_delivery_marker_count(
+        list(response_batch.messages), state["work_item_id"], state["message_id"]
+    )
+    state["delivery_marker_count"] = marker_count
+    state["delivery_marker_status"] = (
+        "UNIQUE" if marker_count == 1 else "MISSING" if marker_count == 0 else "DUPLICATE"
+    )
+    if marker_count != 1:
+        return False
+    target_at_send = state.get("target_conversation_id_at_send")
+    if not target_at_send and identity in pre_send_ids(state):
+        establish_identity(
+            state, "DELIVERY", identity, response_batch.source_kind,
+            response_batch.raw_output_path, exact_marker_verified=True,
+        )
+        mark_misroute(state, identity, response_batch.raw_output_path)
+        return False
+    if target_at_send and target_at_send != identity:
+        establish_identity(
+            state, "DELIVERY", identity, response_batch.source_kind,
+            response_batch.raw_output_path, exact_marker_verified=True,
+        )
+        mark_misroute(state, identity, response_batch.raw_output_path)
+        return False
+    establish_identity(
+        state, "DELIVERY", identity, response_batch.source_kind,
+        response_batch.raw_output_path, exact_marker_verified=True,
+    )
+    if not target_at_send:
+        establish_identity(
+            state, "TARGET", identity, "PROMOTED_FROM_VERIFIED_DELIVERY",
+            response_batch.raw_output_path,
+        )
+        state["target_binding_mode"] = "PROMOTED_VERIFIED_DELIVERY"
+    establish_verified_target(state, identity)
+    return True
+
+
 def mark_misroute(state: dict[str, Any], identity: str, raw_path: str | None) -> None:
     state["actual_delivery_conversation_id"] = identity
     state["misroute_detected"] = True
     state["official_response_eligible"] = False
     state["misroute_evidence"] = {"conversation_id": identity, "raw_path": raw_path,
                                   "matched_work_item_id": state["work_item_id"], "matched_message_id": state["message_id"]}
-    set_state(state, "MISROUTED_DELIVERY", "exact Work Item ID and Message ID found in a pre-send conversation")
-    stop(state, "MISROUTED_DELIVERY: repair new-conversation creation before retrying")
+    set_state(state, "MISROUTED_DELIVERY", "exact marker found in a Conversation different from the send target")
+    stop(state, "MISROUTED_DELIVERY: do not resend this Message ID", "IN_PROGRESS")
 
 
 def pre_send_ids(state: dict[str, Any]) -> set[str]:
@@ -1258,6 +1437,11 @@ def capture_post_send_status(
         state["post_send_status_url"] = current_url
     if current_id:
         state["post_send_active_conversation_id"] = current_id
+        state["current_browser_conversation_id"] = current_id
+        record_identity_observation(
+            state, "CURRENT_BROWSER", current_id, "POST_SEND_STATUS",
+            state["raw_outputs"][-1] if status is not None else None,
+        )
     observe_candidate(state, current_id, "POST_SEND_STATUS")
     state["post_send_page_mode"] = page_mode(current_url)
     return status
@@ -1300,13 +1484,20 @@ def recover_delivery(
             # Automatic transport cannot recover within budget: hand the
             # prepared payload to a human for Manual Relay instead of
             # permanently failing the Work Item.
-            set_state(
-                state,
-                "MANUAL_RELAY_REQUIRED",
-                "automatic recovery budget exhausted; use manual-export to relay",
-            )
-            state["work_item_state"] = "IN_PROGRESS"
-            state["send_attempted"] = False
+            if state.get("send_attempt_count", 0) >= 1:
+                set_state(
+                    state,
+                    "DELIVERY_UNKNOWN",
+                    "automatic recovery budget exhausted after write; same Message ID remains no-resend",
+                )
+                stop(state, "DELIVERY_UNKNOWN: do not resend or manual-relay this Message ID", "IN_PROGRESS")
+            else:
+                set_state(
+                    state,
+                    "MANUAL_RELAY_REQUIRED",
+                    "automatic recovery budget exhausted before write; use manual-export to relay",
+                )
+                state["work_item_state"] = "IN_PROGRESS"
         else:
             stop(
                 state,
@@ -1320,7 +1511,10 @@ def recover_delivery(
     current_url = status_url(status)
     current_id = conversation_id_from_url(current_url or "")
     before_history_count = state["external_command_count"]
-    post_rows, history_available = history_result(state, state_path, "history-after-send")
+    if current_id:
+        post_rows, history_available = [], False
+    else:
+        post_rows, history_available = history_result(state, state_path, "history-after-send")
     state["post_send_history_called"] = state["external_command_count"] > before_history_count
     state["post_send_history_available"] = history_available
     post_ids = [identity for row in post_rows if (identity := conversation_identity(row)[0])]
@@ -1333,35 +1527,48 @@ def recover_delivery(
         if identity and all(existing != identity for existing, _ in candidates):
             candidates.append((identity, source))
 
-    add_candidate(
-        state.get("candidate_conversation_id"),
-        state.get("candidate_conversation_source") or "PERSISTED_CANDIDATE",
-    )
-    add_candidate(returned_identity, "ASK_REPORTED_CONVERSATION_ID")
-    add_candidate(current_id, "POST_SEND_STATUS")
-    if len(new_ids) == 1:
-        add_candidate(new_ids[0], "POST_SEND_HISTORY_NEW_CANDIDATE_DIFF")
-    elif len(new_ids) > 1 and not candidates:
-        state["recovery_target_source"] = "AMBIGUOUS_NEW_CANDIDATE_DIFF"
+    explicit_target = state.get("target_conversation_id_at_send")
+    if explicit_target:
+        add_candidate(explicit_target, "PERSISTED_TARGET_AT_SEND")
+    else:
+        add_candidate(
+            state.get("candidate_conversation_id"),
+            state.get("candidate_conversation_source") or "PERSISTED_CANDIDATE",
+        )
+        add_candidate(returned_identity, "SEND_REPORTED_CONVERSATION_ID")
+        add_candidate(current_id, "POST_SEND_STATUS")
+        if len(new_ids) == 1:
+            add_candidate(new_ids[0], "POST_SEND_HISTORY_NEW_CANDIDATE_DIFF")
+        elif len(new_ids) > 1 and not candidates:
+            state["recovery_target_source"] = "AMBIGUOUS_NEW_CANDIDATE_DIFF"
+    unique_candidate_ids = {identity for identity, _ in candidates}
+    if (not explicit_target and state.get("candidate_conversation_conflict")) or len(unique_candidate_ids) > 1:
+        state["recovery_target_source"] = "IDENTITY_CONFLICT"
+        if not state.get("stopped_at"):
+            set_state(state, "DELIVERY_UNKNOWN", "bounded recovery found conflicting identity candidates")
+            stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
+        return False
     if candidates:
         identity, source = candidates[0]
         observe_candidate(state, identity, source)
         state["recovery_target_source"] = source
         state["recovery_target_conversation_id"] = identity
+        establish_identity(state, "RECOVERED", identity, source)
         response_batch = detail(state, state_path, identity)
         messages = list(response_batch.messages) if response_batch else []
-        delivered, response_exists, ready = inspect_messages(messages, state["work_item_id"], state["message_id"])
-        if delivered:
-            if state.get("expected_conversation_mode") == "NEW" and identity in baseline:
+        marker_count = exact_delivery_marker_count(messages, state["work_item_id"], state["message_id"])
+        if marker_count == 1:
+            if state.get("target_conversation_id_at_send") and identity != state["target_conversation_id_at_send"]:
                 mark_misroute(
                     state, identity,
                     response_batch.raw_output_path if response_batch else None,
                 )
             else:
-                establish_verified_target(state, identity)
-                if response_batch is not None:
+                if response_batch is not None and establish_verified_delivery(state, response_batch):
                     accept_delivery(state, response_batch)
             return True
+        state["delivery_marker_count"] = marker_count
+        state["delivery_marker_status"] = "MISSING" if marker_count == 0 else "DUPLICATE"
     if not state.get("stopped_at"):
         set_state(state, "DELIVERY_UNKNOWN", "bounded exact-ID recovery found no delivery")
         stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID")
@@ -1407,6 +1614,8 @@ def verify_new_conversation(
         return False
     state["blank_environment_verified"] = True
     state["verified_target_url"] = url
+    state["created_conversation_id"] = None
+    state["created_identity_status"] = "NOT_AVAILABLE_BEFORE_FIRST_WRITE"
     return True
 
 
@@ -1436,6 +1645,9 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
         return 2
     state_path = Path(args.state_file) if args.state_file else default_state_path(args.work_item_id, args.message_id)
+    receipt_path = write_receipt_path(args.work_item_id, args.message_id)
+    if receipt_path.exists():
+        raise ValueError("MESSAGE_ID already has a canonical write receipt; same-ID resend is forbidden")
     if state_path.exists():
         existing = read_json(state_path)
         if existing.get("message_id") != args.message_id:
@@ -1443,6 +1655,7 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         if existing.get("delivery_state") in NO_RESEND_STATES or existing.get("send_attempt_count", 0) >= 1:
             raise ValueError(f"MESSAGE_ID already has state {existing.get('delivery_state')}; same-ID resend is forbidden")
     state = new_state(args, state_path)
+    state["write_receipt_path"] = str(receipt_path)
     body = payload_body if payload_body is not None else read_payload(args)
     payload = prepare_payload(args, body)
     payload_bytes = payload.encode("utf-8")
@@ -1462,6 +1675,11 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
     pre_status = command(state, state_path, "status-before-send", ["chatgpt", "status", "-f", "json", "--window", "background"], args.command_wait_seconds)
     pre_url = status_url(pre_status)
     state["pre_send_active_conversation_id"] = conversation_id_from_url(pre_url or "")
+    if state["pre_send_active_conversation_id"]:
+        record_identity_observation(
+            state, "CURRENT_BROWSER", state["pre_send_active_conversation_id"],
+            "PRE_SEND_STATUS", state["raw_outputs"][-1] if pre_status is not None else None,
+        )
     state["pre_send_already_new"] = blank_new_url(pre_url, None)
     if args.manual_new_url and pre_url != args.manual_new_url:
         stop(state, "VERIFY_NEW_CONVERSATION_FAILED: current URL does not match manual blank URL")
@@ -1476,6 +1694,8 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
             stop(state, "VERIFY_EXISTING_CONVERSATION_FAILED: explicit target was not observed in bounded pre-send evidence")
             write_json(state_path, state)
             return output_state(state)
+        establish_identity(state, "TARGET", args.conversation, "EXPLICIT_SEND_ARGUMENT")
+        state["verified_target_conversation_id"] = args.conversation
         target = ["--conversation", args.conversation]
     else:
         if not verify_new_conversation(state, state_path, args.manual_new_url, pre_url):
@@ -1486,99 +1706,119 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: MAX_SEND_ATTEMPTS_PER_MESSAGE")
         write_json(state_path, state)
         return output_state(state)
-    set_state(state, "SENDING", "single ask on verified target")
+    set_state(state, "SENDING", "single OpenCLI send on the verified target or blank /new page")
     write_json(state_path, state)
     def mark_send_invoked() -> None:
         # Persist the one permitted write at the actual invocation boundary.
-        # A process crash during ask must still make a same-ID retry impossible.
+        # A process crash during send must still make a same-ID retry impossible.
+        create_write_receipt(
+            receipt_path, args.work_item_id, args.message_id, state_path,
+        )
         state["send_attempted"] = True
         state["send_attempt_count"] = 1
         state["message_send_count"] = 1
         write_json(state_path, state)
 
-    recovery_reserve = min(
-        float(args.command_wait_seconds),
-        float(args.max_experiment_seconds) / 2,
-    )
-    ask_hard_timeout = min(
+    send_hard_timeout = min(
         float(args.command_wait_seconds) + ASK_HARD_TIMEOUT_GRACE_SECONDS,
-        remaining_experiment_seconds(state) - recovery_reserve,
+        remaining_experiment_seconds(state),
     )
-    if ask_hard_timeout <= 0:
-        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: ASK_RECOVERY_RESERVE")
+    if send_hard_timeout <= 0:
+        stop(state, "EXPERIMENT_BUDGET_EXHAUSTED: SEND")
         write_json(state_path, state)
         return output_state(state)
-    state["parameters"]["ask_hard_timeout_seconds"] = round(ask_hard_timeout, 3)
-    state["parameters"]["recovery_budget_reserve_seconds"] = recovery_reserve
+    state["parameters"]["send_hard_timeout_seconds"] = round(send_hard_timeout, 3)
     result = command(
         state,
         state_path,
-        "ask",
-        ["chatgpt", "ask", payload, *target, "--timeout", str(args.command_wait_seconds), "-f", "json", "--window", "background"],
-        ask_hard_timeout,
+        "send",
+        ["chatgpt", "send", payload, *target, "-f", "json", "--window", "background"],
+        send_hard_timeout,
         before_invoke=mark_send_invoked,
     )
     if result is None:
         write_json(state_path, state)
         return output_state(state)
-    returned_id, returned_url = ask_identity(result)
-    state["ask_return_code"] = result.get("returncode")
-    state["ask_error_code"] = cli_error_code(str(result.get("stderr") or ""))
-    state["ask_timed_out"] = bool(
-        result.get("timed_out") or state["ask_error_code"] == "TIMEOUT"
+    returned_id, _ = ask_identity(result)
+    state["send_return_code"] = result.get("returncode")
+    state["send_error_code"] = cli_error_code(str(result.get("stderr") or ""))
+    state["send_timed_out"] = bool(
+        result.get("timed_out") or state["send_error_code"] == "TIMEOUT"
     )
-    state["ask_process_tree_terminated"] = result.get("process_tree_terminated", False)
-    state["ask_reported_conversation_id"] = returned_id
-    state["ask_reported_url"] = returned_url
-    state["ask_delivery_classification"] = classify_ask_delivery(result, returned_id)
-    ask_raw_path = state["raw_outputs"][-1]
-    post_status = capture_post_send_status(state, state_path) if args.prepare_new else None
-    if args.prepare_new and post_status is None:
+    state["send_process_tree_terminated"] = result.get("process_tree_terminated", False)
+    state["write_reported_conversation_id"] = returned_id
+    record_identity_observation(
+        state, "WRITE_REPORTED_CANDIDATE", returned_id, "SEND_RESULT",
+        state["raw_outputs"][-1],
+    )
+    post_status = capture_post_send_status(state, state_path)
+    if post_status is None:
+        set_state(state, "DELIVERY_UNKNOWN", "post-send Browser identity could not be captured")
+        stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
         write_json(state_path, state)
         return output_state(state)
     post_status_id = state.get("post_send_active_conversation_id")
     identity_conflict = bool(returned_id and post_status_id and returned_id != post_status_id)
-    if state["ask_timed_out"]:
-        set_state(state, "DELIVERY_UNKNOWN", "ask timed out; same Message ID resend is forbidden")
-        stop(state, "ASK_TIMEOUT: recover with the persisted state", "IN_PROGRESS")
-    elif result["returncode"] != 0:
-        set_state(state, "DELIVERY_UNKNOWN", "ask timed out or returned nonzero; one bounded recovery only")
-        recover_delivery(
-            state, state_path, returned_id, post_status,
-            post_send_status_checked=args.prepare_new,
-        )
-    elif returned_id and returned_id in pre_send_ids(state) and not args.conversation:
-        mark_misroute(state, returned_id, ask_raw_path)
-    elif identity_conflict:
-        set_state(state, "DELIVERY_UNKNOWN", "ask identity conflicts with post-send status")
-        recover_delivery(
-            state, state_path, returned_id, post_status,
-            post_send_status_checked=True,
-        )
-    elif returned_id:
-        state["actual_delivery_conversation_id"] = returned_id
-        establish_verified_target(state, returned_id)
-        response_batch = response_batch_from_ask(result, payload, ask_raw_path)
-        if response_batch:
-            accept_delivery(state, response_batch)
-        else:
-            state["response_identity_status"] = "RESPONSE_PENDING"
-            state["official_response_eligible"] = False
-            set_state(state, "DELIVERED", "ask returned verified new conversation identity without a response")
-            stop(state, "BOUNDED_WAIT_COMPLETE", "IN_PROGRESS")
+    if identity_conflict:
+        set_state(state, "DELIVERY_UNKNOWN", "send result identity conflicts with post-send Browser identity")
+        stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
+    elif not post_status_id:
+        set_state(state, "DELIVERY_UNKNOWN", "post-send status did not expose an exact Conversation identity")
+        if result.get("returncode") == 0 and not state.get("send_timed_out"):
+            recover_delivery(
+                state, state_path, returned_id, post_status,
+                post_send_status_checked=True,
+            )
+        if (
+            not state.get("stopped_at")
+            and state.get("delivery_state") not in {"RESPONSE_PENDING", "RESPONSE_READY", "MISROUTED_DELIVERY"}
+        ):
+            stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
     else:
-        set_state(state, "DELIVERY_UNKNOWN", "ask returned without conversation identity")
-        recover_delivery(
-            state, state_path, post_send_status=post_status,
-            post_send_status_checked=args.prepare_new,
+        read_result = command(
+            state, state_path, "read-after-send",
+            ["chatgpt", "read", "-f", "json", "--window", "background"],
+            state["parameters"]["command_wait_seconds"],
         )
+        batch = ResponseMessageBatch(
+            conversation_id=post_status_id,
+            messages=tuple(result_rows(read_result)),
+            source_kind="POST_SEND_CURRENT_PAGE_READ",
+            raw_output_path=state["raw_outputs"][-1] if read_result is not None else None,
+        )
+        if state.get("send_timed_out") or result.get("returncode") != 0:
+            establish_identity(
+                state, "RECOVERED", post_status_id,
+                "POST_WRITE_UNCERTAIN_CURRENT_CANDIDATE",
+                batch.raw_output_path,
+            )
+        if read_result is None or not establish_verified_delivery(state, batch):
+            if (
+                read_result is not None
+                and state.get("delivery_marker_status") == "MISSING"
+                and not identity_conflict
+                and result.get("returncode") == 0
+                and not state.get("send_timed_out")
+            ):
+                recover_delivery(
+                    state, state_path, returned_id, post_status,
+                    post_send_status_checked=True,
+                )
+            if (
+                not state.get("stopped_at")
+                and state.get("delivery_state") not in {"MISROUTED_DELIVERY", "RESPONSE_PENDING", "RESPONSE_READY"}
+            ):
+                set_state(state, "DELIVERY_UNKNOWN", "post-send exact marker was missing, duplicate, or ambiguous")
+                stop(state, "DELIVERY_UNKNOWN: do not resend this Message ID", "IN_PROGRESS")
+        else:
+            accept_delivery(state, batch)
     write_json(state_path, state)
     return output_state(state)
 
 
 def recover_command(args: argparse.Namespace) -> int:
     state_path = Path(args.state_file)
-    state = read_json(state_path)
+    state = ensure_identity_schema(read_json(state_path))
     if args.continue_pending:
         return continue_pending_response(state, state_path)
     if state.get("delivery_state") == "MISROUTED_DELIVERY":
@@ -1816,11 +2056,16 @@ def manual_export_command(args: argparse.Namespace) -> int:
     integrity = _export_payload_integrity(payload)
     state_path = Path(args.state_file)
     state = read_json(state_path) if state_path.exists() else _manual_export_state(args, state_path)
+    receipt_path = write_receipt_path(args.work_item_id, args.message_id)
+    if state.get("send_attempt_count", 0) >= 1 or receipt_path.exists():
+        raise ValueError(
+            "manual-export is forbidden after a Product write claim; use a newly authorized logical Message ID"
+        )
     set_state(state, "MANUAL_RELAY_REQUIRED", "manual relay export prepared; user pastes into the Browser")
     state["work_item_state"] = "IN_PROGRESS"
-    state["send_attempted"] = False
-    state["send_attempt_count"] = 0
-    state["message_send_count"] = 0
+    state.setdefault("send_attempted", False)
+    state.setdefault("send_attempt_count", 0)
+    state.setdefault("message_send_count", 0)
     state["transport_state"] = "MANUAL_RELAY_REQUIRED"
     state["manual_export_at"] = utc_now()
     state["exported_body_sha256"] = integrity["sha256"]

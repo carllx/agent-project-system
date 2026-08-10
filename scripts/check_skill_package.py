@@ -45,7 +45,7 @@ REQUIRED_SKILL_MARKERS = {
     "START_NEW_AND_SEND",
     "PRE_SEND_HISTORY_BASELINE",
     "VERIFY_NEW_URL_AND_EMPTY_READ",
-    "PARSE_ASK_IDENTITY",
+    "RECORD_SEND_OBSERVATIONS",
     "POST_SEND_STATUS",
     "BOUNDED_RECOVERY_IF_NEEDED",
     "SEND_MESSAGE",
@@ -172,7 +172,7 @@ REQUIRED_TRANSPORT_TEST_SCENARIOS = (
     "test_work_item_only_without_message_id_stays_unknown",
     "test_message_id_prefix_collision_does_not_match",
     "test_work_item_id_prefix_collision_does_not_match",
-    "test_post_send_history_unavailable_uses_status_target_once",
+    "test_post_send_exact_status_skips_unneeded_history",
     "test_recovery_and_detail_budgets_remain_one",
     "test_detail_count_only_increments_on_real_invocation",
     "test_multiple_new_history_candidates_stay_unknown_without_detail",
@@ -276,7 +276,7 @@ result_path.write_text(
 
 
 def run_transport_tests(
-    test_path: Path, *, timeout_seconds: float = 120
+    test_path: Path, *, timeout_seconds: float = 240
 ) -> tuple[int, list[str]]:
     """Discover and directly execute every supported transport test once."""
     errors: list[str] = []

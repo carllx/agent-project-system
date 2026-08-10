@@ -106,7 +106,7 @@ Local OpenCLI `1.8.6` help and the Transport Smoke incidents established:
 - `new` is a separate read-class command but reports only `Status`; `status` reports the current URL and `read` reports current-page messages;
 - history ordering is not a reliable newest-first contract, and scanning every pre-send conversation is prohibited.
 
-Lab `OPENCLI-SESSION-IDENTITY-MIN-001-R2` observed that `opencli chatgpt send` can perform the first write on `/new`, after which `status` and current-page `read` expose one exact Conversation ID and marker; a subsequent `send --conversation <TARGET>` kept the same delivery Conversation. This proves the technical identity-promotion hypothesis, not full Product integration: no bounded post-write history delta proved absence of extra Conversations, no natural timeout occurred, and the Lab Agent violated the zero-schedule rule. The current Wrapper still uses `ask`; do not claim it implements the proven `send` path until the Product Work Item aligns code and tests. Never use `ask --new` to send a real Work Item from an unknown page state.
+Lab `OPENCLI-SESSION-IDENTITY-MIN-001-R2` observed that `opencli chatgpt send` can perform the first write on `/new`, after which `status` and current-page `read` expose one exact Conversation ID and marker; a subsequent `send --conversation <TARGET>` kept the same delivery Conversation. Product Transport MVP-0 now implements that path with five explicit identity roles and exact-marker delivery establishment. This does not prove absence of extra Conversations or timeout recovery: R2 had no bounded post-write history delta or natural timeout, and its Agent violated the zero-schedule rule. Never use `ask --new` to send a real Work Item from an unknown page state.
 
 ## Identify every Browser message
 
@@ -152,7 +152,7 @@ send --prepare-new = START_NEW_AND_SEND
   -> CREATE_NEW_CONVERSATION
   -> VERIFY_NEW_URL_AND_EMPTY_READ
   -> SEND_ONCE
-  -> PARSE_ASK_IDENTITY
+  -> RECORD_SEND_OBSERVATIONS
   -> POST_SEND_STATUS
   -> BOUNDED_RECOVERY_IF_NEEDED
 ```
@@ -165,7 +165,7 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
   --round 0 --message-type CONTEXT_PACKET
 ```
 
-Within the same Wrapper process, record the bounded history baseline before `new`; verify the resulting URL is ChatGPT root or `/new`; require the shared read classifier to return `EMPTY`; invoke `ask` once; parse JSON or strict flat YAML identity; and always check post-send status. Only when identity is absent, transport fails, or status conflicts may the same call perform one post-send history diff and at most one exact detail. Never use `ask --new`, never require the user to open `/new`, and never split creation and sending into separate formal experiments. The standalone `prepare-new` command remains only for backward-compatible diagnostics and is not a prerequisite or acceptance step.
+Within the same Wrapper process, record the bounded history baseline before `new`; verify the resulting URL is ChatGPT root or `/new`; require the shared read classifier to return `EMPTY`; invoke `opencli chatgpt send` once; and always check post-send status plus current-page marker Evidence. A send-reported identity is only a candidate. When current-page Evidence is insufficient, perform at most one exact detail against the status ID, or one bounded history diff followed by detail when status has no exact ID. Never use `ask --new`, never require the user to open `/new`, and never split creation and sending into separate formal experiments. The standalone `prepare-new` command remains only for backward-compatible diagnostics and is not a prerequisite or acceptance step.
 
 Use this transport flow:
 
@@ -179,7 +179,7 @@ PREPARE_MESSAGE
 -> PARSE_RR_REVIEW
 ```
 
-If `new`, URL verification, or empty-read verification fails, stop before sending with `BLOCKED`; do not ask the user to repair Browser page state manually. Set `send_attempt_count=1` and `message_send_count=1` only at the actual underlying `ask` invocation boundary.
+If `new`, URL verification, or empty-read verification fails, stop before sending with `BLOCKED`; do not ask the user to repair Browser page state manually. Set `send_attempt_count=1` and `message_send_count=1` only at the actual underlying `send` invocation boundary. At that same boundary atomically create the canonical Work Item ID + Message ID write receipt outside the caller-selected state file; changing `--state-file` never permits a second write. After any write, recovery exhaustion remains `DELIVERY_UNKNOWN` and must not reset attempt evidence or offer same-ID Manual Relay.
 
 Use the wrapper from the target project without copying it:
 
@@ -191,7 +191,7 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
 python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
 ```
 
-For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one short `ask`, then at most one recovery; it does not repeat `ask`. Accept the real OpenCLI JSON or flat YAML `conversationId`/`conversationUrl` identity returned by `ask`. When `ask` returns no usable identity, recovery executes `POST_SEND_STATUS -> POST_SEND_HISTORY_REFRESH -> NEW_CANDIDATE_DIFF -> EXACT_ID_DETAIL_CHECK`: compare the same bounded recent-history window with the pre-send baseline, exclude every pre-send ID from the new-candidate diff, and use at most one exact detail check. Prefer an ask-reported identity, then the current post-send Conversation, then a unique new history candidate. If the current target is a pre-send Conversation and both exact identifiers match, mark `MISROUTED_DELIVERY`; if no exact two-marker match is found, preserve `DELIVERY_UNKNOWN` and forbid resend. Review the JSON result and recorded raw-output paths. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false. Bind messages and source as one immutable `ResponseMessageBatch` created from one `detail` command or one `ask` result. Establish `verified_target_conversation_id` before calling `accept_delivery`; never let `accept_delivery` write or replace it. Require `response_batch.conversation_id` to exactly equal that verified target, and never trust a Conversation ID claimed by the response body.
+For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one `send`, then at most one recovery; it never repeats the write for the same Message ID. Always recapture post-send current identity and require one exact user marker for the Work Item and Message ID. Establish delivery before promoting a new-session target; for existing-target writes require delivery to equal target and make the persisted target the first exact recovery identity even if Browser current mismatches. For new-session recovery, if status has an exact ID, go directly to `EXACT_ID_DETAIL_CHECK`; otherwise use one bounded `POST_SEND_HISTORY_REFRESH`, require one unique `NEW_CANDIDATE_DIFF`, and then perform the exact detail check. Missing/duplicate markers, candidate conflicts, recovery failure, or target/delivery mismatch preserve `DELIVERY_UNKNOWN` or `MISROUTED_DELIVERY` and forbid resend. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false. Bind messages and source as one immutable `ResponseMessageBatch`; never trust a Conversation ID claimed by the response body.
 
 Default adjustable parameters are:
 

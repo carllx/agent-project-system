@@ -78,6 +78,7 @@ def run_prepare(
         "OPENCLI_FAKE_SCENARIO": str(scenario),
         "OPENCLI_FAKE_COUNTER": str(counter),
         "OPENCLI_FAKE_LOG": str(log),
+        "OPENCLI_TRANSPORT_RECEIPT_DIR": str(root / "write-receipts"),
     })
     command = [sys.executable, str(TRANSPORT), "prepare-new", "--runtime-dir", str(runtime),
                "--work-item-id", WORK_ITEM, *(extra_args or [])]
@@ -721,6 +722,7 @@ def legacy_result(
 def send_cli_command(
     root: Path, *, max_external_commands: int = 9, manual_new_url: str | None = None,
     conversation: str | None = None, prepare_new: bool = False,
+    max_recovery_attempts: int = 1,
 ) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
@@ -733,7 +735,7 @@ def send_cli_command(
         "--message-file", str(message_file),
         "--state-file", str(root / "state.json"),
         "--command-wait-seconds", "1",
-        "--max-recovery-attempts", "1",
+        "--max-recovery-attempts", str(max_recovery_attempts),
         "--max-detail-checks", "1",
         "--max-external-commands", str(max_external_commands),
         "--max-experiment-seconds", "60",
@@ -751,12 +753,18 @@ def send_cli_command(
 def run_send_case(
     sequence: list[dict], *, max_external_commands: int = 9,
     manual_new_url: str | None = None, conversation: str | None = None,
-    prepare_new: bool = False,
+    prepare_new: bool = False, legacy_sequence: bool = True,
+    max_recovery_attempts: int = 1,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
     fake.write_text(FAKE_OPENCLI, encoding="utf-8")
     scenario = root / "scenario.json"
+    if legacy_sequence:
+        sequence = adapt_legacy_send_sequence(
+            sequence, manual_new_url=manual_new_url,
+            conversation=conversation, prepare_new=prepare_new,
+        )
     scenario.write_text(json.dumps(sequence), encoding="utf-8")
     counter = root / "counter.txt"
     log = root / "calls.jsonl"
@@ -766,10 +774,12 @@ def run_send_case(
         "OPENCLI_FAKE_SCENARIO": str(scenario),
         "OPENCLI_FAKE_COUNTER": str(counter),
         "OPENCLI_FAKE_LOG": str(log),
+        "OPENCLI_TRANSPORT_RECEIPT_DIR": str(root / "write-receipts"),
     })
     command = send_cli_command(
         root, max_external_commands=max_external_commands, manual_new_url=manual_new_url,
         conversation=conversation, prepare_new=prepare_new,
+        max_recovery_attempts=max_recovery_attempts,
     )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
@@ -790,6 +800,9 @@ def run_bootstrap_case(
     fake = root / "fake_opencli.py"
     fake.write_text(FAKE_OPENCLI, encoding="utf-8")
     scenario = root / "scenario.json"
+    sequence = adapt_legacy_send_sequence(
+        sequence, manual_new_url=None, conversation=None, prepare_new=prepare_new,
+    )
     scenario.write_text(json.dumps(sequence), encoding="utf-8")
     counter = root / "counter.txt"
     log = root / "calls.jsonl"
@@ -803,6 +816,7 @@ def run_bootstrap_case(
         "OPENCLI_FAKE_SCENARIO": str(scenario),
         "OPENCLI_FAKE_COUNTER": str(counter),
         "OPENCLI_FAKE_LOG": str(log),
+        "OPENCLI_TRANSPORT_RECEIPT_DIR": str(root / "write-receipts"),
     })
     command = [
         sys.executable, str(TRANSPORT), "bootstrap",
@@ -845,6 +859,7 @@ def run_manual_export_case(
         "OPENCLI_TRANSPORT_EXECUTABLE": str(root / "fake_opencli.py"),
         "OPENCLI_FAKE_COUNTER": str(counter),
         "OPENCLI_FAKE_LOG": str(log),
+        "OPENCLI_TRANSPORT_RECEIPT_DIR": str(root / "write-receipts"),
     })
     state_path = root / "state.json"
     command = [
@@ -913,6 +928,52 @@ def legacy_detail(ready: bool = True) -> dict:
     return legacy_result(messages)
 
 
+def adapt_legacy_send_sequence(
+    sequence: list[dict], *, manual_new_url: str | None,
+    conversation: str | None, prepare_new: bool,
+) -> list[dict]:
+    """Translate pre-MVP ask fixtures into equivalent send/status/read evidence."""
+    write_index = 2 if conversation else 3 if manual_new_url else 5
+    if len(sequence) <= write_index:
+        return sequence
+    converted = list(sequence[: write_index + 1])
+    write_result = sequence[write_index]
+    identity, _ = TRANSPORT_MODULE.ask_identity(write_result)
+    tail = list(sequence[write_index + 1 :])
+    if tail and TRANSPORT_MODULE.status_url(tail[0]):
+        post_status = tail.pop(0)
+    else:
+        post_status = legacy_status(
+            f"https://chatgpt.com/c/{identity}" if identity else "https://chatgpt.com/"
+        )
+    post_status_id = TRANSPORT_MODULE.conversation_id_from_url(
+        TRANSPORT_MODULE.status_url(post_status) or ""
+    )
+    if (
+        post_status_id
+        and write_result.get("returncode") == 0
+        and not identity
+        and len(tail) >= 2
+    ):
+        tail.pop(0)
+    response_text = TRANSPORT_MODULE.ask_response(write_result)
+    if write_result.get("returncode") == 0 and identity:
+        messages = [{
+            "Role": "user",
+            "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0",
+        }]
+        if response_text:
+            messages.append({
+                "Role": "assistant", "Text": response_text,
+                "Generating": False, "StableSeconds": 3,
+            })
+        post_read = legacy_result(messages)
+    else:
+        post_read = legacy_result([])
+    converted.extend([post_status, *([post_read] if post_status_id else []), *tail])
+    return converted
+
+
 def recovery_sequence(
     *, ask: dict | None = None, post_url: str = "https://chatgpt.com/",
     post_history: dict | None = None, detail_result: dict | None = None,
@@ -945,7 +1006,7 @@ def timeout_then_recover_sequence(detail_result: dict) -> list[dict]:
         legacy_result([]),
         opencli_timeout_result(),
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
-        legacy_history(OLD_ID, NEW_ID),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
         detail_result,
     ]
 
@@ -1055,11 +1116,11 @@ def test_ask_timeout_preserves_recovery_budget() -> None:
         manual_new_url="https://chatgpt.com/new",
     )
     assert completed.returncode == 2
-    assert state["ask_timed_out"] is True
+    assert state["send_timed_out"] is True
     assert state["recovery_attempt_count"] == 0
     assert state["detail_check_count"] == 0
     assert state["external_command_count"] < state["parameters"]["max_external_commands"]
-    assert [call[1] for call in calls] == ["status", "history", "read", "ask"]
+    assert [call[1] for call in calls] == ["status", "history", "read", "send", "status", "read"]
 
 
 def test_timeout_does_not_mark_message_as_not_sent() -> None:
@@ -1082,7 +1143,7 @@ def test_timeout_forbids_same_message_id_resend() -> None:
     )
     assert repeated.returncode == 1
     assert "same-ID resend is forbidden" in repeated.stderr
-    assert sum(call[1] == "ask" for call in calls) == 1
+    assert sum(call[1] == "send" for call in calls) == 1
 
 
 def test_recover_never_invokes_ask_or_send() -> None:
@@ -1092,8 +1153,8 @@ def test_recover_never_invokes_ask_or_send() -> None:
     )
     completed, _, calls = run_recover(command, env)
     assert completed.returncode == 2
-    recovery_verbs = [call[1] for call in calls[4:]]
-    assert recovery_verbs == ["status", "history", "detail"]
+    recovery_verbs = [call[1] for call in calls[-2:]]
+    assert recovery_verbs == ["status", "detail"]
     assert "ask" not in recovery_verbs and "send" not in recovery_verbs
 
 
@@ -1146,8 +1207,8 @@ def test_manual_recover_uses_fresh_operation_budget() -> None:
     assert completed.returncode == 0
     assert recovered["current_operation"] == "MANUAL_RECOVER"
     assert recovered["current_operation_started_at"] == recovered["manual_recover_started_at"]
-    assert recovered["current_operation_external_command_count"] == 3
-    assert [call[1] for call in calls[4:]] == ["status", "history", "detail"]
+    assert recovered["current_operation_external_command_count"] == 2
+    assert [call[1] for call in calls[-2:]] == ["status", "detail"]
 
 
 def test_manual_recover_preserves_original_send_started_at() -> None:
@@ -1188,7 +1249,7 @@ def test_pending_resume_uses_fresh_operation_budget() -> None:
 def test_pending_resume_never_invokes_ask_send_or_new() -> None:
     command, env, _ = pending_resume_case([legacy_detail()])
     _, _, calls = run_pending_resume(command, env)
-    continuation_verbs = [call[1] for call in calls[7:]]
+    continuation_verbs = [call[1] for call in calls[-1:]]
     assert continuation_verbs == ["detail"]
     assert not {"ask", "send", "new"}.intersection(continuation_verbs)
 
@@ -1205,10 +1266,12 @@ def test_pending_resume_requires_saved_conversation() -> None:
     state_path = Path(command[command.index("--state-file") + 1])
     state["verified_target_conversation_id"] = None
     state_path.write_text(json.dumps(state), encoding="utf-8")
+    log = Path(env["OPENCLI_FAKE_LOG"])
+    before_call_count = len(log.read_text(encoding="utf-8").splitlines())
     completed, _, calls = run_pending_resume(command, env)
     assert completed.returncode == 1
     assert "saved identity" in completed.stderr
-    assert len(calls) == 7
+    assert len(calls) == before_call_count
 
 
 def test_pending_resume_preserves_message_identity() -> None:
@@ -1230,7 +1293,7 @@ def test_pending_resume_remains_pending_for_incomplete_reply() -> None:
     assert completed.returncode == 2
     assert state["delivery_state"] == "RESPONSE_PENDING"
     assert state["pending_response_last_result"] == "RESPONSE_PENDING"
-    assert [call[1] for call in calls[7:]] == ["detail", "status", "read"]
+    assert [call[1] for call in calls[-3:]] == ["detail", "status", "read"]
 
 
 def test_pending_resume_accepts_later_complete_rr_review() -> None:
@@ -1327,8 +1390,8 @@ def test_send_passes_one_complete_single_line_packet_to_opencli() -> None:
         timeout_then_recover_sequence(legacy_detail()),
         manual_new_url="https://chatgpt.com/new",
     )
-    ask_call = next(call for call in calls if call[1] == "ask")
-    payload = ask_call[2]
+    send_call = next(call for call in calls if call[1] == "send")
+    payload = send_call[2]
     packet = json.loads(payload)
     assert payload.splitlines() == [payload]
     assert packet["WORK_ITEM_ID"] == LEGACY_WORK_ITEM
@@ -1369,8 +1432,8 @@ def test_manual_recover_never_invokes_ask_send_or_new() -> None:
         manual_new_url="https://chatgpt.com/new",
     )
     _, _, calls = run_recover(command, env)
-    recovery_verbs = [call[1] for call in calls[4:]]
-    assert recovery_verbs == ["status", "history", "detail"]
+    recovery_verbs = [call[1] for call in calls[-2:]]
+    assert recovery_verbs == ["status", "detail"]
     assert not {"ask", "send", "new"}.intersection(recovery_verbs)
 
 
@@ -1387,6 +1450,7 @@ def test_manual_recover_does_not_change_send_count() -> None:
 def test_empty_status_does_not_erase_candidate_conversation_id() -> None:
     sequence = timeout_then_recover_sequence(legacy_detail())
     sequence[4] = legacy_status("https://chatgpt.com/")
+    sequence[5] = legacy_status("https://chatgpt.com/")
     _, state, _, command, env = run_send_case(
         sequence, manual_new_url="https://chatgpt.com/new",
     )
@@ -1521,7 +1585,7 @@ def test_start_new_and_send_completes_in_one_wrapper_call() -> None:
     ], prepare_new=True)
     verbs = [call[1] for call in calls]
     assert completed.returncode == 0
-    assert verbs == ["history", "status", "new", "status", "read", "ask", "status"]
+    assert verbs == ["history", "status", "new", "status", "read", "send", "status", "read"]
     assert state["operation"] == "START_NEW_AND_SEND"
     assert state["prepare_new"] is True
     assert state["new_command_called"] is True
@@ -1549,14 +1613,14 @@ def test_start_new_and_send_uses_one_bounded_recovery_when_needed() -> None:
     verbs = [call[1] for call in calls]
     assert completed.returncode == 0
     assert verbs == [
-        "history", "status", "new", "status", "read", "ask", "status",
-        "history", "detail",
+        "history", "status", "new", "status", "read", "send", "status",
+        "read", "detail",
     ]
-    assert verbs.count("ask") == 1
+    assert verbs.count("send") == 1
     assert state["recovery_attempt_count"] == 1
     assert state["detail_check_count"] == 1
-    assert state["post_send_history_called"] is True
-    assert state["new_candidate_diff"] == [NEW_ID]
+    assert state["post_send_history_called"] is False
+    assert state["new_candidate_diff"] == []
     assert state["delivery_state"] == "RESPONSE_READY"
 
 
@@ -1572,13 +1636,13 @@ def test_ask_yaml_explicit_conversation_id_is_accepted() -> None:
         legacy_result([]), legacy_result(yaml_stdout),
     ], manual_new_url="https://chatgpt.com/new")
     assert completed.returncode == 2
-    assert state["ask_reported_conversation_id"] == NEW_ID
-    assert state["ask_reported_url"] == f"https://chatgpt.com/c/{NEW_ID}"
-    assert state["ask_delivery_classification"] == "A. ASK_CONFIRMED_DELIVERY_WITH_ID"
+    assert state["write_reported_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["target_conversation_id"] == NEW_ID
     assert state["delivery_state"] == "RESPONSE_IDENTITY_MISSING"
     assert state["official_response_eligible"] is False
     assert state["post_send_history_called"] is False
-    assert [call[1] for call in calls] == ["status", "history", "read", "ask"]
+    assert [call[1] for call in calls] == ["status", "history", "read", "send", "status", "read"]
 
 
 def test_ask_yaml_body_cannot_spoof_identity_or_ready_response() -> None:
@@ -1611,14 +1675,13 @@ def test_ask_without_id_status_new_id_uses_post_history_and_exact_detail() -> No
         manual_new_url="https://chatgpt.com/new",
     )
     assert completed.returncode == 0
-    assert state["ask_delivery_classification"] == "B. ASK_COMPLETED_WITHOUT_ID"
     assert state["post_send_active_conversation_id"] == NEW_ID
     assert state["post_send_page_mode"] == "CONVERSATION"
-    assert state["post_send_history_called"] is True
-    assert state["new_candidate_diff"] == [NEW_ID]
+    assert state["post_send_history_called"] is False
+    assert state["new_candidate_diff"] == []
     assert state["recovery_target_source"] == "POST_SEND_STATUS"
     assert state["detail_check_count"] == 1
-    assert [call[1] for call in calls][-3:] == ["status", "history", "detail"]
+    assert [call[1] for call in calls][-1:] == ["detail"]
 
 
 def test_status_without_id_uses_single_new_history_candidate() -> None:
@@ -1688,7 +1751,7 @@ def test_work_item_id_prefix_collision_does_not_match() -> None:
     ) == (False, False, False)
 
 
-def test_post_send_history_unavailable_uses_status_target_once() -> None:
+def test_post_send_exact_status_skips_unneeded_history() -> None:
     unavailable = legacy_result("", returncode=66, stderr="history unavailable")
     completed, state, _, _, _ = run_send_case(
         recovery_sequence(
@@ -1697,7 +1760,7 @@ def test_post_send_history_unavailable_uses_status_target_once() -> None:
         manual_new_url="https://chatgpt.com/new",
     )
     assert completed.returncode == 0
-    assert state["post_send_history_called"] is True
+    assert state["post_send_history_called"] is False
     assert state["post_send_history_available"] is False
     assert state["recovery_target_source"] == "POST_SEND_STATUS"
     assert state["detail_check_count"] == 1
@@ -1780,9 +1843,9 @@ def test_send_manual_real_empty_result_sends_once_without_new() -> None:
     completed, state, calls = run_manual_read_case(real_read)
     verbs = [call[1] for call in calls]
     assert completed.returncode == 0
-    assert verbs == ["status", "history", "read", "ask"]
+    assert verbs == ["status", "history", "read", "send", "status", "read"]
     assert "new" not in verbs
-    assert verbs.count("ask") == 1
+    assert verbs.count("send") == 1
     assert state["new_command_called"] is False
     assert state["pre_send_already_new"] is True
     assert state["browser_navigation_occurred"] is False
@@ -1824,14 +1887,10 @@ def test_send_manual_unparseable_output_blocks_without_send() -> None:
 
 
 def test_send_timeout_recovery_regression() -> None:
-    sent, state, _, command, env = run_send_case([
-        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
-        legacy_result([{"Status": "New conversation started"}]),
-        legacy_status("https://chatgpt.com/new"), legacy_result([]),
-        legacy_result(returncode=1, timed_out=True),
-        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
-        legacy_history(OLD_ID, NEW_ID), legacy_detail(),
-    ])
+    sent, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
     assert sent.returncode == 2
     assert state["delivery_state"] == "DELIVERY_UNKNOWN"
     assert state["recovery_attempt_count"] == 0
@@ -1846,10 +1905,10 @@ def test_send_misroute_regression() -> None:
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
         legacy_result([{"Status": "New conversation started"}]),
         legacy_status("https://chatgpt.com/new"), legacy_result([]),
-        legacy_result(returncode=1, stderr="navigated away"),
+        legacy_result([{"Status": "Message sent"}]),
         legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
-        legacy_history(OLD_ID), legacy_detail(),
-    ])
+        legacy_detail(),
+    ], legacy_sequence=False)
     assert completed.returncode == 2
     assert state["delivery_state"] == "MISROUTED_DELIVERY"
     assert state["official_response_eligible"] is False
@@ -1964,7 +2023,7 @@ def test_send_same_message_id_rejected_regression() -> None:
     )
     assert repeated.returncode == 1
     assert "same-ID resend is forbidden" in repeated.stderr
-    assert len(calls) == 7
+    assert len(calls) == 8
 
 
 def test_send_external_budget_regression() -> None:
@@ -2137,14 +2196,10 @@ def test_work_item_and_round_remain_exact_with_optional_metadata() -> None:
 
 
 def test_response_source_is_bound_to_detail_result() -> None:
-    sent, state, _, command, env = run_send_case([
-        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"), legacy_history(),
-        legacy_result([{"Status": "New conversation started"}]),
-        legacy_status("https://chatgpt.com/new"), legacy_result([]),
-        legacy_result(returncode=1, timed_out=True),
-        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
-        legacy_history(OLD_ID, NEW_ID), legacy_detail(),
-    ])
+    sent, state, _, command, env = run_send_case(
+        timeout_then_recover_sequence(legacy_detail()),
+        manual_new_url="https://chatgpt.com/new",
+    )
     assert sent.returncode == 2
     completed, state, _ = run_recover(command, env)
     assert completed.returncode == 0
@@ -2372,7 +2427,7 @@ def test_identity_failure_does_not_allow_same_message_id_resend() -> None:
     )
     assert repeated.returncode == 1
     assert "same-ID resend is forbidden" in repeated.stderr
-    assert sum(call[1] == "ask" for call in calls) == 1
+    assert sum(call[1] == "send" for call in calls) == 1
 
 
 def bootstrap_combined(init: str, context: str, *, work_item_id=LEGACY_WORK_ITEM, message_id=LEGACY_MESSAGE_ID) -> str:
@@ -2519,9 +2574,9 @@ def test_bootstrap_does_not_use_shell_concat_ask() -> None:
         legacy_result([{"conversationId": NEW_ID, "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}", "response": rr_review_text()}]),
         legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
     ], prepare_new=True)
-    ask_calls = [call for call in calls if len(call) > 1 and call[0] == "chatgpt" and call[1] == "ask"]
-    assert len(ask_calls) == 1
-    body = ask_calls[0][2]
+    send_calls = [call for call in calls if len(call) > 1 and call[0] == "chatgpt" and call[1] == "send"]
+    assert len(send_calls) == 1
+    body = send_calls[0][2]
     assert "BEGIN_RR_LEAD_INITIALIZATION" in body
     assert "BEGIN_CONTEXT_PACKET" in body
     assert "INIT RULES" in body
@@ -2544,7 +2599,7 @@ def test_bootstrap_same_message_id_cannot_resend() -> None:
     )
     assert repeated.returncode == 1
     assert "same-ID resend is forbidden" in repeated.stderr
-    assert sum(call[1] == "ask" for call in calls) == 1
+    assert sum(call[1] == "send" for call in calls) == 1
 
 
 def test_manual_export_never_calls_opencli() -> None:
@@ -2616,6 +2671,322 @@ def test_send_command_still_accepts_normal_message_file() -> None:
     assert state["delivery_state"] == "RESPONSE_READY"
     assert state["send_attempt_count"] == 1
     assert state["message_send_count"] == 1
+
+
+def mvp_marker_result(*, occurrences: int = 1, ready: bool = False) -> dict:
+    messages: list[dict] = []
+    for _ in range(occurrences):
+        messages.append({
+            "Role": "user",
+            "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0",
+        })
+    if ready:
+        messages.append({
+            "Role": "assistant", "Text": rr_review_text(),
+            "Generating": False, "StableSeconds": 3,
+        })
+    return legacy_result(messages)
+
+
+def mvp_new_sequence(
+    post_id: str | None = NEW_ID, *, marker: dict | None = None,
+    send_result: dict | None = None, recovery_tail: list[dict] | None = None,
+) -> list[dict]:
+    sequence = [
+        legacy_history(OLD_ID),
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        legacy_result([{"Status": "New conversation started"}]),
+        legacy_status("https://chatgpt.com/new"),
+        legacy_result([]),
+        send_result or legacy_result([{"Status": "Message sent"}]),
+        legacy_status(f"https://chatgpt.com/c/{post_id}" if post_id else "https://chatgpt.com/"),
+    ]
+    if post_id:
+        sequence.append(marker if marker is not None else mvp_marker_result())
+    sequence.extend(recovery_tail or [])
+    return sequence
+
+
+def mvp_existing_sequence(
+    target: str = NEW_ID, *, pre_current: str = NEW_ID,
+    post_current: str = NEW_ID, marker: dict | None = None,
+    recovery_tail: list[dict] | None = None,
+) -> list[dict]:
+    return [
+        legacy_status(f"https://chatgpt.com/c/{pre_current}"),
+        legacy_history(target),
+        legacy_result([{"Status": "Message sent"}]),
+        legacy_status(f"https://chatgpt.com/c/{post_current}"),
+        marker if marker is not None else mvp_marker_result(),
+        *(recovery_tail or []),
+    ]
+
+
+def test_mvp_new_session_first_write_uses_send_once() -> None:
+    completed, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(marker=mvp_marker_result(ready=True)),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert completed.returncode == 0
+    write_calls = [call for call in calls if call[1] == "send"]
+    assert len(write_calls) == 1
+    assert "--conversation" not in write_calls[0]
+    assert state["created_conversation_id"] is None
+    assert state["target_conversation_id_at_send"] is None
+    assert state["current_browser_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_mvp_verified_delivery_promotes_next_target_with_provenance() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(), prepare_new=True, legacy_sequence=False,
+    )
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["target_conversation_id"] == NEW_ID
+    assert state["target_binding_mode"] == "PROMOTED_VERIFIED_DELIVERY"
+    assert state["identity_establishment"]["DELIVERY"]["exact_marker_verified"] is True
+    assert state["identity_establishment"]["TARGET"]["source_kind"] == "PROMOTED_FROM_VERIFIED_DELIVERY"
+
+
+def test_mvp_second_explicit_target_stays_in_promoted_conversation() -> None:
+    _, first, _, _, _ = run_send_case(
+        mvp_new_sequence(), prepare_new=True, legacy_sequence=False,
+    )
+    target = first["target_conversation_id"]
+    _, second, calls, _, _ = run_send_case(
+        mvp_existing_sequence(target), conversation=target, legacy_sequence=False,
+    )
+    send_call = next(call for call in calls if call[1] == "send")
+    flag = send_call.index("--conversation")
+    assert send_call[flag + 1] == target
+    assert second["target_conversation_id_at_send"] == target
+    assert second["current_browser_conversation_id"] == target
+    assert second["delivery_conversation_id"] == target
+
+
+def test_mvp_current_target_mismatch_without_marker_is_unknown() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_existing_sequence(
+            NEW_ID, pre_current=OLD_ID, post_current=OLD_ID,
+            marker=legacy_result([]), recovery_tail=[legacy_result([])],
+        ),
+        conversation=NEW_ID, legacy_sequence=False,
+    )
+    assert state["target_conversation_id"] == NEW_ID
+    assert state["current_browser_conversation_id"] == OLD_ID
+    assert state["delivery_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_missing_marker_is_delivery_unknown() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(marker=legacy_result([]), recovery_tail=[legacy_result([])]),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["delivery_marker_status"] == "MISSING"
+    assert state["delivery_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_duplicate_marker_is_delivery_unknown() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(marker=mvp_marker_result(occurrences=2)),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["delivery_marker_status"] == "DUPLICATE"
+    assert state["delivery_marker_count"] == 2
+    assert state["delivery_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_returned_identity_without_marker_is_candidate_only() -> None:
+    returned = legacy_result([{
+        "conversationId": NEW_ID,
+        "conversationUrl": f"https://chatgpt.com/c/{NEW_ID}",
+    }])
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(
+            marker=legacy_result([]), send_result=returned,
+            recovery_tail=[legacy_result([])],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["write_reported_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] is None
+    assert state["target_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_delivery_unknown_is_not_failed() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_history(OLD_ID, NEW_ID, "another-new")],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["delivery_state"] != "FAILED"
+    assert state["message_send_count"] == 1
+
+
+def test_mvp_delivery_target_mismatch_is_misroute() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_existing_sequence(NEW_ID, post_current=OLD_ID),
+        conversation=NEW_ID, legacy_sequence=False,
+    )
+    assert state["target_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == OLD_ID
+    assert state["delivery_state"] == "MISROUTED_DELIVERY"
+
+
+def test_mvp_recovery_candidate_without_marker_is_not_promoted() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_history(OLD_ID, NEW_ID), legacy_result([])],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["recovered_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] is None
+    assert state["target_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_all_post_write_failures_forbid_same_id_resend() -> None:
+    cases = [
+        mvp_new_sequence(marker=legacy_result([]), recovery_tail=[legacy_result([])]),
+        mvp_new_sequence(marker=mvp_marker_result(occurrences=2)),
+        mvp_new_sequence(
+            marker=legacy_result([]),
+            send_result=legacy_result([{
+                "conversationId": "conflicting-id",
+                "conversationUrl": "https://chatgpt.com/c/conflicting-id",
+            }]),
+        ),
+        mvp_new_sequence(post_id=OLD_ID, marker=mvp_marker_result()),
+        mvp_new_sequence(
+            post_id=None,
+            recovery_tail=[legacy_history(OLD_ID, NEW_ID), legacy_result([])],
+        ),
+    ]
+    for case_index, sequence in enumerate(cases):
+        _, state, calls, command, env = run_send_case(
+            sequence, prepare_new=True, legacy_sequence=False,
+        )
+        assert state["message_send_count"] == 1, (case_index, state)
+        log = Path(env["OPENCLI_FAKE_LOG"])
+        before_count = len(log.read_text(encoding="utf-8").splitlines())
+        repeated = subprocess.run(
+            command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+        )
+        after_count = len(log.read_text(encoding="utf-8").splitlines())
+        assert repeated.returncode == 1
+        assert "same-ID resend is forbidden" in repeated.stderr
+        assert after_count == before_count
+        assert sum(call[1] == "send" for call in calls) == 1
+
+
+def test_mvp_runtime_exposes_all_five_identity_roles() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(), prepare_new=True, legacy_sequence=False,
+    )
+    for field in (
+        "created_conversation_id", "target_conversation_id",
+        "current_browser_conversation_id", "delivery_conversation_id",
+        "recovered_conversation_id",
+    ):
+        assert field in state
+    assert state["schema_version"] == 5
+    assert any(item["role"] == "CURRENT_BROWSER" for item in state["identity_observations"])
+
+
+def test_mvp_existing_target_recovery_prefers_persisted_target() -> None:
+    sequence = mvp_existing_sequence(
+        NEW_ID, pre_current=OLD_ID, post_current=OLD_ID,
+        marker=legacy_result([]), recovery_tail=[mvp_marker_result()],
+    )
+    _, state, calls, _, _ = run_send_case(
+        sequence, conversation=NEW_ID, legacy_sequence=False,
+    )
+    assert [call[1] for call in calls][-2:] == ["read", "detail"]
+    assert calls[-1][2] == NEW_ID
+    assert state["current_browser_conversation_id"] == OLD_ID
+    assert state["recovered_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["target_conversation_id"] == NEW_ID
+    assert state["misroute_detected"] is False
+
+
+def test_mvp_same_id_different_state_file_is_blocked_by_write_receipt() -> None:
+    _, _, calls, command, env = run_send_case(
+        mvp_new_sequence(), prepare_new=True, legacy_sequence=False,
+    )
+    alternate = str(Path(command[command.index("--state-file") + 1]).with_name("alternate-state.json"))
+    repeated_command = list(command)
+    repeated_command[repeated_command.index("--state-file") + 1] = alternate
+    log = Path(env["OPENCLI_FAKE_LOG"])
+    before_count = len(log.read_text(encoding="utf-8").splitlines())
+    repeated = subprocess.run(
+        repeated_command, capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    after_count = len(log.read_text(encoding="utf-8").splitlines())
+    assert repeated.returncode == 1
+    assert "canonical write receipt" in repeated.stderr
+    assert after_count == before_count
+    assert sum(call[1] == "send" for call in calls) == 1
+
+
+def test_mvp_post_write_recovery_budget_exhaustion_stays_unknown() -> None:
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(marker=legacy_result([])),
+        prepare_new=True, legacy_sequence=False, max_recovery_attempts=0,
+    )
+    assert state["send_attempted"] is True
+    assert state["send_attempt_count"] == 1
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+    assert state["work_item_state"] == "IN_PROGRESS"
+    assert "do not resend or manual-relay" in state["stop_reason"]
+
+
+def test_mvp_timeout_with_exact_marker_records_recovered_provenance() -> None:
+    timed_out = legacy_result(returncode=75, timed_out=True, stderr="TIMEOUT")
+    _, state, _, _, _ = run_send_case(
+        mvp_new_sequence(send_result=timed_out),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["send_timed_out"] is True
+    assert state["recovered_conversation_id"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["identity_establishment"]["RECOVERED"]["source_kind"] == "POST_WRITE_UNCERTAIN_CURRENT_CANDIDATE"
+
+
+def test_mvp_manual_export_after_write_is_forbidden() -> None:
+    _, state, _, command, env = run_send_case(
+        mvp_new_sequence(marker=legacy_result([]), recovery_tail=[legacy_result([])]),
+        prepare_new=True, legacy_sequence=False,
+    )
+    state_path = Path(command[command.index("--state-file") + 1])
+    message_file = Path(command[command.index("--message-file") + 1])
+    exported = subprocess.run(
+        [
+            sys.executable, str(TRANSPORT), "manual-export",
+            "--work-item-id", LEGACY_WORK_ITEM,
+            "--message-id", LEGACY_MESSAGE_ID,
+            "--round", "0",
+            "--message-type", "TRANSPORT_SMOKE",
+            "--message-file", str(message_file),
+            "--state-file", str(state_path),
+        ],
+        capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    preserved = json.loads(state_path.read_text(encoding="utf-8"))
+    assert exported.returncode == 1
+    assert "manual-export is forbidden" in exported.stderr
+    assert preserved["send_attempted"] is True
+    assert preserved["send_attempt_count"] == state["send_attempt_count"] == 1
+    assert preserved["delivery_state"] == "DELIVERY_UNKNOWN"
 
 
 def main() -> int:
@@ -2709,7 +3080,7 @@ def main() -> int:
         test_work_item_only_without_message_id_stays_unknown,
         test_message_id_prefix_collision_does_not_match,
         test_work_item_id_prefix_collision_does_not_match,
-        test_post_send_history_unavailable_uses_status_target_once,
+        test_post_send_exact_status_skips_unneeded_history,
         test_recovery_and_detail_budgets_remain_one,
         test_detail_count_only_increments_on_real_invocation,
         test_multiple_new_history_candidates_stay_unknown_without_detail,
@@ -2789,6 +3160,23 @@ def main() -> int:
         test_manual_export_state_is_manual_relay_required_and_in_progress,
         test_automatic_recovery_exhaustion_enters_manual_relay_required,
         test_send_command_still_accepts_normal_message_file,
+        test_mvp_new_session_first_write_uses_send_once,
+        test_mvp_verified_delivery_promotes_next_target_with_provenance,
+        test_mvp_second_explicit_target_stays_in_promoted_conversation,
+        test_mvp_current_target_mismatch_without_marker_is_unknown,
+        test_mvp_missing_marker_is_delivery_unknown,
+        test_mvp_duplicate_marker_is_delivery_unknown,
+        test_mvp_returned_identity_without_marker_is_candidate_only,
+        test_mvp_delivery_unknown_is_not_failed,
+        test_mvp_delivery_target_mismatch_is_misroute,
+        test_mvp_recovery_candidate_without_marker_is_not_promoted,
+        test_mvp_all_post_write_failures_forbid_same_id_resend,
+        test_mvp_runtime_exposes_all_five_identity_roles,
+        test_mvp_existing_target_recovery_prefers_persisted_target,
+        test_mvp_same_id_different_state_file_is_blocked_by_write_receipt,
+        test_mvp_post_write_recovery_budget_exhaustion_stays_unknown,
+        test_mvp_timeout_with_exact_marker_records_recovered_provenance,
+        test_mvp_manual_export_after_write_is_forbidden,
     ]
     for test in tests:
         test()
