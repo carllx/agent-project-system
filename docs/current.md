@@ -41,12 +41,12 @@ Agent Project System
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
 
-## Active Work Item
+## Latest Completed Work Item
 
 - **ID:** `OPENCLI-SESSION-DISCOVERY-001`
 - **Name:** OpenCLI Session Discovery and Identity Contract
-- **State:** `IN_PROGRESS`
-- **Workflow state:** `FINAL_REVIEW_PENDING`
+- **State:** `ACHIEVED`
+- **Workflow state:** `COMPLETED`
 - **Review Request ID:** `OPENCLI-SESSION-DISCOVERY-001-MVP0-R2-FINAL`
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`（供 `OPENCLI-SESSION-IDENTITY-MIN-001` Lab 实验绑定）。
@@ -95,7 +95,7 @@ Agent Project System
 
 `TRANSPORT_IMPLEMENTATION_READY=YES`、`TRANSPORT_REGRESSION_READY=YES`、`TRANSPORT_REAL_E2E_VALIDATED=YES`：Product implementation 已把 `POST_SEND_NAVIGATION_WAIT` 修正为最多 30 秒、最多 10 次 status 的独立只读 phase。旧 9-command 与 60-second operation budget 数值不变；navigation elapsed 从旧 operation budget 显式排除，使 qualifying operation 的物理 wall-clock 最多增加 30 秒。write/recovery/detail budget均未改变。完整 194 项 Transport/Product regression 与真实两消息同 Conversation E2E 均通过。Transport 主动开发停止并保持冻结；`NO_EXTRA_CONVERSATION_CREATED` 与真实自然 timeout recovery 保持 `UNVERIFIED`。
 
-`NEXT_PRODUCT_ACTION_CANDIDATE`：在 Browser Lead 完成本 Work Item Final Review 后，启动一次真实 Agent Review Loop MVP，把现有 ACF Review Contract、Review Artifact、RR Transport、Browser Decision、revision execution 与 Completion Gate 串成 `Execute → Review → Revise → Review → Approve`。当前不创建第二个 Active Work Item。
+`NEXT_PRODUCT_ACTION_CANDIDATE`：启动一次真实 Agent Review Loop MVP，把现有 ACF Review Contract、Review Artifact、冻结的 RR Transport、Browser Decision、revision execution 与 Completion Gate 串成 `Execute → Review → Revise → Review → Approve`。
 
 Browser Final `REVISE` 指出的 first-write 前 blocker 已归类为 `PRODUCT_VALIDATION_BUG`：旧实现错误地把 `new` command result row 当成继续验证的前置条件，而真正的 write gate 应是 post-new exact status `/new`（或 root）与 empty read。最小修复已完成并由两条新增 regression 覆盖。
 
@@ -127,20 +127,32 @@ Browser-cleaned R3 Evidence 到位并实现 navigation wait 后，只运行了�
 
 ### MVP-0 Review readiness
 
-- **Claimed state:** `IN_PROGRESS`；Browser Final `REVISE` 后尚未提交新的 Final Review Request，Execution Agent 不自批完成。
+- **Final state:** `ACHIEVED`；Browser Lead 对匹配的 Final Review Request 返回 `APPROVE`，Execution Agent 未自行批准。
 - **Implementation:** `MET`；正式 write 为 `send`，五身份/provenance、唯一 marker、target promotion、existing target recovery 和 canonical no-resend receipt 已实现。
 - **Regression:** 194/194 Transport/Product regression 与 24/24 completion-gate/package-checker regression PASS。Skill package checker 的受控 runner 继续使用 240 秒 execution timeout。Transport 普通 9-command、60-second operation、write/recovery/detail budget数值未放宽；navigation status 使用独立最多 30 秒、最多 10 次的 phase budget。
 - **Transport readiness:** `TRANSPORT_IMPLEMENTATION_READY=YES`；`TRANSPORT_REGRESSION_READY=YES`；`TRANSPORT_REAL_E2E_VALIDATED=YES`。
 - **Product E2E:** `PASS`；Message 1/2 各 write 一次，Delivery 与 promoted Target 均为 `6a79d6d2-cab8-83ea-9081-9604dfabd39d`，两条 exact marker 均为 `UNIQUE`。
 - **Direct blocker revision:** `NAVIGATION_SUB_BUDGET_STARVED_BY_OPERATION_CAP` 已修复，并由 regression 与真实 delayed-navigation E2E 证实不再阻塞正常路径。
 - **Known unverified:** `NO_EXTRA_CONVERSATION_CREATED`、真实自然 timeout recovery。
-- **Work Item state:** 继续 `IN_PROGRESS`；Execution Agent 只声明 `CLAIM_READY_FOR_REVIEW`，等待 Browser Lead 对 `OPENCLI-SESSION-DISCOVERY-001-MVP0-R2-FINAL` 作 Final Review。
+- **Work Item state:** `ACHIEVED`；Transport scope 为 `FROZEN_AT_MVP_0`，不得继续主动开发。
 
 ### Current Acceptance status
 
 - **MET:** `AC1`、`AC2`、`AC3`、`AC4`、`AC5`、`AC6`、`AC7`、`AC8`、`AC9`、`AC10`。
 - **Transport scope:** `FROZEN_AT_MVP_0`；真实 Product Browser 两消息 E2E 已 PASS，不再主动扩展 Transport。
-- `OPENCLI-SESSION-DISCOVERY-001` 继续为 `IN_PROGRESS`，不得因 Lab technical hypothesis proven 而标记 `ACHIEVED`。
+- `OPENCLI-SESSION-DISCOVERY-001=ACHIEVED`；完成权来自下述匹配的 Browser Final `APPROVE`，不是 Lab technical hypothesis 或 Execution Agent 自批。
+
+### Final Browser Review
+
+- **PROTOCOL_VERSION:** `ACF-0.1`。
+- **IN_REPLY_TO_REVIEW_REQUEST_ID:** `OPENCLI-SESSION-DISCOVERY-001-MVP0-R2-FINAL`。
+- **REVIEW_KIND / DECISION:** `FINAL / APPROVE`。
+- **APPROVED_COMMIT:** `5482df126647687c1b837bbffa56c43da3b7346d`。
+- **ACCEPTANCE_STATUS:** `AC1` 至 `AC10` 全部 `MET`。
+- **WORK_ITEM_STATE:** `ACHIEVED`。
+- **DEBT / USER_DECISION_REQUIRED:** `NONE`。
+- **NON-BLOCKING UNVERIFIED:** `NO_EXTRA_CONVERSATION_CREATED`、`TIMEOUT_RECOVERY`；未来没有新 Evidence 时不得升级。
+- **Completion authority:** Browser Lead 的 Decision 与当前 pending Final Request、Protocol、Work Item、Review Kind 和获批 artifact identity 匹配，因此授权从 `FINAL_REVIEW_PENDING` 进入 `COMPLETED`。
 
 ### Review artifact access path
 
@@ -148,7 +160,7 @@ Browser-cleaned R3 Evidence 到位并实现 navigation wait 后，只运行了�
 - GitHub 只是 Review Artifact access path，不是 Completion Authority、ACF Protocol 或实时 Transport；无 GitHub 时继续使用 Evidence Packet / Manual Relay。
 - 通用规则记录在 `docs/specs/agent-collaboration-protocol.md`；RR-specific 映射记录在 `docs/specs/research-review-loop.md`。
 
-## Latest Completed Work Item
+## Completed Work Item: ACF-AG-ADAPTER-001
 
 - **ID:** `ACF-AG-ADAPTER-001`
 - **Name:** Antigravity Completion-Gate Adapter v0.1
