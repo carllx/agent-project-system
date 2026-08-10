@@ -8,6 +8,8 @@
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
 - **Active branch:** `work/real-agent-review-loop-mvp-001`；未完成 Work Item 不在 `main`。
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
+- **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（上一 Work Item closeout）；它不是当前 Work Item 的初始化 commit。
+- **Work Item initialization commit / current Git HEAD:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；本轮 Product 修改尚未 commit 时，Git HEAD 仍保持该值。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
 - **Source Skill VERSION:** `0.4.18`。
@@ -40,6 +42,7 @@ Agent Project System
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + Reliable Product Transport MVP-0 + 确定性 bootstrap + manual-export fallback），VERSION `0.4.18`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
+- `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。两者只消费冻结 Transport 已做 identity verification 的 RR response，不承担 Browser Transport 或 IDE lifecycle translation。
 
 ## Active Work Item
 
@@ -70,6 +73,32 @@ Agent Project System
 - 先审计现有 Protocol、Completion Gate、Antigravity Adapter、RR Skill 和冻结 Transport 之间阻塞真实 Loop 的最小缺口。
 - 只实现第一条真实 Loop 所必需的 bridge/driver；不得把下一阶段扩展成完整 orchestration framework。
 - Browser Review 与用户权限必须继续分离；任何 IDE tool approval 不得解释为 ACF Review approval。
+
+### Integration Gap Audit and MVP readiness
+
+**ALREADY_AVAILABLE:** ACF-0.1 Request/Decision 与 Completion invariant；五类 Conversation identity 和冻结 Product Transport；identity-bound RR response；Completion-Gate Policy；Antigravity Stop Hook 的动态 route 与 bounded continuation。
+
+**MINIMUM BRIDGE IMPLEMENTED:** `runtime/review_loop.py` 现在保存 pending Request snapshot 和 reviewed artifact identity，把唯一 identity-verified RR envelope 严格映射为 ACF Decision，并驱动 `FINAL_REVIEW_PENDING → REVISION_REQUIRED → EXECUTING → FINAL_REVIEW_PENDING → COMPLETED`。错 Protocol、Work Item、Request ID、Review Kind、Acceptance coverage、wire/ACF binding、stale artifact 或未验证 Transport response 均为 `NON_AUTHORITATIVE`，不得改变 pending Workflow State。Transport 的旧 `work_item_state=ACHIEVED` 明确不具有 Product completion authority。只有 bridge 本地推导 `REVIEWED_STATE_CURRENT` 后，现有 Completion Gate 复验 Final `APPROVE` 才能写入 `COMPLETED`。
+
+**ANTIGRAVITY RETURN PATH:** Browser `REVISE` 被保存为单个当前 `ACTION_ID`、完整 `REQUIRED_ACTIONS`、`CURRENT_REQUIRED_ACTION` 与一次 bounded `CONTINUATION_STATE`。Antigravity Adapter 的 `decision=continue` reason 现在携带当前动作说明，真实 Execution Agent 仍必须从配置的 state path 读取权威状态。修订 Evidence 记录后回到 `EXECUTING`，重新 Review 强制使用新 Request ID 并保持原 Review Kind。
+
+**CONFIGURATION_ONLY:** 为本次真实 MVP 填写精确 workspace、Work Item、runtime state/evidence path、经验证 Python/Stop Hook 绝对路径和可选 Antigravity Execution Conversation ID。Browser Transport Conversation 与 Antigravity Execution Conversation 必须分开。当前不裁决长期 Global 与 workspace-local Hook deployment。
+
+**TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
+
+**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、tests 和完整 Execution Packet 已达到可以启动一次真实 Antigravity/Browser 两轮 E2E 的位置；它不表示真实 Loop 已执行或本 Work Item 已完成。Work Item 继续为 `IN_PROGRESS / EXECUTING`，Review Request 仍为 `NONE`。
+
+### First real E2E task
+
+真实任务限定为给 `scripts/test_antigravity_completion_gate.py` 增加 unresolved User Decision regression。Round 1 只覆盖布尔 `True` 会阻止 `COMPLETED`，把字符串 `UNVERIFIED` case 明确留为缺失 Evidence，从而提交一个真实但不满足全部 agreed criteria 的 Final Request；Browser 必须基于实际 Diff/Evidence 独立决定，Product 不模拟 `REVISE`。收到匹配 `REVISE` 后，Antigravity Execution Agent 补齐 `UNVERIFIED` case、运行测试并用新 Final Request ID 再审；只有匹配且 current 的 Browser `APPROVE` 可以经 Completion Gate 完成。该任务只修改一个永久 regression 文件，不修改 Policy、Protocol、Hook deployment 或冻结 Transport。
+
+### Local integration validation
+
+- Review Loop + Completion Gate suites：24/24 PASS。
+- 冻结 Transport suite：194/194 PASS；`skills/research-review-lead/scripts/opencli_transport.py` 零修改。
+- Package checker unit suite：14/14 PASS。完整 `check_skill_package.py` 的隔离 Transport subprocess 在既有 240 秒 runner 上限处 timeout；同一 194-test suite 已独立全绿。本 Work Item 不为此放宽 Transport 或 checker timeout。
+- `check_docs.py` 与 `git diff --check`：PASS。
+- 尚未运行真实 Antigravity/Browser E2E；不得把本地测试写成 Browser `APPROVE`。
 
 ## Latest Completed Work Item: OPENCLI-SESSION-DISCOVERY-001
 
@@ -358,4 +387,4 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - **Command:** `git diff --check`
 - **Result:** Passed（exit 0；只有工作树 LF→CRLF 提示，无 whitespace error）。
 - **Artifact hygiene:** 未创建日期 Handoff 文档，未修改 Transport、Hook 或 Adapter，未运行 Browser/Lab；仓库根无 `__pycache__` 或测试 temp artifact。
-- **Last verified:** 2026-08-09
+- **Last verified:** 2026-08-10

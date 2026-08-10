@@ -175,6 +175,7 @@ class HookTranslationTests(unittest.TestCase):
             unrelated = stop_hook.handle_stop(config_path, {**payload, "conversationId": "other"})
 
             self.assertEqual(first["decision"], "continue")
+            self.assertIn("finish required validation", first["reason"])
             self.assertEqual(second["decision"], "stop")
             self.assertEqual(unrelated["decision"], "ignore")
             persisted = json.loads(state_path.read_text(encoding="utf-8"))

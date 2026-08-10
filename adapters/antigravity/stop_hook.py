@@ -119,7 +119,14 @@ def handle_stop(config_path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     })
 
     if gate_decision.outcome == CONTINUE_BOUNDED:
-        return {"decision": "continue", "reason": gate_decision.reason}
+        action = state.get("CURRENT_REQUIRED_ACTION")
+        action_description = (
+            action.get("DESCRIPTION") if isinstance(action, dict) else None
+        )
+        reason = gate_decision.reason
+        if isinstance(action_description, str) and action_description.strip():
+            reason = f"{reason}; REQUIRED_ACTION: {action_description.strip()}"
+        return {"decision": "continue", "reason": reason}
     if gate_decision.outcome in {ALLOW_STOP, BLOCK_AND_ESCALATE}:
         return {"decision": "stop", "reason": gate_decision.reason}
     return {"decision": "ignore", "reason": "unsupported adapter outcome"}

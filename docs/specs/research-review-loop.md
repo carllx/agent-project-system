@@ -65,7 +65,7 @@ Evidence Packet 使用通用核心，将目标、范围、产物、验证、来�
 
 ## Review decision and work item state
 
-以下字段是 RR Lead 模块现有实现 Contract，不是 ACF 通用协议的第二套权威。Protocol Candidate v0.1 使用 `APPROVE / REVISE / ESCALATE_TO_USER`，并把 Debt 作为独立字段；当前 RR Envelope 的迁移和兼容映射留给后续实现 Work Item，本轮不修改 Transport。
+以下字段是 RR Lead 模块现有 wire Contract，不是 ACF 通用协议的第二套权威。ACF-0.1 使用 `APPROVE / REVISE / ESCALATE_TO_USER`，并把 Debt 作为独立字段；Product Loop Bridge 负责严格兼容映射，冻结的 Transport 仍只承担消息身份、Conversation 来源和回复 envelope 验证。
 
 两个字段不得混用：
 
@@ -80,6 +80,41 @@ IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 例如 `REVIEW_DECISION: PASS_WITH_DEBT` 与 `WORK_ITEM_STATE: IN_PROGRESS` 表示本轮实现通过但整个任务仍需继续。
 
 RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、`MET / NOT_MET / UNVERIFIED`、Evidence，并包含 `FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成；只有所有原验收条件都有充分证据且为 `MET`，并满足 ACF Protocol 的 Final Review Completion invariant，才允许进入 `ACHIEVED`。
+
+### ACF-0.1 compatibility bridge
+
+`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；`scripts/acf_review_loop.py` 只负责其 JSON 状态的原子持久化。它们不发送消息、不建立 Conversation，也不翻译 Antigravity lifecycle。正式回复只有在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，并且 Transport Work Item/Message ID 与当前 pending Request 精确相等时，才允许进入该 bridge。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
+
+为不向冻结 RR wire parser 增加 ACF-specific 顶层字段，Browser Lead 在现有 `VALIDATION` 多行字段中返回以下精确 compatibility binding：
+
+```text
+ACF_BINDING_BEGIN
+PROTOCOL_VERSION: ACF-0.1
+IN_REPLY_TO_REVIEW_REQUEST_ID: <exact REVIEW_REQUEST_ID>
+REVIEW_KIND: INTERMEDIATE / FINAL
+ACF_BINDING_END
+```
+
+wire `IN_REPLY_TO_MESSAGE_ID` 必须与 `IN_REPLY_TO_REVIEW_REQUEST_ID` 相等；正式 Loop 直接让 Transport `MESSAGE_ID` 使用当前 `REVIEW_REQUEST_ID`。`ACCEPTANCE_STATUS` 必须以唯一的 `CRITERION / STATUS / EVIDENCE` 项精确覆盖 pending Request 的 agreed criteria；`NEXT_WORK_ORDER` 映射为 ACF `REQUIRED_ACTIONS`。`PASS` 与 `PASS_WITH_DEBT` 兼容映射为 `APPROVE`，`ESCALATE` 映射为 `ESCALATE_TO_USER`；新 Loop 应优先直接返回 ACF decision 名称。缺字段、重复字段、无效状态、绑定冲突或 artifact identity stale 一律是 `NON_AUTHORITATIVE`，当前 Review 保持 pending。
+
+Bridge 只实现真实两轮 MVP 所需状态迁移：
+
+```text
+EXECUTING
+→ submit Final Request + reviewed artifact identity
+→ FINAL_REVIEW_PENDING
+→ authoritative REVISE
+→ REVISION_REQUIRED + CURRENT_REQUIRED_ACTION + bounded CONTINUATION_STATE
+→ revision Evidence recorded
+→ EXECUTING
+→ new Final Request ID + current artifact identity
+→ FINAL_REVIEW_PENDING
+→ authoritative current APPROVE
+→ Completion Gate revalidation
+→ COMPLETED
+```
+
+Final `APPROVE` 的 `REVIEWED_STATE_CURRENT` 由 Product bridge 比较 pending reviewed artifact identity 与接收 Decision 时的 current artifact identity 后生成，不读取 Browser 自报布尔值。实质修改必须使旧 reviewed snapshot 失效。Completion Gate 仍重新验证 Protocol、Work Item、Request ID、Review Kind、全部 agreed criteria 精确覆盖且为 `MET`、无 unresolved User Decision 与 current reviewed state；Execution termination 和 Stop Hook `continue` 均不能替代该审查权。
 
 ## Sixth-round health checkpoint
 
