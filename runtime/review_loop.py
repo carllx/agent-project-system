@@ -1,8 +1,9 @@
 """Minimal IDE-independent ACF review-loop state bridge.
 
 This module deliberately does not send Browser messages or translate IDE lifecycle
-events.  It consumes only an identity-verified RR transport result, maps it to an
-ACF-0.1 Decision, and advances the Product workflow through the completion gate.
+events. It accepts either an identity-verified automated Transport result or an
+explicitly provenance-marked Manual Relay response, maps the strict RR wire to one
+ACF-0.1 Decision path, and advances the workflow through the completion gate.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import copy
 import json
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 
 from runtime.completion_gate import evaluate_completion_gate, final_approval_is_authoritative
@@ -32,6 +34,26 @@ DECISION_MAP = {
 ACCEPTANCE_STATUSES = {"MET", "NOT_MET", "UNVERIFIED"}
 NONE_VALUES = {"", "NONE", "NO", "FALSE", "N/A", "NOT_APPLICABLE"}
 WINDOWS_CMD_METACHARACTERS = "<>|&^%"
+RR_REVIEW_BEGIN = "RR_REVIEW_BEGIN"
+RR_REVIEW_END = "RR_REVIEW_END"
+RR_RESPONSE_FIELDS = (
+    "WORK_ITEM_ID",
+    "IN_REPLY_TO_MESSAGE_ID",
+    "ROUND",
+    "REVIEW_DECISION",
+    "WORK_ITEM_STATE",
+    "ACCEPTANCE_STATUS",
+    "FINDINGS",
+    "BLOCKERS",
+    "DEBT",
+    "NEXT_WORK_ORDER",
+    "VALIDATION",
+    "USER_DECISION_REQUIRED",
+)
+MANUAL_REVIEW_DECISIONS = {"APPROVE", "REVISE", "ESCALATE_TO_USER"}
+RR_WORK_ITEM_STATES = {
+    "IN_PROGRESS", "ACHIEVED", "BLOCKED", "NEEDS_DECISION", "STALLED", "UNSAFE"
+}
 
 
 @dataclass(frozen=True)
@@ -67,6 +89,11 @@ def render_browser_review_message(state: dict[str, Any]) -> str:
         raise ValueError("pending Review Request identity or criteria are invalid")
 
     criterion_ids = [item["CRITERION"] for item in criteria]
+    round_number = sum(
+        1
+        for event in state.get("REVIEW_HISTORY", [])
+        if isinstance(event, dict) and event.get("EVENT") == "REVIEW_REQUEST_SUBMITTED"
+    )
     identity_values = [state.get("PROTOCOL_VERSION"), work_item_id, request_id, kind, *criterion_ids]
     if any(
         not isinstance(value, str)
@@ -140,7 +167,7 @@ Required response shape:
 RR_REVIEW_BEGIN
 WORK_ITEM_ID: {work_item_id}
 IN_REPLY_TO_MESSAGE_ID: {request_id}
-ROUND: copy the ROUND from the outer Transport packet
+ROUND: {round_number}
 REVIEW_DECISION: make one independent allowed decision
 WORK_ITEM_STATE: IN_PROGRESS
 ACCEPTANCE_STATUS:
@@ -158,6 +185,56 @@ VALIDATION:
 USER_DECISION_REQUIRED: write the reserved user decision or NONE
 RR_REVIEW_END
 """
+
+
+def parse_rr_review_wire(text: str) -> dict[str, str]:
+    """Parse one exact, ordered RR response without Transport provenance."""
+    if not isinstance(text, str):
+        raise ValueError("raw Browser response must be text")
+    lines = text.splitlines()
+    nonempty = [index for index, line in enumerate(lines) if line.strip()]
+    if not nonempty:
+        raise ValueError("RR response is empty")
+    first, last = nonempty[0], nonempty[-1]
+    if lines[first].strip() != RR_REVIEW_BEGIN or lines[last].strip() != RR_REVIEW_END:
+        raise ValueError("RR response sentinels are malformed")
+    body = lines[first + 1:last]
+    if any(line.strip() in {RR_REVIEW_BEGIN, RR_REVIEW_END} for line in body):
+        raise ValueError("RR response contains nested or duplicated sentinels")
+
+    blocks: dict[str, list[str]] = {}
+    current: str | None = None
+    header = re.compile(r"^([A-Z][A-Z0-9_]*):(?:[ \t]*(.*))?\r?$")
+    for line in body:
+        match = header.fullmatch(line)
+        if match:
+            name = match.group(1)
+            if name not in RR_RESPONSE_FIELDS:
+                raise ValueError(f"unknown RR response field: {name}")
+            if name in blocks:
+                raise ValueError(f"duplicate RR response field: {name}")
+            expected_index = len(blocks)
+            if expected_index >= len(RR_RESPONSE_FIELDS) or name != RR_RESPONSE_FIELDS[expected_index]:
+                raise ValueError(f"RR response field is out of order: {name}")
+            current = name
+            blocks[name] = [match.group(2) or ""]
+        elif current is not None:
+            blocks[current].append(line)
+        elif line.strip():
+            raise ValueError("RR response contains content before its first field")
+
+    if tuple(blocks) != RR_RESPONSE_FIELDS:
+        raise ValueError("RR response fields are incomplete")
+    fields = {name: "\n".join(blocks[name]).strip() for name in RR_RESPONSE_FIELDS}
+    if any(not value for value in fields.values()):
+        raise ValueError("RR response contains an empty required field")
+    if fields["REVIEW_DECISION"] not in MANUAL_REVIEW_DECISIONS:
+        raise ValueError("manual RR response has an unsupported Review Decision")
+    if fields["WORK_ITEM_STATE"] not in RR_WORK_ITEM_STATES:
+        raise ValueError("manual RR response Work Item State is invalid")
+    if not re.fullmatch(r"[1-9][0-9]*", fields["ROUND"]):
+        raise ValueError("manual RR response Round is invalid")
+    return fields
 
 
 def initialize_loop_state(
@@ -286,6 +363,74 @@ def apply_transport_review(
     except ValueError as exc:
         return TransitionResult(False, "NON_AUTHORITATIVE", str(exc))
     return apply_review_decision(state, decision)
+
+
+def apply_manual_review(
+    state: dict[str, Any],
+    raw_response: str,
+    current_artifact_id: str,
+    *,
+    raw_response_path: str,
+    raw_response_sha256: str,
+    ingested_at: str | None = None,
+) -> TransitionResult:
+    """Apply one user-relayed raw RR response with explicit Manual provenance."""
+    pending = state.get("PENDING_REVIEW_REQUEST")
+    expected_pending = (
+        PENDING_BY_KIND.get(pending.get("REVIEW_KIND"))
+        if isinstance(pending, dict)
+        else None
+    )
+    if expected_pending is None or state.get("WORKFLOW_STATE") != expected_pending:
+        return TransitionResult(False, "NON_AUTHORITATIVE", "no matching pending Review Request")
+    if (
+        not raw_response_path
+        or not re.fullmatch(r"[0-9a-f]{64}", raw_response_sha256)
+    ):
+        return TransitionResult(False, "NON_AUTHORITATIVE", "Manual Relay provenance is incomplete")
+    try:
+        review = parse_rr_review_wire(raw_response)
+    except ValueError as error:
+        return TransitionResult(False, "NON_AUTHORITATIVE", str(error))
+
+    expected_round = sum(
+        1
+        for event in state.get("REVIEW_HISTORY", [])
+        if isinstance(event, dict) and event.get("EVENT") == "REVIEW_REQUEST_SUBMITTED"
+    )
+    if review.get("ROUND") != str(expected_round):
+        return TransitionResult(False, "NON_AUTHORITATIVE", "Manual Relay Round does not match pending Request")
+    if review.get("WORK_ITEM_ID") != state.get("WORK_ITEM_ID"):
+        return TransitionResult(False, "NON_AUTHORITATIVE", "Manual Relay Work Item does not match")
+    if review.get("IN_REPLY_TO_MESSAGE_ID") != pending.get("REVIEW_REQUEST_ID"):
+        return TransitionResult(False, "NON_AUTHORITATIVE", "Manual Relay reply identity does not match")
+    if (
+        not current_artifact_id
+        or current_artifact_id != state.get("PENDING_REVIEWED_ARTIFACT_ID")
+    ):
+        return TransitionResult(False, "NON_AUTHORITATIVE", "Manual Relay reviewed artifact is stale")
+    try:
+        decision = rr_review_to_acf_decision(
+            review,
+            reviewed_state_current=True,
+        )
+    except ValueError as error:
+        return TransitionResult(False, "NON_AUTHORITATIVE", str(error))
+
+    result = apply_review_decision(state, decision)
+    if not result.authoritative:
+        return result
+    state["REVIEW_HISTORY"].append({
+        "EVENT": "MANUAL_REVIEW_INGESTED",
+        "REVIEW_SOURCE": "MANUAL_RELAY",
+        "RAW_RESPONSE_PATH": raw_response_path,
+        "RAW_RESPONSE_SHA256": raw_response_sha256,
+        "REVIEW_REQUEST_ID": pending["REVIEW_REQUEST_ID"],
+        "REVIEWED_ARTIFACT_ID": current_artifact_id,
+        "INGESTED_AT": ingested_at
+        or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    return result
 
 
 def apply_review_decision(

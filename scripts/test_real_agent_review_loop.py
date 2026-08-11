@@ -9,6 +9,7 @@ from unittest import mock
 
 from runtime.completion_gate import ALLOW_STOP, CONTINUE_BOUNDED, evaluate_completion_gate
 from runtime.review_loop import (
+    apply_manual_review,
     apply_review_decision,
     apply_transport_review,
     initialize_loop_state,
@@ -66,11 +67,14 @@ def acceptance_text(ac2_status="MET"):
     ))
 
 
-def rr_review(request_id, decision, *, ac2_status="MET", next_work_order="NONE", validation=None):
+def rr_review(
+    request_id, decision, *, ac2_status="MET", next_work_order="NONE",
+    validation=None, round_number="1",
+):
     return {
         "WORK_ITEM_ID": WORK_ITEM_ID,
         "IN_REPLY_TO_MESSAGE_ID": request_id,
-        "ROUND": "1",
+        "ROUND": str(round_number),
         "REVIEW_DECISION": decision,
         "WORK_ITEM_STATE": "ACHIEVED",
         "ACCEPTANCE_STATUS": acceptance_text(ac2_status),
@@ -87,6 +91,46 @@ def rr_review(request_id, decision, *, ac2_status="MET", next_work_order="NONE",
         )),
         "USER_DECISION_REQUIRED": "NONE",
     }
+
+
+RR_RESPONSE_FIELDS = (
+    "WORK_ITEM_ID",
+    "IN_REPLY_TO_MESSAGE_ID",
+    "ROUND",
+    "REVIEW_DECISION",
+    "WORK_ITEM_STATE",
+    "ACCEPTANCE_STATUS",
+    "FINDINGS",
+    "BLOCKERS",
+    "DEBT",
+    "NEXT_WORK_ORDER",
+    "VALIDATION",
+    "USER_DECISION_REQUIRED",
+)
+
+
+def rr_wire(review):
+    lines = ["RR_REVIEW_BEGIN"]
+    for field in RR_RESPONSE_FIELDS:
+        value = str(review[field])
+        if "\n" in value:
+            lines.append(f"{field}:")
+            lines.extend(f"  {line}" for line in value.splitlines())
+        else:
+            lines.append(f"{field}: {value}")
+    lines.append("RR_REVIEW_END")
+    return "\n".join(lines)
+
+
+def apply_manual(state, review, artifact_id):
+    return apply_manual_review(
+        state,
+        rr_wire(review),
+        artifact_id,
+        raw_response_path="C:/runtime/browser-response.txt",
+        raw_response_sha256="a" * 64,
+        ingested_at="2026-08-11T00:00:00+00:00",
+    )
 
 
 def transport_state(request_id, review):
@@ -484,6 +528,207 @@ class RealAgentReviewLoopTests(unittest.TestCase):
         )
         self.assertFalse(result.authoritative)
         self.assertEqual(state["WORKFLOW_STATE"], "FINAL_REVIEW_PENDING")
+
+    def test_manual_valid_revise_is_authoritative_and_records_provenance(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-MANUAL-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        review = rr_review(
+            request_id,
+            "REVISE",
+            ac2_status="NOT_MET",
+            next_work_order="Add the missing AC2 evidence.",
+        )
+        result = apply_manual(state, review, "artifact-1")
+        self.assertTrue(result.authoritative)
+        self.assertEqual(result.outcome, "REVISION_REQUIRED")
+        self.assertEqual(state["WORKFLOW_STATE"], "REVISION_REQUIRED")
+        provenance = state["REVIEW_HISTORY"][-1]
+        self.assertEqual(provenance["EVENT"], "MANUAL_REVIEW_INGESTED")
+        self.assertEqual(provenance["REVIEW_SOURCE"], "MANUAL_RELAY")
+        self.assertEqual(provenance["REVIEW_REQUEST_ID"], request_id)
+        self.assertEqual(provenance["REVIEWED_ARTIFACT_ID"], "artifact-1")
+        self.assertNotIn("official_response_eligible", state)
+        self.assertNotIn("response_identity_status", state)
+        self.assertNotIn("TRANSPORT_IDENTITY_VERIFIED", provenance)
+        self.assertNotIn("SAME_BROWSER_CONVERSATION_MACHINE_VERIFIED", provenance)
+
+    def test_manual_revise_then_approve_reaches_completion_gate(self):
+        state = loop_state()
+        first_id = f"{WORK_ITEM_ID}-MANUAL-R1-FINAL"
+        submit_review_request(state, final_request(first_id), "artifact-1")
+        revised = apply_manual(
+            state,
+            rr_review(
+                first_id,
+                "REVISE",
+                ac2_status="NOT_MET",
+                next_work_order="Add the missing AC2 evidence.",
+            ),
+            "artifact-1",
+        )
+        self.assertTrue(revised.authoritative)
+        record_revision_applied(state, "added AC2 evidence in immutable artifact-2")
+        second_id = f"{WORK_ITEM_ID}-MANUAL-R2-FINAL"
+        submit_review_request(state, final_request(second_id), "artifact-2")
+        approved = apply_manual(
+            state,
+            rr_review(second_id, "APPROVE", round_number="2"),
+            "artifact-2",
+        )
+        self.assertTrue(approved.authoritative)
+        self.assertEqual(approved.outcome, "COMPLETED")
+        self.assertEqual(state["WORKFLOW_STATE"], "COMPLETED")
+        manual_events = [
+            event for event in state["REVIEW_HISTORY"]
+            if event.get("EVENT") == "MANUAL_REVIEW_INGESTED"
+        ]
+        self.assertEqual(len(manual_events), 2)
+
+    def test_manual_wrong_identity_binding_or_stale_artifact_is_rejected(self):
+        variants = ("work_item", "reply_id", "review_kind", "round", "stale")
+        for variant in variants:
+            with self.subTest(variant=variant):
+                state = loop_state()
+                request_id = f"{WORK_ITEM_ID}-MANUAL-BINDING-R1-FINAL"
+                submit_review_request(state, final_request(request_id), "artifact-1")
+                review = rr_review(
+                    request_id,
+                    "REVISE",
+                    ac2_status="NOT_MET",
+                    next_work_order="Add AC2 evidence.",
+                )
+                artifact_id = "artifact-1"
+                if variant == "work_item":
+                    review["WORK_ITEM_ID"] = "WRONG-WORK-ITEM"
+                elif variant == "reply_id":
+                    wrong = f"{request_id}-WRONG"
+                    review["IN_REPLY_TO_MESSAGE_ID"] = wrong
+                    review["VALIDATION"] = review["VALIDATION"].replace(request_id, wrong)
+                elif variant == "review_kind":
+                    review["VALIDATION"] = review["VALIDATION"].replace(
+                        "REVIEW_KIND: FINAL", "REVIEW_KIND: INTERMEDIATE"
+                    )
+                elif variant == "round":
+                    review["ROUND"] = "2"
+                else:
+                    artifact_id = "artifact-stale"
+                result = apply_manual(state, review, artifact_id)
+                self.assertFalse(result.authoritative)
+                self.assertEqual(result.outcome, "NON_AUTHORITATIVE")
+                self.assertEqual(state["WORKFLOW_STATE"], "FINAL_REVIEW_PENDING")
+
+    def test_manual_incomplete_duplicate_or_malformed_wire_is_rejected(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-MANUAL-WIRE-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        review = rr_review(
+            request_id,
+            "REVISE",
+            ac2_status="NOT_MET",
+            next_work_order="Add AC2 evidence.",
+        )
+        valid = rr_wire(review)
+        incomplete_review = copy.deepcopy(review)
+        incomplete_review["ACCEPTANCE_STATUS"] = "\n".join(
+            acceptance_text("NOT_MET").splitlines()[:3]
+        )
+        duplicate_review = copy.deepcopy(review)
+        duplicate_review["ACCEPTANCE_STATUS"] += "\n" + "\n".join((
+            "- CRITERION: AC1",
+            "  STATUS: MET",
+            "  EVIDENCE: duplicate",
+        ))
+        variants = {
+            "missing_sentinel": valid.removeprefix("RR_REVIEW_BEGIN\n"),
+            "duplicate_field": valid.replace(
+                f"WORK_ITEM_ID: {WORK_ITEM_ID}",
+                f"WORK_ITEM_ID: {WORK_ITEM_ID}\nWORK_ITEM_ID: {WORK_ITEM_ID}",
+                1,
+            ),
+            "out_of_order_field": valid.replace(
+                f"WORK_ITEM_ID: {WORK_ITEM_ID}\nIN_REPLY_TO_MESSAGE_ID: {request_id}",
+                f"IN_REPLY_TO_MESSAGE_ID: {request_id}\nWORK_ITEM_ID: {WORK_ITEM_ID}",
+                1,
+            ),
+            "incomplete_acceptance": rr_wire(incomplete_review),
+            "duplicate_acceptance": rr_wire(duplicate_review),
+        }
+        for name, wire in variants.items():
+            with self.subTest(name=name):
+                fresh = copy.deepcopy(state)
+                result = apply_manual_review(
+                    fresh,
+                    wire,
+                    "artifact-1",
+                    raw_response_path="C:/runtime/browser-response.txt",
+                    raw_response_sha256="b" * 64,
+                )
+                self.assertFalse(result.authoritative)
+                self.assertEqual(fresh["WORKFLOW_STATE"], "FINAL_REVIEW_PENDING")
+
+    def test_manual_revise_requires_executable_action(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-MANUAL-NO-ACTION-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        result = apply_manual(state, rr_review(request_id, "REVISE"), "artifact-1")
+        self.assertFalse(result.authoritative)
+        self.assertEqual(state["WORKFLOW_STATE"], "FINAL_REVIEW_PENDING")
+
+    def test_manual_invalid_approve_variants_are_rejected(self):
+        for variant in ("not_met", "unverified", "blocker", "user_decision"):
+            with self.subTest(variant=variant):
+                state = loop_state()
+                request_id = f"{WORK_ITEM_ID}-MANUAL-APPROVE-R1-FINAL"
+                submit_review_request(state, final_request(request_id), "artifact-1")
+                review = rr_review(request_id, "APPROVE")
+                if variant == "not_met":
+                    review["ACCEPTANCE_STATUS"] = acceptance_text("NOT_MET")
+                elif variant == "unverified":
+                    review["ACCEPTANCE_STATUS"] = acceptance_text("UNVERIFIED")
+                elif variant == "blocker":
+                    review["BLOCKERS"] = "AC2 is blocked"
+                else:
+                    review["USER_DECISION_REQUIRED"] = "User must choose a risk boundary"
+                result = apply_manual(state, review, "artifact-1")
+                self.assertFalse(result.authoritative)
+                self.assertEqual(state["WORKFLOW_STATE"], "FINAL_REVIEW_PENDING")
+
+    def test_cli_manual_ingest_persists_manual_provenance(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:
+            directory = Path(temporary_directory)
+            state_path = directory / "state.json"
+            response_path = directory / "browser-response.txt"
+            state = loop_state()
+            request_id = f"{WORK_ITEM_ID}-CLI-MANUAL-R1-FINAL"
+            submit_review_request(state, final_request(request_id), "artifact-1")
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+            response_path.write_text(rr_wire(rr_review(
+                request_id,
+                "REVISE",
+                ac2_status="NOT_MET",
+                next_work_order="Add AC2 evidence.",
+            )), encoding="utf-8")
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "acf_review_loop.py"),
+                    "ingest-manual-review",
+                    "--state", str(state_path),
+                    "--response-file", str(response_path),
+                    "--current-artifact-id", "artifact-1",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            persisted = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(persisted["WORKFLOW_STATE"], "REVISION_REQUIRED")
+            provenance = persisted["REVIEW_HISTORY"][-1]
+            self.assertEqual(provenance["REVIEW_SOURCE"], "MANUAL_RELAY")
+            self.assertEqual(provenance["RAW_RESPONSE_PATH"], str(response_path.resolve()))
+            self.assertNotIn("official_response_eligible", persisted)
 
     def test_cli_persists_identity_verified_revision_state(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:

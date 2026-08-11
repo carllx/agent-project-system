@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from runtime.review_loop import (
+    apply_manual_review,
     apply_transport_review,
     initialize_loop_state,
     mark_reviewed_state_stale,
@@ -140,6 +142,11 @@ def main() -> int:
     ingest.add_argument("--transport-state", required=True, type=Path)
     ingest.add_argument("--current-artifact-id", required=True)
 
+    manual_ingest = subparsers.add_parser("ingest-manual-review")
+    manual_ingest.add_argument("--state", required=True, type=Path)
+    manual_ingest.add_argument("--response-file", required=True, type=Path)
+    manual_ingest.add_argument("--current-artifact-id", required=True)
+
     revision = subparsers.add_parser("revision-applied")
     revision.add_argument("--state", required=True, type=Path)
     revision.add_argument("--evidence", required=True)
@@ -217,6 +224,28 @@ def main() -> int:
                 "authoritative": False,
                 "outcome": result.outcome,
                 "reason": result.reason,
+                "workflow_state": state.get("WORKFLOW_STATE"),
+            })
+            return 2
+    elif args.command == "ingest-manual-review":
+        raw_response_bytes = args.response_file.read_bytes()
+        try:
+            raw_response = raw_response_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("Manual Relay response must be strict UTF-8") from error
+        result = apply_manual_review(
+            state,
+            raw_response,
+            args.current_artifact_id,
+            raw_response_path=str(args.response_file.resolve()),
+            raw_response_sha256=hashlib.sha256(raw_response_bytes).hexdigest(),
+        )
+        if not result.authoritative:
+            output({
+                "authoritative": False,
+                "outcome": result.outcome,
+                "reason": result.reason,
+                "review_source": "MANUAL_RELAY",
                 "workflow_state": state.get("WORKFLOW_STATE"),
             })
             return 2
