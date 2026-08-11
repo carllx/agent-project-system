@@ -53,7 +53,7 @@ Agent Project System
 - **Review Request ID:** `NONE`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
 - **Execution Packet state:** `READY / NOT_STARTED`
-- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002`
+- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -89,7 +89,7 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_READY / IN_PROGRESS`。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。第一次 Manual Relay Acceptance 在 R1 ingest 以 `CLEAN_HARD_STOP` 收口：普通 Markdown UI copy 把后续顶层字段缩进为 AC8 continuation，strict parser 正确返回 fields incomplete；没有 Browser Decision 被 ingest，也没有 Product parser failure。Renderer 现为 Manual 提供显式 copy-safe plain-text block presentation，而自动路径继续使用 raw wire。新的 `ACCEPTANCE-MANUAL-002` 已准备但尚未启动，Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_READY / IN_PROGRESS`。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。第一次 Manual run 因 copy-format corruption 在 R1 ingest clean hard stop。`ACCEPTANCE-MANUAL-002` 已真实完成 R1 authoritative `REVISE`、Required Action、R2 与第二次 authoritative `REVISE`，随后因 Browser criteria 要求尚未产生的 Final approval、R2 ingest provenance 和 Completion result 而 clean hard stop。canonical contract 现把可由 Browser 预先观察的 Gate A 与 Final response 返回后的 Gate B 分开；`ACCEPTANCE-MANUAL-003` 已准备但尚未启动，Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
 ### Manual Relay readiness
 
@@ -97,8 +97,10 @@ Agent Project System
 - **Available:** `initialize`、`submit-review`、`render-review-message`、`ingest-manual-review`、revision state transition 与 Completion Gate policy。
 - **Validation:** raw RR sentinel/field order、Work Item/Request/Round/ACF binding、Acceptance coverage、stale artifact、REVISE action 与 APPROVE authority 均 fail closed；成功 ingest 记录 `REVIEW_SOURCE=MANUAL_RELAY`，不会写入 automated Transport identity flags。
 - **Previous run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL` = `CLEAN_HARD_STOP / R1_MANUAL_RESPONSE_INGEST / MANUAL_RELAY_COPY_FORMAT_CORRUPTION`；`PRODUCT_PARSER_FAILURE=NO`，`BROWSER_DECISION_INGESTED=NO`，旧 runtime 不得复用。
+- **Previous run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002` = `CLEAN_HARD_STOP / R2_FINAL_BROWSER_REVIEW / FINAL_ACCEPTANCE_CRITERIA_CIRCULAR_DEPENDENCY`；Transport、Manual ingest 与 parser 均未失败，R1 和 R2 `REVISE` 均为 authoritative，旧 runtime 作为 Evidence 保留但不得继续。
 - **Copy-safe contract:** Manual renderer 使用 `BROWSER_RESPONSE_PRESENTATION=COPY_SAFE_PLAIN_TEXT_BLOCK`；用户只使用独立 block 的 copy control，raw wire 不含 fence，顶层字段保持 column zero，并建议在最后一项 Acceptance Evidence 与 `FINDINGS:` 之间留空行。Parser strictness 不变。
-- **Boundary:** `ACCEPTANCE-MANUAL-002` Packet 为 `READY_NOT_STARTED`；本轮没有启动新 Acceptance、控制 Browser、验证 automated Browser Transport、合并或关闭 Work Item。
+- **Two-gate contract:** Gate A 仅含 Browser 输出当前 Decision 前已经存在并可审查的事实；Gate B 在 Final response 保存/ingest 后，由现有 Product state、Manual provenance 与 Completion Gate 验证。Gate B 失败为 `POST_INGEST_COMPLETION_FAILURE`，不得倒改 Browser 历史 Decision。
+- **Boundary:** `ACCEPTANCE-MANUAL-003` Packet 为 `READY_NOT_STARTED`；本轮没有启动新 Acceptance、控制 Browser、验证 automated Browser Transport、合并或关闭 Work Item。
 
 ### Attempt 4 canonical closeout
 

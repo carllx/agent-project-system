@@ -121,6 +121,8 @@ Manual Relay 必须用 `render-review-message --response-presentation COPY_SAFE_
 
 成功的 Manual ingest 在 Review History 记录 `REVIEW_SOURCE=MANUAL_RELAY`、raw response path/hash、Request ID、reviewed artifact ID 和时间。它不得写入或推断 automated Transport identity、Conversation identity 或 same-Conversation machine verification。用户在同一个 Browser Lead Conversation 中完成两轮只属于用户维持的操作事实；Manual Relay 可验证功能闭环，但不能把 automated Browser Transport 标为已验证。
 
+Manual Final Acceptance 必须拆为两个有序 Gate，避免要求 Browser 在当前 Decision 产生前证明该 Decision 已被 ingest。Gate A 是 Browser Final Review，只包含当前 Decision 前已存在且 Browser 可审查的 artifact、R1 Decision/provenance、已执行 Required Action、R2 input/result 和 authority boundary；Browser `APPROVE` 要求 Gate A 全部 `MET`。Gate B 不是 `ACCEPTANCE_STATUS`，而是在 raw Final response 返回后由 Product 验证保存的 bytes、`MANUAL_REVIEW_INGESTED` provenance、匹配且 current 的 authoritative Final `APPROVE`、Completion Gate `COMPLETED` 和 truthful final report。Gate B 失败必须记录 `POST_INGEST_COMPLETION_FAILURE`，不得修改 Browser 的历史 Decision 或伪造 Gate A Evidence。
+
 Transport payload preflight 只把行首精确 `MESSAGE_ID: <current id>` 或 JSON outer packet 的同名顶层字段视为重复 Transport header。合法 RR 字段 `IN_REPLY_TO_MESSAGE_ID: <current id>` 不得因 substring overlap 被拒绝；该修正只收紧 header identity 判断，不改变 canonical receipt 或 same-Message-ID no-resend。
 
 为避免 Windows `.cmd` 路径中未验证的 payload metacharacter 风险，renderer 自身不生成尖括号或竖线占位语法；Request JSON 中的 Windows command metacharacter 使用 JSON Unicode escape 表示，identity 字段包含这些字符时直接拒绝。此 serializer 约束不等于已证明 `.cmd` root cause，也不授权修改冻结 Transport。

@@ -199,11 +199,24 @@ def validate_active_execution_packet(errors: list[str]) -> None:
                 "r1-browser-response.txt",
                 "r2-browser-response.txt",
                 "REVIEW_SOURCE=MANUAL_RELAY",
+                "GATE_A_BROWSER_FINAL_REVIEW",
+                "GATE_B_POST_INGEST_COMPLETION_VERIFICATION",
+                "R1_RAW_RESPONSE_SHA256",
+                "R2_INPUT.UNRESOLVED_USER_DECISION",
+                "POST_INGEST_4",
+                "POST_INGEST_COMPLETION_FAILURE",
                 "AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO",
                 "Exactly four user copy steps",
             )
             if any(token not in packet_text for token in required_manual_tokens):
                 errors.append("ready Manual Relay Packet is missing an executable relay/ingest requirement")
+            circular_browser_criteria = (
+                "R2 is relayed once and strictly ingested as authoritative `APPROVE`",
+                "both raw Browser responses are preserved byte-for-byte",
+                "Completion Gate reaches `COMPLETED` only after the current matching Final approval",
+            )
+            if any(token in packet_text for token in circular_browser_criteria):
+                errors.append("Manual Relay Browser criteria contain a post-ingest circular dependency")
     if packet.get("PACKET_TYPE") == "DIAGNOSTIC_BATCH_PACKET":
         batch_id = packet.get("BATCH_ID")
         if not batch_id or f"**Active Diagnostic Batch:** `{batch_id}`" not in current_text:
