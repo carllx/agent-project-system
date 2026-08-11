@@ -44,16 +44,16 @@ Agent Project System
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
 - `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。自动路径消费冻结 Transport 已做 identity verification 的 RR response；Manual 路径消费严格绑定且记录 `MANUAL_RELAY` provenance 的 raw RR wire。两者均不承担 Browser Transport 或 IDE lifecycle translation。
 
-## Active Work Item
+## Current Work Item Closeout
 
 - **ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001`
 - **Name:** Real Agent Review Loop MVP
-- **State:** `IN_PROGRESS`
-- **Workflow state:** `EXECUTING`
-- **Review Request ID:** `NONE`
+- **State:** `ACHIEVED`
+- **Workflow state:** `COMPLETED`
+- **Review Request ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003-R2-FINAL`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
-- **Execution Packet state:** `READY / NOT_STARTED`
-- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003`
+- **Execution Packet state:** `COMPLETED`
+- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003` (COMPLETED)
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -63,12 +63,12 @@ Agent Project System
 ### Acceptance Criteria
 
 1. 一个真实小任务由 Antigravity Execution Agent 在明确 Goal、Scope 与 Acceptance Criteria 下执行，不以模拟结果替代。
-2. Execution Agent 生成最小 ACF-0.1 Review Request 与可复查 Evidence，并通过冻结的 Product Transport 绑定到唯一 Browser Conversation。
+2. Execution Agent 生成最小 ACF-0.1 Review Request 与可复查 Evidence，并通过用户维持同一 Browser Lead Conversation 的 Manual Relay 路径保存、严格绑定和 ingest 两轮真实 Browser Decision；不声称 machine-verified Conversation identity。
 3. Browser Lead 返回与 Protocol、Work Item、Request ID 和 Review Kind 匹配的 `REVISE`，且含可执行 `REQUIRED_ACTIONS`。
 4. Browser Decision 被可靠带回 IDE execution state；Execution Agent 不自行批准，按 Required Actions 修订并使用新 Request ID 重新提交同类 Review。
 5. Browser Lead 对修订后的 Final Request 返回权威 `APPROVE`，全部 agreed Acceptance Criteria 为 `MET`，无 unresolved User Decision。
 6. Completion Gate 只在该匹配且未 stale 的 Final `APPROVE` 后允许 Work Item 完成；execution termination 不等于 Completion Authority。
-7. 两轮传输保持 identity、same-Message-ID no-resend 和 `DELIVERY_UNKNOWN != FAILED`；Transport 若未暴露直接 blocker则不修改。
+7. 两轮 Manual Relay 保持不同 Request ID、raw response provenance、exact binding 与不伪造 Transport identity；automated Browser Transport 验证明确保留为未完成边界。
 8. 真实 Loop Evidence、状态迁移、测试/检查与 Git artifact 可由 Browser Lead 独立复查，文档无重复 SSOT。
 
 ### Immediate execution boundary
@@ -89,18 +89,20 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_READY / IN_PROGRESS`。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。第一次 Manual run 因 copy-format corruption 在 R1 ingest clean hard stop。`ACCEPTANCE-MANUAL-002` 已真实完成 R1 authoritative `REVISE`、Required Action、R2 与第二次 authoritative `REVISE`，随后因 Browser criteria 要求尚未产生的 Final approval、R2 ingest provenance 和 Completion result 而 clean hard stop。canonical contract 现把可由 Browser 预先观察的 Gate A 与 Final response 返回后的 Gate B 分开；`ACCEPTANCE-MANUAL-003` 已准备但尚未启动，Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `MANUAL_RELAY_VALIDATED / COMPLETED`。`ACCEPTANCE-MANUAL-003` Product state 记录 R1 authoritative `REVISE`、`REQUIRED_ACTION_APPLIED`、R2 authoritative Final `APPROVE` 和两次 `MANUAL_REVIEW_INGESTED`。R2 reviewed artifact SHA-256 与 pending identity 一致；只读 Completion-Gate 复验返回 `ALLOW_STOP / work_item_completed=true`。这些 Product/runtime Evidence，而非实验 Agent 的治理声明，构成本 Work Item `ACHIEVED` 的依据。
 
 ### Manual Relay readiness
 
-- **MANUAL_RELAY_ACCEPTANCE_READY:** `YES`。
+- **MANUAL_RELAY_ACCEPTANCE_READY:** `NO`；run 已完成，不得重启。
 - **Available:** `initialize`、`submit-review`、`render-review-message`、`ingest-manual-review`、revision state transition 与 Completion Gate policy。
 - **Validation:** raw RR sentinel/field order、Work Item/Request/Round/ACF binding、Acceptance coverage、stale artifact、REVISE action 与 APPROVE authority 均 fail closed；成功 ingest 记录 `REVIEW_SOURCE=MANUAL_RELAY`，不会写入 automated Transport identity flags。
 - **Previous run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL` = `CLEAN_HARD_STOP / R1_MANUAL_RESPONSE_INGEST / MANUAL_RELAY_COPY_FORMAT_CORRUPTION`；`PRODUCT_PARSER_FAILURE=NO`，`BROWSER_DECISION_INGESTED=NO`，旧 runtime 不得复用。
 - **Previous run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002` = `CLEAN_HARD_STOP / R2_FINAL_BROWSER_REVIEW / FINAL_ACCEPTANCE_CRITERIA_CIRCULAR_DEPENDENCY`；Transport、Manual ingest 与 parser 均未失败，R1 和 R2 `REVISE` 均为 authoritative，旧 runtime 作为 Evidence 保留但不得继续。
 - **Copy-safe contract:** Manual renderer 使用 `BROWSER_RESPONSE_PRESENTATION=COPY_SAFE_PLAIN_TEXT_BLOCK`；用户只使用独立 block 的 copy control，raw wire 不含 fence，顶层字段保持 column zero，并建议在最后一项 Acceptance Evidence 与 `FINDINGS:` 之间留空行。Parser strictness 不变。
 - **Two-gate contract:** Gate A 仅含 Browser 输出当前 Decision 前已经存在并可审查的事实；Gate B 在 Final response 保存/ingest 后，由现有 Product state、Manual provenance 与 Completion Gate 验证。Gate B 失败为 `POST_INGEST_COMPLETION_FAILURE`，不得倒改 Browser 历史 Decision。
-- **Boundary:** `ACCEPTANCE-MANUAL-003` Packet 为 `READY_NOT_STARTED`；本轮没有启动新 Acceptance、控制 Browser、验证 automated Browser Transport、合并或关闭 Work Item。
+- **Manual-003 verified:** R1 raw SHA-256 `98cf130d5ba507d646d48e011577862ca7c32570453c95f5a65bd5e6114f00ad`；R1 artifact SHA-256 `e08d9ad1d1867d0982dcdae387b54c65e89c07d2688ec1c2d974d385d68ebc0f`；R2 raw SHA-256 `b9e2981a9738421d7e7025646a850b8b2818b22942726697491564b7e2d6e0c5`；R2/current artifact SHA-256 `62196d412c338988c9d1a51fb09746af61ad82c2c63a2d14453ba4268ea08dcf`。
+- **Final outcome:** `REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED=YES`；`MANUAL_RELAY_VALIDATED=YES`；`COLLABORATION_MVP_USABLE=YES`。
+- **Boundary:** `AUTOMATED_BROWSER_TRANSPORT_VALIDATED=NO`；`WINDOWS_OPENCLI_LONG_ARGV_BLOCKER=OPEN`。本 Work Item 只证明真实 Manual Relay 的 `Execute → Browser REVISE → ingest → Revision → Browser APPROVE → ingest → Completion`；不证明 automated Browser Transport 已完成。
 
 ### Attempt 4 canonical closeout
 
@@ -398,14 +400,14 @@ IDE Agent → Browser Review → Decision → IDE Execution → Evidence → Bro
 - `PRODUCT_CANDIDATE: CODEX-COMPLETION-GATE-ADAPTER`：为 Codex 寻找可验证的 runtime/lifecycle mechanism，并映射同一 IDE-independent Completion-Gate Contract；`NOT_STARTED`，不阻塞 Session Discovery。
 - `VALIDATION_CANDIDATE: OPENCLI_TIMEOUT_RECOVERY`：只观察未来合法 Product flow 自然出现的 timeout/navigation error；不为制造 timeout 增加 write、poll、sleep、网络干扰或 Browser manipulation。
 - `DECISION_CANDIDATE: ANTIGRAVITY_HOOK_DEPLOYMENT`：另行裁决 Global Hook 与 workspace-local Hook 的产品部署形式。
-- `NEXT_REQUIREMENT_CANDIDATE: ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001`：边界见下节；等待当前真实 Agent Review Loop E2E 获 Browser Final `APPROVE` 后再决定是否激活。
-- 以上候选均未启动为并行 Active Work Item；当前唯一 Active Work Item 仍为 `REAL-AGENT-REVIEW-LOOP-MVP-001`。
+- `NEXT_REQUIREMENT_CANDIDATE: ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001`：边界见下节；真实 Agent Review Loop 的完成前置条件已满足，但仍须 Browser Lead 另行决定是否激活。
+- 以上候选均保持 `NOT_ACTIVE`；本次收口没有启动新的 Active Work Item。
 
 ### Next Requirement Candidate: Antigravity Bounded Autonomous Experiment Batch MVP
 
 - **ID:** `ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001`。
 - **State:** `NEXT_REQUIREMENT_CANDIDATE / NOT_ACTIVE`。
-- **Activation gate:** `REAL-AGENT-REVIEW-LOOP-MVP-001` 必须先完成真实 `Execute → Final Review → REVISE → Revision → Final Review → APPROVE`，并取得 Browser Final `APPROVE`；之后仅由 Browser Lead 决定是否激活。本候选不改变当前 Work Item 的 Goal、Acceptance Criteria、Execution Packet 或 Workflow State。
+- **Activation gate:** `REAL-AGENT-REVIEW-LOOP-MVP-001` 的真实 `Execute → Final Review → REVISE → Revision → Final Review → APPROVE` 前置条件已满足；本候选仍为 `NOT_ACTIVE`，只有 Browser Lead 后续明确决定才可激活。
 - **Problem:** 当前 Lab 常以单个小实验往返 Browser，启动与协调成本过高。候选目标是在一个显式有界的 Experiment Batch 内，让 Antigravity Experiment Coordinator 连续选择并执行若干可归因实验，最后一次性向 Browser Lead 汇报。
 - **First-version proof target:** 一个 Antigravity Experiment Coordinator 能在一个 bounded Batch 内自主完成若干有因果可归属的实验，保留完整 Evidence chain；不以此证明通用 orchestration 或替代 Browser supervision。
 

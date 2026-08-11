@@ -12,7 +12,7 @@
 | `docs/references/real-agent-review-loop-mvp-001-attempt-4.md` | Attempt 4 的 canonical Execution Packet 与 clean-fail closeout | 审计 `REAL-AGENT-REVIEW-LOOP-MVP-001` Attempt 4 时 | Completed / Clean fail | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-batch-001.md` | bounded Diagnostic Batch 的历史 self-contained Execution Contract | 审计已完成的 Diagnostic Batch 时 | Completed / Superseded | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-acceptance-001.md` | Option-C 修复后的 canonical multi-turn Real Agent Review Loop Acceptance Contract | 启动或审计下一次真实 Acceptance Run 时 | Completed / Hard Stop | 2026-08-11 |
-| `docs/references/real-agent-review-loop-mvp-001-acceptance-manual.md` | Manual Relay Acceptance 的 self-contained 执行契约与 raw response ingest 路径 | 启动或审计 Manual Relay Acceptance Run 时 | Ready / Not started | 2026-08-11 |
+| `docs/references/real-agent-review-loop-mvp-001-acceptance-manual.md` | Manual Relay Acceptance 的 self-contained 执行契约、raw response ingest 与最终 Evidence closeout | 审计已完成 Manual Relay Acceptance Run 时 | Completed / Passed | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-acceptance-002.md` | Option-C 修复后的 canonical multi-turn Real Agent Review Loop Acceptance Contract (Retry 2) | 启动或审计下一次真实 Acceptance Run 时 | Completed / Hard Stop | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-acceptance-003.md` | Option-C 修复后的 canonical multi-turn Real Agent Review Loop Acceptance Contract (Retry 3) | 启动或审计下一次真实 Acceptance Run 时 | Invalid / Protocol Violation | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-evidence-matrix.schema.json` | Diagnostic Batch Evidence Matrix 的机器可读结构约束 | 创建或验证 Batch Evidence Matrix JSON 时 | Active | 2026-08-11 |

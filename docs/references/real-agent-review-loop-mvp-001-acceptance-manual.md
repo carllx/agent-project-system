@@ -2,9 +2,9 @@
 
 PACKET_TYPE: REAL_AGENT_REVIEW_LOOP_MANUAL_RELAY_PACKET
 
-PACKET_STATE: READY_NOT_STARTED
+PACKET_STATE: COMPLETED
 
-MANUAL_RELAY_ACCEPTANCE_READY: YES
+MANUAL_RELAY_ACCEPTANCE_READY: NO
 
 WORK_ITEM_ID: REAL-AGENT-REVIEW-LOOP-MVP-001
 
@@ -23,6 +23,31 @@ RUNTIME_ROOT: %TEMP%\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\accepta
 ROUND_1_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003-R1-FINAL
 
 ROUND_2_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003-R2-FINAL
+
+## Manual-003 final closeout
+
+```text
+RUN_RESULT: PASS
+WORKFLOW_STATE: COMPLETED
+ROUND_1_DECISION: REVISE
+ROUND_1_AUTHORITATIVE: YES
+ROUND_1_RAW_RESPONSE_SHA256: 98cf130d5ba507d646d48e011577862ca7c32570453c95f5a65bd5e6114f00ad
+ROUND_1_REVIEWED_ARTIFACT_SHA256: e08d9ad1d1867d0982dcdae387b54c65e89c07d2688ec1c2d974d385d68ebc0f
+REQUIRED_ACTION_APPLIED: YES
+ROUND_2_DECISION: APPROVE
+ROUND_2_AUTHORITATIVE: YES
+ROUND_2_RAW_RESPONSE_SHA256: b9e2981a9738421d7e7025646a850b8b2818b22942726697491564b7e2d6e0c5
+ROUND_2_REVIEWED_ARTIFACT_SHA256: 62196d412c338988c9d1a51fb09746af61ad82c2c63a2d14453ba4268ea08dcf
+GATE_B_POST_INGEST_COMPLETION_VERIFICATION: PASS
+COMPLETION_GATE: COMPLETED
+COLLABORATION_MVP_USABLE: YES
+REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED: YES
+MANUAL_RELAY_VALIDATED: YES
+AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO
+WINDOWS_OPENCLI_LONG_ARGV_BLOCKER: OPEN
+```
+
+These results were independently reconciled from the preserved Manual-003 raw response files, Product state/history, reviewed artifact hashes, authoritative Final Decision, and a read-only Completion-Gate evaluation. The Execution Agent's later governance edit was not used as Completion Authority. This Packet is historical and must not be started again.
 
 ## Previous run closeout
 
@@ -57,11 +82,11 @@ BROWSER_DECISION_INGESTED: R1 YES; R2 AUTHORITATIVE REVISE
 
 Manual-002 proved the real path through authoritative R1 `REVISE`, applied Required Action, R2 generation, same user-maintained Browser Conversation, and authoritative R2 `REVISE`. It stopped because its Browser criteria required the not-yet-produced Final approval, R2 ingest provenance, and Completion Gate result as preconditions for that same approval. Preserve its complete runtime as valid Evidence; never mutate or resume it.
 
-## Authority and start gate
+## Historical authority and start gate
 
-This Packet is prepared, not started. A fresh Execution Agent may begin only after the user or Browser Lead explicitly starts this Acceptance Run. Read `AGENTS.md`, `README.md`, `docs/index.md`, `docs/current.md`, the active pointer, this Packet, and the applicable ACF/RR Specs. Historical conversations and Agent memory are not execution authority.
+This Packet is completed and must not be started again. The remaining sections preserve the exact executed contract for audit. At the original run start, the Execution Agent was required to read `AGENTS.md`, `README.md`, `docs/index.md`, `docs/current.md`, the active pointer, this Packet, and the applicable ACF/RR Specs; historical conversations and Agent memory were not execution authority.
 
-Before creating runtime artifacts:
+Before creating runtime artifacts, that run was required to:
 
 1. Confirm this is the active Packet and its state is `READY_NOT_STARTED`.
 2. Confirm branch `work/real-agent-review-loop-mvp-001`, a clean worktree, local HEAD equal to the remote tracking ref, and `REQUIRED_PRODUCT_HEAD` an ancestor of HEAD.

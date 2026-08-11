@@ -140,7 +140,7 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         errors.append("active Execution Packet Work Item does not match its pointer")
     if packet.get("REQUIRED_PRODUCT_HEAD") != pointer["REQUIRED_PRODUCT_HEAD"]:
         errors.append("active Execution Packet required Product head does not match its pointer")
-    allowed_packet_states = {"READY_NOT_STARTED", "BLOCKED_NOT_READY"}
+    allowed_packet_states = {"READY_NOT_STARTED", "BLOCKED_NOT_READY", "COMPLETED"}
     if (
         pointer["PACKET_STATE"] not in allowed_packet_states
         or packet.get("PACKET_STATE") != pointer["PACKET_STATE"]
@@ -160,6 +160,7 @@ def validate_active_execution_packet(errors: list[str]) -> None:
     current_packet_state = {
         "READY_NOT_STARTED": "**Execution Packet state:** `READY / NOT_STARTED`",
         "BLOCKED_NOT_READY": "**Execution Packet state:** `BLOCKED / NOT READY`",
+        "COMPLETED": "**Execution Packet state:** `COMPLETED`",
     }[pointer["PACKET_STATE"]]
     if current_packet_state not in current_text:
         errors.append("docs/current.md does not record the active Packet state")
@@ -187,6 +188,20 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         readiness = packet.get("MANUAL_RELAY_ACCEPTANCE_READY")
         if pointer["PACKET_STATE"] == "BLOCKED_NOT_READY" and readiness != "NO":
             errors.append("blocked Manual Relay Packet must record readiness NO")
+        if pointer["PACKET_STATE"] == "COMPLETED" and readiness != "NO":
+            errors.append("completed Manual Relay Packet must record readiness NO")
+        if pointer["PACKET_STATE"] == "COMPLETED":
+            required_closeout_tokens = (
+                "RUN_RESULT: PASS",
+                "WORKFLOW_STATE: COMPLETED",
+                "COMPLETION_GATE: COMPLETED",
+                "COLLABORATION_MVP_USABLE: YES",
+                "MANUAL_RELAY_VALIDATED: YES",
+                "AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO",
+                "WINDOWS_OPENCLI_LONG_ARGV_BLOCKER: OPEN",
+            )
+            if any(token not in packet_text for token in required_closeout_tokens):
+                errors.append("completed Manual Relay Packet is missing final closeout evidence")
         if pointer["PACKET_STATE"] == "READY_NOT_STARTED":
             if readiness != "YES":
                 errors.append("ready Manual Relay Packet must record readiness YES")
