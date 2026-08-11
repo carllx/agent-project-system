@@ -126,6 +126,52 @@ def test_opencli_transport_reexports_protocol_api() -> None:
         assert Path(exported.__code__.co_filename).resolve() == EXPERIMENT_PROTOCOL.resolve()
 
 
+def test_direct_node_opencli_resolves_from_npm_shim_and_package_metadata() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-opencli-shim-test-"))
+    package = root / "node_modules" / "@example" / "opencli"
+    entry = package / "dist" / "src" / "main.js"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("// fixture\n", encoding="utf-8")
+    (package / "package.json").write_text(
+        json.dumps({
+            "name": "@example/opencli",
+            "bin": {"opencli": "dist/src/main.js"},
+        }),
+        encoding="utf-8",
+    )
+    shim = root / "opencli.cmd"
+    shim.write_text(
+        r'@"node" "%~dp0%\node_modules\@example\opencli\dist\src\main.js" %*',
+        encoding="utf-8",
+    )
+    node = root / "node.exe"
+    node.write_bytes(b"")
+
+    invocation = TRANSPORT_MODULE.direct_node_opencli_from_npm_shim(shim, str(node))
+
+    assert invocation == [str(node), str(entry.resolve())]
+
+
+def test_direct_node_opencli_rejects_shim_package_bin_mismatch() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-opencli-shim-mismatch-test-"))
+    package = root / "node_modules" / "@example" / "opencli"
+    package.mkdir(parents=True)
+    (package / "package.json").write_text(
+        json.dumps({
+            "name": "@example/opencli",
+            "bin": {"opencli": "dist/src/other.js"},
+        }),
+        encoding="utf-8",
+    )
+    shim = root / "opencli.cmd"
+    shim.write_text(
+        r'@"node" "%~dp0%\node_modules\@example\opencli\dist\src\main.js" %*',
+        encoding="utf-8",
+    )
+
+    assert TRANSPORT_MODULE.direct_node_opencli_from_npm_shim(shim, "node") is None
+
+
 def test_direct_opencli_transport_help_still_works() -> None:
     completed = subprocess.run(
         [sys.executable, str(TRANSPORT), "--help"],

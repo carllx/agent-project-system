@@ -94,6 +94,7 @@ Execution / Experiment Agent MUST NOT:
 - change docs/index.md
 - repair Product
 - create retry run
+- Browser / Transport 实验前读取 `docs/references/browser-transport-failure-ledger.md`；未改变 `RETRY_ONLY_IF` 变量时不得重复命中 `DO_NOT_REPEAT_WHEN` 的路径，也不得把 `OBSERVED` / `INFERENCE` 升级为 `PROVEN`。
 
 When a blocker occurs:
 STOP → Evidence → Project Agent → Browser Lead decision

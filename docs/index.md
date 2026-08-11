@@ -17,6 +17,7 @@
 | `docs/references/real-agent-review-loop-mvp-001-acceptance-003.md` | Option-C 修复后的 canonical multi-turn Real Agent Review Loop Acceptance Contract (Retry 3) | 启动或审计下一次真实 Acceptance Run 时 | Invalid / Protocol Violation | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-evidence-matrix.schema.json` | Diagnostic Batch Evidence Matrix 的机器可读结构约束 | 创建或验证 Batch Evidence Matrix JSON 时 | Active | 2026-08-11 |
 | `docs/references/windows-opencli-long-argv-001.md` | Windows OpenCLI 长命令行参数限制 Blocker 记录 | 修复 Transport blocker 时 | Debt | 2026-08-11 |
+| `docs/references/browser-transport-failure-ledger.md` | Browser Transport 已观察/推断/证明路径的防重复 Evidence Ledger | 设计或执行 Browser/OpenCLI Transport 实验前 | Active | 2026-08-11 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision、Completion Authority 与 Review Artifact access path | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
 | `docs/specs/antigravity-completion-gate-adapter.md` | Antigravity Completion-Gate Adapter 的状态映射、Contract、bounded continuation 与失败语义 | 设计、实现或验证 Antigravity execution termination gate 时 | Active | 2026-08-09 |

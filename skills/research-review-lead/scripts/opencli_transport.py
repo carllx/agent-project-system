@@ -208,10 +208,74 @@ def save_raw(state: dict[str, Any], state_path: Path, label: str, result: dict[s
     return str(path)
 
 
+def direct_node_opencli_from_npm_shim(
+    shim_path: Path, node_executable: str | None = None,
+) -> list[str] | None:
+    """Resolve an npm OpenCLI shim to Node + its package-declared bin entry."""
+    try:
+        shim_text = shim_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    match = re.search(
+        r"node_modules[\\/](?P<package>(?:@[^\\/\s\"']+[\\/])?[^\\/\s\"']+)"
+        r"[\\/](?P<entry>[^\"'\r\n]*?\.js)",
+        shim_text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    package_parts = match.group("package").replace("\\", "/").split("/")
+    package_root = shim_path.parent.joinpath("node_modules", *package_parts)
+    package_json_path = package_root / "package.json"
+    try:
+        package_data = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    declared_name = str(package_data.get("name") or "")
+    if declared_name != "/".join(package_parts):
+        return None
+    declared_bin = package_data.get("bin")
+    if isinstance(declared_bin, dict):
+        declared_entry = declared_bin.get("opencli")
+    elif isinstance(declared_bin, str):
+        declared_entry = declared_bin
+    else:
+        declared_entry = None
+    if not isinstance(declared_entry, str) or not declared_entry.strip():
+        return None
+    entry_path = (package_root / declared_entry).resolve()
+    shim_entry_path = (
+        package_root / Path(match.group("entry").replace("\\", "/"))
+    ).resolve()
+    try:
+        entry_path.relative_to(package_root.resolve())
+    except ValueError:
+        return None
+    if entry_path != shim_entry_path or not entry_path.is_file():
+        return None
+    if node_executable is None:
+        bundled_node = shim_path.parent / "node.exe"
+        node_executable = (
+            str(bundled_node)
+            if bundled_node.is_file()
+            else shutil.which("node.exe") or shutil.which("node")
+        )
+    if not node_executable:
+        return None
+    return [node_executable, str(entry_path)]
+
+
 def find_opencli() -> list[str]:
     test_executable = os.environ.get("OPENCLI_TRANSPORT_EXECUTABLE")
     if test_executable:
         return [sys.executable, test_executable]
+    if os.name == "nt":
+        for candidate in ("opencli.cmd", "opencli.ps1"):
+            found = shutil.which(candidate)
+            if found:
+                direct_node = direct_node_opencli_from_npm_shim(Path(found))
+                if direct_node:
+                    return direct_node
     for candidate in ("opencli.cmd", "opencli.exe", "opencli"):
         found = shutil.which(candidate)
         if found:

@@ -154,6 +154,7 @@ NOT_SENT
 - `NO_EXTRA_CONVERSATION_CREATED`：缺少 bounded post-write history delta，不能证明两次 write 没有副作用创建额外 Conversation。
 - `TIMEOUT_RECOVERY`：R2 没有自然 timeout/navigation error，不能验证 timeout 下 ask/report identity、status、history 与 exact detail 的稳定关系。
 - Product Wrapper 已对齐 first `send`、marker verification、delivery-to-target promotion 与 subsequent explicit target mechanism；repository source `0.4.18` 已真实完成两消息同 Conversation Product Browser E2E。
+- Windows Product invocation 优先从已安装 npm shim 与相邻 `package.json` 的 `bin.opencli` 解析 package-relative entrypoint，再以系统可解析的 Node 直接执行。该机制复用 `AG-BROWSER-AUTONOMOUS-MULTIPATH-BATCH-001` clean reproduction 的 Direct Node 路径，不把本机绝对安装路径写成 canonical path，也不改变更上层的 Conversation identity、delivery 或 response semantics。无法同时验证 shim、package identity、declared bin 与实际文件时不得猜测 entrypoint。
 
 前两项不能从现有 Evidence 继续推断；不得为了 Handoff 开新实验或故意制造 timeout。第三项是当前 Product implementation 工作，不由 Lab 直接修改。
 
