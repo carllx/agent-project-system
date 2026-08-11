@@ -192,6 +192,8 @@ def validate_active_execution_packet(errors: list[str]) -> None:
                 errors.append("ready Manual Relay Packet must record readiness YES")
             required_manual_tokens = (
                 "ingest-manual-review",
+                "--response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK",
+                "BROWSER_RESPONSE_PRESENTATION: COPY_SAFE_PLAIN_TEXT_BLOCK",
                 "R1_BROWSER_RELAY_PACKET",
                 "R2_BROWSER_RELAY_PACKET",
                 "r1-browser-response.txt",

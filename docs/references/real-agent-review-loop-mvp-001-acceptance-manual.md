@@ -8,19 +8,37 @@ MANUAL_RELAY_ACCEPTANCE_READY: YES
 
 WORK_ITEM_ID: REAL-AGENT-REVIEW-LOOP-MVP-001
 
-ACCEPTANCE_RUN_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL
+ACCEPTANCE_RUN_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002
 
 TRANSPORT_MODE: MANUAL_RELAY
 
-REQUIRED_PRODUCT_HEAD: 0f496665ebcd85154cac6ffc83b9e80b62a3e31f
+BROWSER_RESPONSE_PRESENTATION: COPY_SAFE_PLAIN_TEXT_BLOCK
+
+REQUIRED_PRODUCT_HEAD: ed616125fc0e7ff35464dd4dbe1b67e1f5c3d921
 
 PRODUCT_ROOT: E:\PROJECTS\agent-project-system
 
-RUNTIME_ROOT: %TEMP%\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual
+RUNTIME_ROOT: %TEMP%\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002
 
-ROUND_1_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R1-FINAL
+ROUND_1_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002-R1-FINAL
 
-ROUND_2_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R2-FINAL
+ROUND_2_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002-R2-FINAL
+
+## Previous run closeout
+
+The first Manual Relay Acceptance is closed and must never be resumed:
+
+```text
+RESULT: CLEAN_HARD_STOP
+PHASE: R1_MANUAL_RESPONSE_INGEST
+PRODUCT_PARSER_FAILURE: NO
+BROWSER_DECISION_INGESTED: NO
+CAUSE: MANUAL_RELAY_COPY_FORMAT_CORRUPTION
+STRICT_RR_PARSER_BEHAVIOR: CORRECT
+PARSER_RELAXATION_AUTHORIZED: NO
+```
+
+The copied response had later top-level fields indented as continuation content beneath the final Acceptance Status item. The strict parser correctly returned `RR response fields are incomplete`. Preserve that failed runtime as incident Evidence; do not reuse its state, raw response, Request IDs, or artifacts.
 
 ## Authority and start gate
 
@@ -79,7 +97,7 @@ final-report.txt
 Create `contract.json` with `PROTOCOL_VERSION=ACF-0.1`, this exact Work Item ID, the Goal above, and the eight exact criteria. Initialize once:
 
 ```powershell
-python scripts/acf_review_loop.py initialize --contract "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\contract.json" --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json"
+python scripts/acf_review_loop.py initialize --contract "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\contract.json" --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json"
 ```
 
 Execute `runtime.completion_gate.base_state()` and `evaluate_completion_gate()` from repository source. Save the exact input and result as immutable R1 JSON and calculate its lowercase SHA-256. Create `request-r1.json` with the exact Goal/criteria snapshot and:
@@ -87,7 +105,7 @@ Execute `runtime.completion_gate.base_state()` and `evaluate_completion_gate()` 
 ```text
 PROTOCOL_VERSION: ACF-0.1
 WORK_ITEM_ID: REAL-AGENT-REVIEW-LOOP-MVP-001
-REVIEW_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R1-FINAL
+REVIEW_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002-R1-FINAL
 REVIEW_KIND: FINAL
 REVIEW_TRIGGER: READY_FOR_COMPLETION
 CURRENT_TASK: Independently review the R1 Completion-Gate observation and Manual Relay loop evidence.
@@ -99,8 +117,8 @@ EXECUTION_ASSESSMENT.CLAIMED_STATUS: CLAIM_READY_FOR_REVIEW
 Set `$r1Sha256` to the computed R1 artifact SHA-256. Submit and render R1:
 
 ```powershell
-python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\request-r1.json" --artifact-id $r1Sha256
-python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r1-browser-relay-packet.txt"
+python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\request-r1.json" --artifact-id $r1Sha256
+python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\r1-browser-relay-packet.txt" --response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK
 ```
 
 ## Round 1 user relay and ingest
@@ -110,13 +128,14 @@ Stop and output exactly this instruction followed by the complete, unedited `R1_
 ```text
 USER_ACTION_REQUIRED:
 把下面完整的 R1_BROWSER_RELAY_PACKET 复制到 Browser Lead。
-然后把 Browser Lead 返回的完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
+Browser Lead 必须把机器 wire 放在一个独立的 copyable plain-text block 中。
+请使用该 block 自带的复制按钮，再把完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
 ```
 
-The user performs two copy steps: Packet to Browser, then raw response back. Save the returned envelope byte-for-byte as `r1-browser-response.txt`; do not edit, summarize, wrap, or reconstruct it. Recompute the unchanged R1 hash and ingest:
+The user performs two copy steps: Packet to Browser, then the content obtained from the Browser block's copy control back to the Execution Agent. Do not select ordinary rendered Markdown prose. The copied content must begin with `RR_REVIEW_BEGIN`, end with `RR_REVIEW_END`, contain no fence delimiters, and preserve every top-level field at column zero. Browser should leave one empty line after the final Acceptance Status Evidence before column-zero `FINDINGS:`; this separator is presentation-safe and does not relax parser semantics. Save the returned envelope byte-for-byte as `r1-browser-response.txt`; do not edit, dedent, summarize, wrap, or reconstruct it. Recompute the unchanged R1 hash and ingest:
 
 ```powershell
-python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r1-browser-response.txt" --current-artifact-id $r1Sha256
+python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\r1-browser-response.txt" --current-artifact-id $r1Sha256
 ```
 
 Continue only if Product state proves `REVISION_REQUIRED`, authoritative `REVISE`, nonempty in-scope `REQUIRED_ACTIONS`, and `REVIEW_SOURCE=MANUAL_RELAY`. Any parser, binding, stale, coverage, blocker, or provenance failure is a hard stop. A paraphrase or IDE permission approval is not a Browser Decision.
@@ -126,14 +145,14 @@ Continue only if Product state proves `REVISION_REQUIRED`, authoritative `REVISE
 Apply exactly the persisted Required Actions. Preserve R1. Create and hash immutable R2 evidence. Set `$revisionEvidence` to a nonempty string identifying the applied action and immutable R2 artifact, then record it:
 
 ```powershell
-python scripts/acf_review_loop.py revision-applied --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --evidence $revisionEvidence
+python scripts/acf_review_loop.py revision-applied --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --evidence $revisionEvidence
 ```
 
 Create `request-r2.json` with the same Goal and criteria, `FINAL`, `READY_FOR_COMPLETION`, `ROUND_2_REQUEST_ID`, the exact R1 Decision binding, the applied-action evidence, and both artifact paths/hashes. Set `$r2Sha256` to the computed R2 artifact SHA-256, then submit and render:
 
 ```powershell
-python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\request-r2.json" --artifact-id $r2Sha256
-python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r2-browser-relay-packet.txt"
+python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\request-r2.json" --artifact-id $r2Sha256
+python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\r2-browser-relay-packet.txt" --response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK
 ```
 
 Stop and output exactly this instruction followed by the complete, unedited `R2_BROWSER_RELAY_PACKET` file:
@@ -141,13 +160,14 @@ Stop and output exactly this instruction followed by the complete, unedited `R2_
 ```text
 USER_ACTION_REQUIRED:
 把下面完整的 R2_BROWSER_RELAY_PACKET 复制到 Round 1 使用的同一个 Browser Lead Conversation。
-然后把 Browser Lead 返回的完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
+Browser Lead 必须把机器 wire 放在一个独立的 copyable plain-text block 中。
+请使用该 block 自带的复制按钮，再把完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
 ```
 
-The user performs two more copy steps. Save the complete response byte-for-byte as `r2-browser-response.txt`; recompute the unchanged R2 hash and ingest:
+The user performs two more copy steps using the Browser block's copy control. Apply the same column-zero, no-fence, blank-line-before-`FINDINGS:` presentation rule. Save the complete response byte-for-byte as `r2-browser-response.txt`; never repair formatting locally. Recompute the unchanged R2 hash and ingest:
 
 ```powershell
-python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r2-browser-response.txt" --current-artifact-id $r2Sha256
+python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual-002\r2-browser-response.txt" --current-artifact-id $r2Sha256
 ```
 
 Only authoritative `APPROVE`, exact all-`MET` coverage with evidence, no blockers, no Required Actions, no unresolved User Decision, current artifact identity, and Completion Gate `COMPLETED` pass.

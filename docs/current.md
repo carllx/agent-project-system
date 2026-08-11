@@ -42,7 +42,7 @@ Agent Project System
 - `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + Reliable Product Transport MVP-0 + 确定性 bootstrap + manual-export fallback），VERSION `0.4.18`。
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
-- `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。两者只消费冻结 Transport 已做 identity verification 的 RR response，不承担 Browser Transport 或 IDE lifecycle translation。
+- `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。自动路径消费冻结 Transport 已做 identity verification 的 RR response；Manual 路径消费严格绑定且记录 `MANUAL_RELAY` provenance 的 raw RR wire。两者均不承担 Browser Transport 或 IDE lifecycle translation。
 
 ## Active Work Item
 
@@ -53,7 +53,7 @@ Agent Project System
 - **Review Request ID:** `NONE`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
 - **Execution Packet state:** `READY / NOT_STARTED`
-- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL`
+- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-002`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -89,14 +89,16 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_READY / IN_PROGRESS`。Attempt 2 与 Attempt 3 因既有 protocol/authority violations 无效；Attempt 4 以 clean `DELIVERY_UNKNOWN` 收口。Diagnostic Batch 已把 H6 证明为根因，最小 Option-C 修复已通过本地回归。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。Product 现已提供 fail-closed `ingest-manual-review`：保存 raw Browser response provenance，严格解析并绑定 RR/ACF identity，再把唯一 Decision 交给既有 Review Loop 与 Completion Gate。Manual Relay Acceptance 已准备但尚未启动，Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_READY / IN_PROGRESS`。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。第一次 Manual Relay Acceptance 在 R1 ingest 以 `CLEAN_HARD_STOP` 收口：普通 Markdown UI copy 把后续顶层字段缩进为 AC8 continuation，strict parser 正确返回 fields incomplete；没有 Browser Decision 被 ingest，也没有 Product parser failure。Renderer 现为 Manual 提供显式 copy-safe plain-text block presentation，而自动路径继续使用 raw wire。新的 `ACCEPTANCE-MANUAL-002` 已准备但尚未启动，Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
 ### Manual Relay readiness
 
 - **MANUAL_RELAY_ACCEPTANCE_READY:** `YES`。
 - **Available:** `initialize`、`submit-review`、`render-review-message`、`ingest-manual-review`、revision state transition 与 Completion Gate policy。
 - **Validation:** raw RR sentinel/field order、Work Item/Request/Round/ACF binding、Acceptance coverage、stale artifact、REVISE action 与 APPROVE authority 均 fail closed；成功 ingest 记录 `REVIEW_SOURCE=MANUAL_RELAY`，不会写入 automated Transport identity flags。
-- **Boundary:** Packet 为 `READY_NOT_STARTED`；本轮只完成 Product 与治理准备，没有启动 Acceptance、控制 Browser、验证 automated Browser Transport、合并或关闭 Work Item。
+- **Previous run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL` = `CLEAN_HARD_STOP / R1_MANUAL_RESPONSE_INGEST / MANUAL_RELAY_COPY_FORMAT_CORRUPTION`；`PRODUCT_PARSER_FAILURE=NO`，`BROWSER_DECISION_INGESTED=NO`，旧 runtime 不得复用。
+- **Copy-safe contract:** Manual renderer 使用 `BROWSER_RESPONSE_PRESENTATION=COPY_SAFE_PLAIN_TEXT_BLOCK`；用户只使用独立 block 的 copy control，raw wire 不含 fence，顶层字段保持 column zero，并建议在最后一项 Acceptance Evidence 与 `FINDINGS:` 之间留空行。Parser strictness 不变。
+- **Boundary:** `ACCEPTANCE-MANUAL-002` Packet 为 `READY_NOT_STARTED`；本轮没有启动新 Acceptance、控制 Browser、验证 automated Browser Transport、合并或关闭 Work Item。
 
 ### Attempt 4 canonical closeout
 

@@ -117,6 +117,8 @@ submit-review
 
 `ingest-manual-review` 要求严格 UTF-8、精确且唯一的 RR sentinels、完整有序的顶层字段、正确 Round，以及与 pending Request 完全匹配的 Work Item、Request ID、Review Kind、ACF binding、Acceptance coverage 和 reviewed artifact identity。权威 `REVISE` 仍须含可执行 Required Actions；权威 Final `APPROVE` 仍须全部 criteria 为 `MET` 且无 blocker、Required Actions 或 unresolved User Decision。任何缺失、重复、错绑或 stale 都保持 pending 且返回 `NON_AUTHORITATIVE`。
 
+Manual Relay 必须用 `render-review-message --response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK` 生成 Browser contract。Browser 在普通 Markdown prose 之外提供唯一独立、可复制的 plain-text block；用户只使用该 block 的 copy control，保存的 raw 内容不含 fence delimiters，第一/最后非空行仍为 RR sentinels，所有顶层字段仍从 column zero 开始。最后一项 Acceptance Evidence 与 `FINDINGS:` 之间建议保留一个空行，避免 UI 把后续字段渲染为列表 continuation。这个空行只是 presentation boundary，不授权 parser 去缩进、猜测或修复 malformed wire。自动路径仍使用默认 `RAW_WIRE` presentation，既有 Transport contract 不变。
+
 成功的 Manual ingest 在 Review History 记录 `REVIEW_SOURCE=MANUAL_RELAY`、raw response path/hash、Request ID、reviewed artifact ID 和时间。它不得写入或推断 automated Transport identity、Conversation identity 或 same-Conversation machine verification。用户在同一个 Browser Lead Conversation 中完成两轮只属于用户维持的操作事实；Manual Relay 可验证功能闭环，但不能把 automated Browser Transport 标为已验证。
 
 Transport payload preflight 只把行首精确 `MESSAGE_ID: <current id>` 或 JSON outer packet 的同名顶层字段视为重复 Transport header。合法 RR 字段 `IN_REPLY_TO_MESSAGE_ID: <current id>` 不得因 substring overlap 被拒绝；该修正只收紧 header identity 判断，不改变 canonical receipt 或 same-Message-ID no-resend。
