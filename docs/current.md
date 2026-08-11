@@ -90,7 +90,7 @@ Agent Project System
 
 ### First real E2E task
 
-真实任务限定为给 `scripts/test_antigravity_completion_gate.py` 增加 unresolved User Decision regression。Round 1 只覆盖布尔 `True` 会阻止 `COMPLETED`，把字符串 `UNVERIFIED` case 明确留为缺失 Evidence，从而提交一个真实但不满足全部 agreed criteria 的 Final Request；Browser 必须基于实际 Diff/Evidence 独立决定，Product 不模拟 `REVISE`。收到匹配 `REVISE` 后，Antigravity Execution Agent 补齐 `UNVERIFIED` case、运行测试并用新 Final Request ID 再审；只有匹配且 current 的 Browser `APPROVE` 可以经 Completion Gate 完成。该任务只修改一个永久 regression 文件，不修改 Policy、Protocol、Hook deployment 或冻结 Transport。
+Attempt 4 的真实小任务不再修改 Product source。Execution Agent 只在 repo 外 Attempt Runtime 生成可复查的 Completion-Gate observation artifact：Round 1 记录 `UNRESOLVED_USER_DECISION=true` 的真实 Policy 结果，并把字符串 `UNVERIFIED` case 明确留为缺失 Evidence；Browser 必须基于实际 artifact/Evidence 独立决定，Product 不模拟 `REVISE`。收到匹配 `REVISE` 后，Execution Agent 只按 `REQUIRED_ACTIONS` 补充同一 Runtime artifact、以新 artifact SHA 和新 Final Request ID 再审；只有匹配且 current 的 Browser `APPROVE` 可以经 Completion Gate 完成。Attempt Agent 不得修改任何 repo 文件、Product source、Transport、Loop/Transport state 或 canonical artifact；Product command failure 必须立即停止。
 
 ### Local integration validation
 
