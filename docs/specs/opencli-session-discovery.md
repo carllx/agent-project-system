@@ -88,7 +88,7 @@ PERSISTED_TARGET_OR_SEND_OBSERVATION
 → ONE EXACT-ID DETAIL CHECK
 ```
 
-只有已有 `TARGET_CONVERSATION_ID`，或 bounded evidence 得到唯一候选时，才允许 exact-ID recovery。existing-target recovery 必须优先核验持久的 target；post-send current 只记录 navigation observation，不能替换 target。选中候选时记录 `RECOVERED_CONVERSATION_ID` 与来源；detail 中 exact Work Item/Message marker 成功后才能建立 delivery。无候选、多候选、来源冲突、detail 不可读或 marker 不唯一时必须保持 `DELIVERY_UNKNOWN`，停止自动执行并禁止 resend。
+只有已有 `TARGET_CONVERSATION_ID`，或 bounded evidence 得到唯一候选时，才允许 exact-ID recovery。existing-target recovery 必须优先核验持久的 target；post-send current 只记录 navigation observation，不能替换 target。选中候选时记录 `RECOVERED_CONVERSATION_ID` 与来源；detail 中 exact Work Item/Message marker 成功后才能建立 delivery。若一次 write 已记录、exact-ID detail 的 user message 明确以尾行 `Show more` 标记折叠，且普通 marker 解析为零，则同一 detail 结果可以严格核验 Product compact JSON 的固定开头 `WORK_ITEM_ID` 与 `MESSAGE_ID`；只允许唯一匹配，且不得修复正文、增加读取或重发。无候选、多候选、来源冲突、detail 不可读或 marker 不唯一时必须保持 `DELIVERY_UNKNOWN`，停止自动执行并禁止 resend。
 
 ## Mismatch detection
 

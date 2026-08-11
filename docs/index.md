@@ -21,7 +21,7 @@
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision、Completion Authority 与 Review Artifact access path | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
 | `docs/specs/antigravity-completion-gate-adapter.md` | Antigravity Completion-Gate Adapter 的状态映射、Contract、bounded continuation 与失败语义 | 设计、实现或验证 Antigravity execution termination gate 时 | Active | 2026-08-09 |
-| `docs/specs/opencli-session-discovery.md` | OpenCLI Session Discovery、Conversation identity、投递验证与 exact-ID recovery 的产品 Contract | 设计、实现或验证 Browser/OpenCLI Session identity 时 | Candidate | 2026-08-09 |
+| `docs/specs/opencli-session-discovery.md` | OpenCLI Session Discovery、Conversation identity、投递验证与 exact-ID recovery 的产品 Contract | 设计、实现或验证 Browser/OpenCLI Session identity 时 | Candidate | 2026-08-11 |
 | `docs/specs/research-review-loop.md` | RR Loop 的角色、canonical Browser message、受限 Product command path、ACF compatibility bridge、状态、交接与 OpenCLI 当前实现映射 | 执行或修改 RR Loop 时 | Active | 2026-08-11 |
 | `docs/adr/0001-general-system-with-modular-workflows.md` | 通用系统与模块化工作流的架构决定 | 质疑项目定位或模块边界时 | Accepted | 2026-08-05 |
 | `docs/adr/0002-self-contained-user-level-rr-lead-skill.md` | RR Lead 自包含用户级 Skill 的打包与部署决定 | 修改 RR Lead 包结构、安装或分发策略时 | Accepted | 2026-08-05 |

@@ -2936,6 +2936,21 @@ def mvp_marker_result(*, occurrences: int = 1, ready: bool = False) -> dict:
     return legacy_result(messages)
 
 
+def collapsed_packet_marker_result(
+    *, occurrences: int = 1, work_item_id: str = LEGACY_WORK_ITEM,
+    message_id: str = LEGACY_MESSAGE_ID,
+) -> dict:
+    packet = (
+        f'{{"WORK_ITEM_ID":"{work_item_id}","MESSAGE_ID":"{message_id}",'
+        '"ROUND":0,"EVIDENCE":"rendered prefix\ncollapsed continuation"}'
+        '\nShow more'
+    )
+    return legacy_result([
+        {"Role": "user", "Text": packet}
+        for _ in range(occurrences)
+    ])
+
+
 def mvp_new_sequence(
     post_id: str | None = NEW_ID, *, marker: dict | None = None,
     send_result: dict | None = None, recovery_tail: list[dict] | None = None,
@@ -3202,6 +3217,53 @@ def test_mvp_missing_marker_is_delivery_unknown() -> None:
         prepare_new=True, legacy_sequence=False,
     )
     assert state["delivery_marker_status"] == "MISSING"
+    assert state["delivery_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_exact_id_recovery_accepts_one_collapsed_product_packet_identity() -> None:
+    collapsed = collapsed_packet_marker_result()
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            marker=collapsed, recovery_tail=[collapsed],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert sum(call[1] == "send" for call in calls) == 1
+    assert [call[1] for call in calls][-2:] == ["read", "detail"]
+    assert state["truncation_evidence_detected"] is True
+    assert state["truncation_fallback_marker_count"] == 1
+    assert state["delivery_verification_mode"] == "EXACT_ID_COLLAPSED_PACKET_IDENTITY"
+    assert state["delivery_conversation_id"] == NEW_ID
+    assert state["target_conversation_id"] == NEW_ID
+
+
+def test_mvp_collapsed_packet_wrong_identity_stays_unknown_without_resend() -> None:
+    collapsed = collapsed_packet_marker_result(message_id=f"{LEGACY_MESSAGE_ID}-OTHER")
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            marker=collapsed, recovery_tail=[collapsed],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert sum(call[1] == "send" for call in calls) == 1
+    assert state["truncation_evidence_detected"] is True
+    assert state["truncation_fallback_marker_count"] == 0
+    assert state["delivery_conversation_id"] is None
+    assert state["delivery_state"] == "DELIVERY_UNKNOWN"
+
+
+def test_mvp_duplicate_collapsed_packet_identity_stays_unknown_without_resend() -> None:
+    collapsed = collapsed_packet_marker_result(occurrences=2)
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(
+            marker=collapsed, recovery_tail=[collapsed],
+        ),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert sum(call[1] == "send" for call in calls) == 1
+    assert state["truncation_fallback_marker_count"] == 2
+    assert state["truncation_fallback_status"] == "DUPLICATE"
     assert state["delivery_conversation_id"] is None
     assert state["delivery_state"] == "DELIVERY_UNKNOWN"
 
@@ -3616,6 +3678,9 @@ def main() -> int:
         test_mvp_second_explicit_target_stays_in_promoted_conversation,
         test_mvp_current_target_mismatch_without_marker_is_unknown,
         test_mvp_missing_marker_is_delivery_unknown,
+        test_mvp_exact_id_recovery_accepts_one_collapsed_product_packet_identity,
+        test_mvp_collapsed_packet_wrong_identity_stays_unknown_without_resend,
+        test_mvp_duplicate_collapsed_packet_identity_stays_unknown_without_resend,
         test_mvp_duplicate_marker_is_delivery_unknown,
         test_mvp_returned_identity_without_marker_is_candidate_only,
         test_mvp_delivery_unknown_is_not_failed,

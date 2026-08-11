@@ -753,6 +753,44 @@ def exact_delivery_marker_count(
     )
 
 
+COLLAPSED_PACKET_SUFFIX = "Show more"
+COMPACT_PACKET_IDENTITY_PREFIX = re.compile(
+    r'^\s*\{"WORK_ITEM_ID":(?P<work_item>"(?:\\.|[^"\\])*")'
+    r',"MESSAGE_ID":(?P<message>"(?:\\.|[^"\\])*")'
+)
+
+
+def has_collapsed_packet_exact_identity(
+    text: str, work_item_id: str, message_id: str,
+) -> bool:
+    """Verify Product packet identity without repairing collapsed message text."""
+    if not text.rstrip().endswith(f"\n{COLLAPSED_PACKET_SUFFIX}"):
+        return False
+    match = COMPACT_PACKET_IDENTITY_PREFIX.match(text)
+    if match is None:
+        return False
+    try:
+        observed_work_item = json.loads(match.group("work_item"))
+        observed_message = json.loads(match.group("message"))
+    except (json.JSONDecodeError, TypeError):
+        return False
+    return observed_work_item == work_item_id and observed_message == message_id
+
+
+def collapsed_delivery_marker_count(
+    messages: list[dict[str, Any]], work_item_id: str, message_id: str,
+) -> int:
+    """Count exact compact-packet identities only when extraction says it collapsed."""
+    return sum(
+        1
+        for message in messages
+        if str(pick(message, "Role") or "").lower() == "user"
+        and has_collapsed_packet_exact_identity(
+            str(pick(message, "Text") or ""), work_item_id, message_id,
+        )
+    )
+
+
 def rr_response_fields(
     text: str,
     expected_message_id: str | None = None,
@@ -1470,11 +1508,16 @@ def ensure_identity_schema(state: dict[str, Any]) -> dict[str, Any]:
 
 def establish_verified_delivery(
     state: dict[str, Any], response_batch: ResponseMessageBatch,
+    verified_marker_count: int | None = None,
 ) -> bool:
     """Establish delivery only from one exact marker and a non-conflicting identity."""
     identity = response_batch.conversation_id
-    marker_count = exact_delivery_marker_count(
-        list(response_batch.messages), state["work_item_id"], state["message_id"]
+    marker_count = (
+        verified_marker_count
+        if verified_marker_count is not None
+        else exact_delivery_marker_count(
+            list(response_batch.messages), state["work_item_id"], state["message_id"]
+        )
     )
     state["delivery_marker_count"] = marker_count
     state["delivery_marker_status"] = (
@@ -1789,6 +1832,33 @@ def recover_delivery(
         response_batch = detail(state, state_path, identity)
         messages = list(response_batch.messages) if response_batch else []
         marker_count = exact_delivery_marker_count(messages, state["work_item_id"], state["message_id"])
+        if (
+            marker_count == 0
+            and response_batch is not None
+            and state.get("send_attempt_count") == 1
+            and state.get("message_send_count") == 1
+            and state.get("recovered_conversation_id") == response_batch.conversation_id
+            and state.get("recovery_target_conversation_id") == response_batch.conversation_id
+        ):
+            collapsed_count = collapsed_delivery_marker_count(
+                messages, state["work_item_id"], state["message_id"],
+            )
+            state["truncation_evidence_detected"] = any(
+                str(pick(message, "Text") or "").rstrip().endswith(
+                    f"\n{COLLAPSED_PACKET_SUFFIX}"
+                )
+                for message in messages
+                if str(pick(message, "Role") or "").lower() == "user"
+            )
+            state["truncation_fallback_marker_count"] = collapsed_count
+            state["truncation_fallback_status"] = (
+                "UNIQUE" if collapsed_count == 1
+                else "MISSING" if collapsed_count == 0
+                else "DUPLICATE"
+            )
+            if collapsed_count == 1:
+                marker_count = collapsed_count
+                state["delivery_verification_mode"] = "EXACT_ID_COLLAPSED_PACKET_IDENTITY"
         if marker_count == 1:
             if state.get("target_conversation_id_at_send") and identity != state["target_conversation_id_at_send"]:
                 mark_misroute(
@@ -1796,7 +1866,9 @@ def recover_delivery(
                     response_batch.raw_output_path if response_batch else None,
                 )
             else:
-                if response_batch is not None and establish_verified_delivery(state, response_batch):
+                if response_batch is not None and establish_verified_delivery(
+                    state, response_batch, verified_marker_count=marker_count,
+                ):
                     accept_delivery(state, response_batch)
             return True
         state["delivery_marker_count"] = marker_count

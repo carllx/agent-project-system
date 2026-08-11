@@ -58,6 +58,22 @@
 
 This entry is not `STALE_CONTROLLED_TAB_DISPROVEN`.
 
+## KB-004 — SMOKE-003 collapsed outbound extraction false negative
+
+- **EXPERIMENT_ID:** `AUTONOMOUS-BROWSER-PRODUCT-SMOKE-003`.
+- **EVIDENCE_CLASS:** `PROVEN` for the stated extraction failure; outbound visibility and the Product false negative are `OBSERVED` facts.
+- **PATH:** Product first write → exact post-send Conversation URL → current-page read → exact-ID detail with a collapsed outbound Product packet.
+- **RESULT:** `SMOKE-003_OUTBOUND_ACTUALLY_VISIBLE=OBSERVED`; `SMOKE-003_DELIVERY_FALSE_NEGATIVE=OBSERVED`; `TRUNCATED_EXTRACTION_DELIVERY_FALSE_NEGATIVE=PROVEN` for this exact compact-packet-plus-`Show more` representation.
+- **FIRST_FAILURE_STAGE:** Outbound delivery marker verification, before Response 1 continuation.
+- **RAW_ERROR:** Both read and exact-ID detail ended the outbound user text with `Show more`; OpenCLI extraction inserted an unescaped newline inside the compact JSON string, so strict full-object JSON decoding failed at character 369 and both exact identity predicates returned false. Product state recorded `delivery_marker_count=0`, `delivery_marker_status=MISSING`, and `DELIVERY_UNKNOWN`.
+- **EVIDENCE:** Canonical state recorded one write, exact candidate/current/recovered Conversation `6a7b319b-6088-83ea-9c1c-c48fd93439bd`, no candidate conflict, and no Delivery. Raw `08-read-after-send.json` and `09-detail.json` each contained the exact outer Work Item and Message identity prefix plus trailing `Show more`; `10-status-after-send.json` returned the same exact Conversation URL.
+- **CONFIDENCE:** `HIGH` for this exact collapsed extraction and false-negative mechanism; no claim is made about unrelated truncation representations.
+- **DO_NOT_REPEAT_WHEN:** The same compact Product packet is verified only by full-object JSON decoding despite explicit trailing `Show more` collapse evidence.
+- **RETRY_ONLY_IF:** The bounded exact-ID truncation-aware verifier is under Product smoke validation or the extraction representation materially changes.
+- **KNOWN_GOOD_ALTERNATIVE:** On the already selected exact Conversation, require exactly one user message whose collapsed compact Product packet begins with the exact Work Item and Message identities; otherwise retain `DELIVERY_UNKNOWN` and never resend.
+
+This failure occurred before Response 1 entered formal reading. It is not evidence of Gemini, `/goal`, Hook, or autonomous continuation failure.
+
 ## KG-001 — Direct Node minimal autonomous loop
 
 - **EXPERIMENT_ID:** `AG-BROWSER-AUTONOMOUS-MULTIPATH-BATCH-001`
