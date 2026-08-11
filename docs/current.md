@@ -468,3 +468,4 @@ Autonomy hierarchy 是 hard invariant：`Sub-Agent autonomy < Experiment Coordin
 - **Result:** Passed（exit 0；只有工作树 LF→CRLF 提示，无 whitespace error）。
 - **Artifact hygiene:** 未创建日期 Handoff 文档，未修改 Transport、Hook 或 Adapter，未运行 Browser/Lab；仓库根无 `__pycache__` 或测试 temp artifact。
 - **Last verified:** 2026-08-11
+

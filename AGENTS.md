@@ -84,3 +84,16 @@ git status --short
 ## 用户决策闸口
 
 仅在目标或产品方向变化、成本或付费、账号和权限、隐私和私人数据、文件公开或上传、删除覆盖等不可逆操作、重大安全风险，或当前目标无法实现而需降级时暂停。提问必须给出三个白话选项和一个明确推荐。
+
+## Execution/Experiment Agent Hard Rules
+
+Execution / Experiment Agent MUST NOT:
+- create next Acceptance Packet
+- change ACTIVE_EXECUTION_PACKET
+- change docs/current.md
+- change docs/index.md
+- repair Product
+- create retry run
+
+When a blocker occurs:
+STOP → Evidence → Project Agent → Browser Lead decision
