@@ -187,6 +187,21 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         readiness = packet.get("MANUAL_RELAY_ACCEPTANCE_READY")
         if pointer["PACKET_STATE"] == "BLOCKED_NOT_READY" and readiness != "NO":
             errors.append("blocked Manual Relay Packet must record readiness NO")
+        if pointer["PACKET_STATE"] == "READY_NOT_STARTED":
+            if readiness != "YES":
+                errors.append("ready Manual Relay Packet must record readiness YES")
+            required_manual_tokens = (
+                "ingest-manual-review",
+                "R1_BROWSER_RELAY_PACKET",
+                "R2_BROWSER_RELAY_PACKET",
+                "r1-browser-response.txt",
+                "r2-browser-response.txt",
+                "REVIEW_SOURCE=MANUAL_RELAY",
+                "AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO",
+                "Exactly four user copy steps",
+            )
+            if any(token not in packet_text for token in required_manual_tokens):
+                errors.append("ready Manual Relay Packet is missing an executable relay/ingest requirement")
     if packet.get("PACKET_TYPE") == "DIAGNOSTIC_BATCH_PACKET":
         batch_id = packet.get("BATCH_ID")
         if not batch_id or f"**Active Diagnostic Batch:** `{batch_id}`" not in current_text:

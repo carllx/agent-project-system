@@ -83,7 +83,7 @@ RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、
 
 ### ACF-0.1 compatibility bridge
 
-`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；它负责状态转换和从 pending Request 确定性渲染 canonical Browser Review body，但不发送消息、不建立 Conversation，也不翻译 IDE lifecycle。`scripts/acf_review_loop.py` 负责 JSON 状态的原子持久化，并提供受限的 `send-review / recover-review` Product command path；该路径只把 canonical body 和当前 binding 交给冻结 Transport，不暴露 budget override，也不改变 Transport 或 Completion Authority。正式回复只有在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，并且 Transport Work Item/Message ID 与当前 pending Request 精确相等时，才允许进入该 bridge。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
+`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；它负责状态转换和从 pending Request 确定性渲染 canonical Browser Review body，但不发送消息、不建立 Conversation，也不翻译 IDE lifecycle。`scripts/acf_review_loop.py` 负责 JSON 状态的原子持久化。自动路径只在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，且 Transport Work Item/Message ID 与当前 pending Request 精确相等时接收回复；Manual Relay 路径则保存并严格解析用户原样转交的 RR wire，以独立 provenance 进入同一 ACF Decision/Completion 逻辑。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
 
 ### Canonical Browser Review message path
 
@@ -100,6 +100,24 @@ submit-review
 ```
 
 `send-review` 从 pending Request 推导 Message ID 和 Round，生成不可覆盖的 canonical message/Transport state path，并使用冻结 Transport 默认预算；同一 Request 的本地发送 artifact 已存在时 fail closed。`recover-review` 只接受与当前 pending Work Item/Request 匹配、且已有一次 write 的 Transport state，并只调用 no-write pending recovery。Execution Agent 不得删除 canonical write receipt、删除或重建 Transport state、直接编辑 Loop/Transport JSON，或扩大任何 retry/recovery budget。
+
+### Manual Relay Review artifact path
+
+当自动 Browser delivery 不可用而当前 Packet 明确选择 `MANUAL_RELAY` 时，正式路径为：
+
+```text
+submit-review
+→ render-review-message
+→ user relays the exact Browser body
+→ user returns the complete raw RR wire
+→ preserve raw response file
+→ ingest-manual-review --current-artifact-id <current immutable artifact>
+→ existing ACF Decision mapping and Completion Gate
+```
+
+`ingest-manual-review` 要求严格 UTF-8、精确且唯一的 RR sentinels、完整有序的顶层字段、正确 Round，以及与 pending Request 完全匹配的 Work Item、Request ID、Review Kind、ACF binding、Acceptance coverage 和 reviewed artifact identity。权威 `REVISE` 仍须含可执行 Required Actions；权威 Final `APPROVE` 仍须全部 criteria 为 `MET` 且无 blocker、Required Actions 或 unresolved User Decision。任何缺失、重复、错绑或 stale 都保持 pending 且返回 `NON_AUTHORITATIVE`。
+
+成功的 Manual ingest 在 Review History 记录 `REVIEW_SOURCE=MANUAL_RELAY`、raw response path/hash、Request ID、reviewed artifact ID 和时间。它不得写入或推断 automated Transport identity、Conversation identity 或 same-Conversation machine verification。用户在同一个 Browser Lead Conversation 中完成两轮只属于用户维持的操作事实；Manual Relay 可验证功能闭环，但不能把 automated Browser Transport 标为已验证。
 
 Transport payload preflight 只把行首精确 `MESSAGE_ID: <current id>` 或 JSON outer packet 的同名顶层字段视为重复 Transport header。合法 RR 字段 `IN_REPLY_TO_MESSAGE_ID: <current id>` 不得因 substring overlap 被拒绝；该修正只收紧 header identity 判断，不改变 canonical receipt 或 same-Message-ID no-resend。
 

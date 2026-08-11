@@ -2,9 +2,9 @@
 
 PACKET_TYPE: REAL_AGENT_REVIEW_LOOP_MANUAL_RELAY_PACKET
 
-PACKET_STATE: BLOCKED_NOT_READY
+PACKET_STATE: READY_NOT_STARTED
 
-MANUAL_RELAY_ACCEPTANCE_READY: NO
+MANUAL_RELAY_ACCEPTANCE_READY: YES
 
 WORK_ITEM_ID: REAL-AGENT-REVIEW-LOOP-MVP-001
 
@@ -12,7 +12,7 @@ ACCEPTANCE_RUN_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL
 
 TRANSPORT_MODE: MANUAL_RELAY
 
-REQUIRED_PRODUCT_HEAD: 7eead49dec3421c1aa7f6fb21be90091454754e4
+REQUIRED_PRODUCT_HEAD: 0f496665ebcd85154cac6ffc83b9e80b62a3e31f
 
 PRODUCT_ROOT: E:\PROJECTS\agent-project-system
 
@@ -22,105 +22,137 @@ ROUND_1_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R1-FINAL
 
 ROUND_2_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R2-FINAL
 
-BLOCKER: MANUAL_RELAY_RESPONSE_INGEST_ADAPTER_MISSING
+## Authority and start gate
 
-## Current authority state
+This Packet is prepared, not started. A fresh Execution Agent may begin only after the user or Browser Lead explicitly starts this Acceptance Run. Read `AGENTS.md`, `README.md`, `docs/index.md`, `docs/current.md`, the active pointer, this Packet, and the applicable ACF/RR Specs. Historical conversations and Agent memory are not execution authority.
 
-This is the only current Manual Relay Acceptance Contract, but it is intentionally fail-closed and must not be started. Browser Lead rejected the previous document because it retained automatic Transport commands and contradicted `TRANSPORT_MODE: MANUAL_RELAY`.
+Before creating runtime artifacts:
 
-The existing Product can initialize Loop state, submit a Review Request, and render the canonical Browser Review body without Browser automation. It cannot yet take a user-relayed raw Browser response, strictly parse and bind it, then persist the authoritative transition through the Product driver. No Agent may fill that gap with an invented command, a hand-built Transport state, direct internal-function invocation, or a locally fabricated Decision.
+1. Confirm this is the active Packet and its state is `READY_NOT_STARTED`.
+2. Confirm branch `work/real-agent-review-loop-mvp-001`, a clean worktree, local HEAD equal to the remote tracking ref, and `REQUIRED_PRODUCT_HEAD` an ancestor of HEAD.
+3. Confirm `RUNTIME_ROOT` does not exist. Never reuse an earlier state, Request ID, response, or artifact.
+4. Use repository source as Product authority.
+5. Stop as `ACTIVE_EXECUTION_PACKET_INVALID` on any mismatch.
 
-Stop at bootstrap with:
+## Goal and acceptance criteria
 
-```text
-MANUAL_RELAY_ACCEPTANCE_READY: NO
-STOP_REASON: MANUAL_RELAY_RESPONSE_INGEST_ADAPTER_MISSING
-USER_ACTION_REQUIRED: NONE UNTIL PRODUCT CHANGE IS AUTHORIZED
-```
-
-## Intended collaboration flow
-
-Once the missing adapter is separately authorized, implemented, reviewed, and this Packet is changed to `READY_NOT_STARTED`, the exact human collaboration flow is:
+Run one real four-turn minimum collaboration loop:
 
 ```text
-Antigravity executes R1 task and produces canonical R1 relay body
-→ user copies R1_BROWSER_RELAY_PACKET into the current Browser Lead Conversation
-→ Browser Lead returns complete RR_REVIEW with authoritative REVISE
-→ user copies the complete response back to Antigravity
-→ Product Manual Relay adapter saves, validates, and ingests R1
-→ Antigravity applies only REQUIRED_ACTIONS and creates immutable R2 evidence
-→ user copies R2_BROWSER_RELAY_PACKET into the same Browser Lead Conversation
-→ Browser Lead returns complete RR_REVIEW with authoritative APPROVE
-→ user copies the complete response back to Antigravity
-→ Product Manual Relay adapter saves, validates, and ingests R2
-→ Completion Gate permits COMPLETED
+Turn 1: Execution Agent executes the evidence task and submits Final R1
+Turn 2: independent Browser Lead returns authoritative REVISE
+Turn 3: Execution Agent applies REQUIRED_ACTIONS and submits Final R2
+Turn 4: the same Browser Lead Conversation returns authoritative APPROVE
 ```
 
-Manual Relay validates the collaboration loop, not automated Browser delivery.
+The real task is to execute the Product Completion-Gate policy and preserve immutable, repository-external observations. R1 records the base-state policy result. The Browser must identify a concrete evidence deficiency and return an executable in-scope revision. The expected bounded revision is a new immutable R2 observation that preserves R1 and adds the policy result for string-valued `UNRESOLVED_USER_DECISION="UNVERIFIED"`. Do not hand-author policy results.
 
-## Goal and acceptance semantics
+Agreed Acceptance Criteria:
 
-The future run must prove a real `Execute → Review → REVISE → Revision → Review → APPROVE → Completion Gate` loop with an independent Browser Lead. Execution Agent cannot self-approve, cannot infer missing response fields, and cannot complete from an IDE permission approval, natural stop, Transport label, or user paraphrase.
+1. `AC1`: a real Antigravity Execution Agent performs the evidence task; Browser decisions are not simulated locally.
+2. `AC2`: R1 is relayed once and strictly ingested as authoritative `REVISE` with executable Required Actions.
+3. `AC3`: the persisted Required Actions are actually applied and evidenced in a new immutable artifact.
+4. `AC4`: R2 uses a new Request ID, the same `FINAL` Review Kind, and the same user-maintained Browser Lead Conversation.
+5. `AC5`: R2 is relayed once and strictly ingested as authoritative `APPROVE` with exact all-`MET` coverage.
+6. `AC6`: both raw Browser responses are preserved byte-for-byte and their Manual Relay provenance is recorded.
+7. `AC7`: neither Execution Agent nor a Product label self-approves completion.
+8. `AC8`: Completion Gate reaches `COMPLETED` only after the current matching Final approval.
 
-Successful Manual Relay output must be:
+## Runtime artifacts and Product commands
+
+Create the new `RUNTIME_ROOT`. Its required artifacts are:
 
 ```text
-COLLABORATION_MVP_USABLE: YES
-REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED: YES
-MANUAL_RELAY_VALIDATED: YES
-AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO
-WINDOWS_OPENCLI_LONG_ARGV_BLOCKER: OPEN
+contract.json
+state.json
+completion-gate-observation-r1.json
+request-r1.json
+r1-browser-relay-packet.txt
+r1-browser-response.txt
+completion-gate-observation-r2.json
+request-r2.json
+r2-browser-relay-packet.txt
+r2-browser-response.txt
+final-report.txt
 ```
 
-## Outbound capability already available
+Create `contract.json` with `PROTOCOL_VERSION=ACF-0.1`, this exact Work Item ID, the Goal above, and the eight exact criteria. Initialize once:
 
-After future readiness authorization, Round 1 outbound generation will use only the Product state driver:
+```powershell
+python scripts/acf_review_loop.py initialize --contract "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\contract.json" --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json"
+```
 
-1. Create the exact runtime `contract.json`, immutable R1 observation, SHA-256 artifact identity, and `request-r1.json`.
-2. Run `initialize` once against a new runtime state.
-3. Run `submit-review` with `ROUND_1_REQUEST_ID` and the immutable R1 artifact identity.
-4. Run `render-review-message` once to create the immutable `R1_BROWSER_RELAY_PACKET` file.
-5. Stop and show the user:
+Execute `runtime.completion_gate.base_state()` and `evaluate_completion_gate()` from repository source. Save the exact input and result as immutable R1 JSON and calculate its lowercase SHA-256. Create `request-r1.json` with the exact Goal/criteria snapshot and:
 
 ```text
-USER_ACTION_REQUIRED:
-Copy the complete R1_BROWSER_RELAY_PACKET into the current Browser Lead Conversation.
-Then copy the Browser Lead's complete RR_REVIEW response back without editing, summarizing, or reformatting it.
+PROTOCOL_VERSION: ACF-0.1
+WORK_ITEM_ID: REAL-AGENT-REVIEW-LOOP-MVP-001
+REVIEW_REQUEST_ID: REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-R1-FINAL
+REVIEW_KIND: FINAL
+REVIEW_TRIGGER: READY_FOR_COMPLETION
+CURRENT_TASK: Independently review the R1 Completion-Gate observation and Manual Relay loop evidence.
+CHANGES: repository-external immutable R1 observation only
+EVIDENCE: exact R1 path, SHA-256, Product head, and local checks
+EXECUTION_ASSESSMENT.CLAIMED_STATUS: CLAIM_READY_FOR_REVIEW
 ```
 
-The Agent does not open or control Browser. The user is responsible for using the intended Browser Lead Conversation.
+Set `$r1Sha256` to the computed R1 artifact SHA-256. Submit and render R1:
 
-## Round 1 response requirement
+```powershell
+python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\request-r1.json" --artifact-id $r1Sha256
+python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r1-browser-relay-packet.txt"
+```
 
-The user-relayed response must be saved byte-for-byte as an immutable `r1-browser-response.txt` artifact before validation. The missing Product adapter must then:
+## Round 1 user relay and ingest
 
-1. require exactly one complete `RR_REVIEW_BEGIN` through `RR_REVIEW_END` envelope with no leading or trailing content;
-2. reject missing, duplicate, malformed, or unknown required fields;
-3. bind `PROTOCOL_VERSION=ACF-0.1`, this Work Item, `ROUND_1_REQUEST_ID`, and `REVIEW_KIND=FINAL`;
-4. validate exact Acceptance Criterion coverage and nonempty Evidence;
-5. derive reviewed-state currency from the local artifact identity;
-6. persist the transition only through the existing Review Loop;
-7. return `NON_AUTHORITATIVE` without state transition on any mismatch.
-
-Only authoritative `REVISE` with nonempty in-scope `REQUIRED_ACTIONS` may enter `REVISION_REQUIRED`. No current Product command performs these steps for a raw response; therefore execution must not proceed.
-
-## Revision and Round 2 requirements
-
-After the future adapter authoritatively ingests R1, the Execution Agent must apply exactly the persisted Required Actions, create a new immutable R2 artifact, preserve R1, record revision Evidence, and submit a new Final Review Request using `ROUND_2_REQUEST_ID`.
-
-The Product renderer must create immutable `R2_BROWSER_RELAY_PACKET`. The Agent must stop again and show the user:
+Stop and output exactly this instruction followed by the complete, unedited `R1_BROWSER_RELAY_PACKET` file:
 
 ```text
 USER_ACTION_REQUIRED:
-Copy the complete R2_BROWSER_RELAY_PACKET into the same Browser Lead Conversation used for Round 1.
-Then copy the Browser Lead's complete RR_REVIEW response back without editing, summarizing, or reformatting it.
+把下面完整的 R1_BROWSER_RELAY_PACKET 复制到 Browser Lead。
+然后把 Browser Lead 返回的完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
 ```
 
-The returned response must be saved byte-for-byte as immutable `r2-browser-response.txt` and pass the same strict adapter validation, bound to `ROUND_2_REQUEST_ID` and `FINAL`. Only authoritative `APPROVE`, exact all-`MET` coverage, no blockers, no Required Actions, no unresolved User Decision, and current artifact identity may reach Completion Gate.
+The user performs two copy steps: Packet to Browser, then raw response back. Save the returned envelope byte-for-byte as `r1-browser-response.txt`; do not edit, summarize, wrap, or reconstruct it. Recompute the unchanged R1 hash and ingest:
 
-## Required final gate
+```powershell
+python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r1-browser-response.txt" --current-artifact-id $r1Sha256
+```
 
-The future run passes only if persisted Product state and immutable artifacts prove:
+Continue only if Product state proves `REVISION_REQUIRED`, authoritative `REVISE`, nonempty in-scope `REQUIRED_ACTIONS`, and `REVIEW_SOURCE=MANUAL_RELAY`. Any parser, binding, stale, coverage, blocker, or provenance failure is a hard stop. A paraphrase or IDE permission approval is not a Browser Decision.
+
+## Revision, Round 2 user relay, and ingest
+
+Apply exactly the persisted Required Actions. Preserve R1. Create and hash immutable R2 evidence. Set `$revisionEvidence` to a nonempty string identifying the applied action and immutable R2 artifact, then record it:
+
+```powershell
+python scripts/acf_review_loop.py revision-applied --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --evidence $revisionEvidence
+```
+
+Create `request-r2.json` with the same Goal and criteria, `FINAL`, `READY_FOR_COMPLETION`, `ROUND_2_REQUEST_ID`, the exact R1 Decision binding, the applied-action evidence, and both artifact paths/hashes. Set `$r2Sha256` to the computed R2 artifact SHA-256, then submit and render:
+
+```powershell
+python scripts/acf_review_loop.py submit-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --request "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\request-r2.json" --artifact-id $r2Sha256
+python scripts/acf_review_loop.py render-review-message --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --output "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r2-browser-relay-packet.txt"
+```
+
+Stop and output exactly this instruction followed by the complete, unedited `R2_BROWSER_RELAY_PACKET` file:
+
+```text
+USER_ACTION_REQUIRED:
+把下面完整的 R2_BROWSER_RELAY_PACKET 复制到 Round 1 使用的同一个 Browser Lead Conversation。
+然后把 Browser Lead 返回的完整 RR_REVIEW_BEGIN ... RR_REVIEW_END 原样贴回本对话。
+```
+
+The user performs two more copy steps. Save the complete response byte-for-byte as `r2-browser-response.txt`; recompute the unchanged R2 hash and ingest:
+
+```powershell
+python scripts/acf_review_loop.py ingest-manual-review --state "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\state.json" --response-file "$env:TEMP\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\acceptance-manual\r2-browser-response.txt" --current-artifact-id $r2Sha256
+```
+
+Only authoritative `APPROVE`, exact all-`MET` coverage with evidence, no blockers, no Required Actions, no unresolved User Decision, current artifact identity, and Completion Gate `COMPLETED` pass.
+
+## Required final evidence
 
 ```text
 LOGICAL_TURN_COUNT: AT_LEAST_4
@@ -133,6 +165,9 @@ DISTINCT_REQUEST_IDS: YES
 SAME_BROWSER_CONVERSATION_USER_CONFIRMED: YES
 BOTH_RAW_RESPONSES_PRESERVED: YES
 BOTH_DECISIONS_INGESTED: YES
+MANUAL_REVIEW_PROVENANCE_RECORDED: YES
+TRANSPORT_IDENTITY_VERIFIED: NO
+SAME_BROWSER_CONVERSATION_MACHINE_VERIFIED: NO
 COMPLETION_GATE: COMPLETED
 COLLABORATION_MVP_USABLE: YES
 REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED: YES
@@ -141,16 +176,14 @@ AUTOMATED_BROWSER_TRANSPORT_VALIDATED: NO
 WINDOWS_OPENCLI_LONG_ARGV_BLOCKER: OPEN
 ```
 
-## Hard boundaries
+The same Browser Conversation is user-maintained, not machine-verified. Manual Relay establishes functional collaboration Evidence only.
 
-- Do not start this Acceptance while `PACKET_STATE=BLOCKED_NOT_READY`.
-- Do not use Browser automation or any automatic Browser Transport command.
-- Do not modify Product state files or synthesize a verified response artifact by hand.
-- Do not invoke internal Review Loop functions as a substitute for a formal Product adapter.
-- Do not create another Acceptance Packet or retry run.
-- Do not modify Product, Transport, Completion Gate, Stop Hook, pointer, or governance from an Execution Agent.
+## Hard boundaries and stop report
+
+- Exactly four user copy steps are allowed: R1 out, R1 back, R2 out, R2 back.
+- Do not control Browser, invoke automatic Browser delivery, modify frozen Transport, or fabricate identity flags.
+- Do not alter raw responses, runtime state by hand, Product code, Specs, Packet, pointer, or repository files during the run.
+- Do not create another Acceptance Packet or retry this run inside this Packet.
 - Do not merge, close the Work Item, or claim completion without authoritative Final Browser `APPROVE` and Completion Gate `COMPLETED`.
 
-## Readiness exit criterion
-
-Browser Lead or the user must separately authorize the minimum Product change. After implementation, tests must prove raw response preservation, strict envelope parsing, exact ACF binding, malformed/mismatched fail-closed behavior, R1 `REVISE`, R2 `APPROVE`, stale approval rejection, and Completion Gate integration. Only a reviewed follow-up may change this Packet and pointer to `READY_NOT_STARTED`.
+On any hard stop, preserve the runtime directory and report the exact stage, command/exit, response path, artifact hash, Request ID, parser/binding outcome, Workflow State, whether any Browser Decision was ingested, and why continuation is forbidden. Do not repair Product from inside the Acceptance run.
