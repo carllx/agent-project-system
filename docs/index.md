@@ -10,7 +10,8 @@
 | `docs/current.md` | 当前唯一 Work Item、Lab Evidence、下一动作与事实状态 | 每次会话启动及状态流转时 | Active | 2026-08-11 |
 | `docs/references/current-execution-packet.md` | 当前 Execution Packet 的稳定 pointer；不保存 Packet 正文 | 新 Execution Agent 从当前 Work Item 定位精确执行契约时 | Active | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-attempt-4.md` | Attempt 4 的 canonical Execution Packet 与 clean-fail closeout | 审计 `REAL-AGENT-REVIEW-LOOP-MVP-001` Attempt 4 时 | Completed / Clean fail | 2026-08-11 |
-| `docs/references/real-agent-review-loop-mvp-001-diagnostic-batch-001.md` | 当前 bounded Diagnostic Batch 的 self-contained Execution Contract | 启动或审计当前 Diagnostic Batch 时 | Ready / Not started | 2026-08-11 |
+| `docs/references/real-agent-review-loop-mvp-001-diagnostic-batch-001.md` | bounded Diagnostic Batch 的历史 self-contained Execution Contract | 审计已完成的 Diagnostic Batch 时 | Completed / Superseded | 2026-08-11 |
+| `docs/references/real-agent-review-loop-mvp-001-acceptance-001.md` | Option-C 修复后的 canonical multi-turn Real Agent Review Loop Acceptance Contract | 启动或审计下一次真实 Acceptance Run 时 | Ready / Not started | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-evidence-matrix.schema.json` | Diagnostic Batch Evidence Matrix 的机器可读结构约束 | 创建或验证 Batch Evidence Matrix JSON 时 | Active | 2026-08-11 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision、Completion Authority 与 Review Artifact access path | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |

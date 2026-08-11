@@ -53,7 +53,7 @@ Agent Project System
 - **Review Request ID:** `NONE`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
 - **Execution Packet state:** `READY / NOT_STARTED`
-- **Active Diagnostic Batch:** `REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001`
+- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-001`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -89,7 +89,7 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_STATE:** `DIAGNOSTIC_BATCH_READY / IN_PROGRESS`。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效。Attempt 3 因 Execution Agent 修改/直调冻结 Transport、移动 canonical artifact 和重复执行 `send-review` 而无效；其后 `/new` failure 不作为 clean Evidence。两次 invalid attempt 均已保存于 repo 外 incident archive，不作为 Product completion Evidence。Attempt 3 独立暴露并由正式源码证明的 `TRANSPORT-MESSAGE-ID-HEADER-FALSE-POSITIVE` 已以 exact-header preflight 修正。Attempt 4 已执行并以 clean fail 收口；不启动 Attempt 5，而是在同一 Work Item 内用 bounded Diagnostic Batch 解释 blocker。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `ACCEPTANCE_PACKET_READY / IN_PROGRESS`。Attempt 2 与 Attempt 3 因既有 protocol/authority violations 无效；Attempt 4 以 clean `DELIVERY_UNKNOWN` 收口。后续 Diagnostic Batch 已把 H6 证明为根因：write 前准备/send 与首次 post-write identity observation 共用同一 operation budget，使首次写后 status 在接近 60 秒时被 `command()` 压缩，而 dedicated navigation wait 尚未可靠介入。最小 Option-C 修复已通过本地回归；新的多轮 Acceptance Packet 已准备但未启动。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
 ### Attempt 4 canonical closeout
 
@@ -101,26 +101,28 @@ ROUND_1_WRITE_COUNT: 1
 RESEND_PERFORMED: NO
 FINAL_TRANSPORT_CLASSIFICATION: DELIVERY_UNKNOWN
 PRIMARY_OBSERVED_BLOCKER: OpenCLI send returned non-success after /new preparation, and exact Delivery Conversation identity could not be established.
-ROOT_CAUSE: UNRESOLVED
+ROOT_CAUSE: PRE_WRITE_AND_POST_WRITE_VERIFICATION_SHARE_ONE_OPERATION_BUDGET
+ROOT_CAUSE_PROVEN: YES
 ```
 
-`DELIVERY_UNKNOWN` 不等于 `FAILED`。当前 Evidence 未证明 injection、click/send、Browser window/session、navigation、identity capture 或 post-send lifecycle 中的任何单一机制为 root cause。
+`DELIVERY_UNKNOWN` 不等于 `FAILED`。Evidence 证明的是 H6：首次 post-write Browser identity observation 仍处于 pre-write/send operation，因而在 dedicated navigation wait 可靠介入前已被剩余 operation timeout clamp。H4/H5 未被升级为已证明根因。
 
-### Current Diagnostic Batch
+### Diagnostic closeout and next Acceptance Run
 
 - **BATCH_ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001`
-- **State:** `READY / NOT_STARTED`
-- **Goal:** 解释 Attempt 4 在 `/new` preparation 后 send 非成功且无法建立 exact Delivery Conversation identity 的核心 UNKNOWN；最大化信息增益、区分竞争假设、缩小 UNKNOWN，并在 Evidence 支持后才决定 Product 是否需要修改。
+- **Diagnostic state:** `COMPLETED / ROOT_CAUSE_PROVEN`
+- **Result:** `H6=PROVEN`；`ROOT_CAUSE=PRE_WRITE_AND_POST_WRITE_VERIFICATION_SHARE_ONE_OPERATION_BUDGET`；采用 `MODIFIED_OPTION_C`，在 write 调用返回后、首次 post-send status 前开始独立 bounded `POST_SEND_VERIFICATION` operation。
 - **Product authority:** `E:\PROJECTS\agent-project-system`。
 - **Lab environment:** `E:\PROJECTS\rr-lead-skill-lab`。
-- **Active Packet:** 由 `docs/references/current-execution-packet.md` 唯一指向；本文不复制 Packet 正文。
+- **Active Packet:** 新的 canonical multi-turn Acceptance Packet 由 `docs/references/current-execution-packet.md` 唯一指向，状态 `READY / NOT_STARTED`；本轮不执行真实 Browser write。
 - **Boundary:** 本 Batch 属于当前 Work Item，不创建并行 Active Work Item；未来 `ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001` 仍为 `NOT_ACTIVE` 候选。
 
 ### Local integration validation
 
-- Diagnostic Batch bootstrap governance：active pointer、Packet SHA-256、Work Item、Batch ID、Product head、Lab/Product roots、Evidence Matrix schema 与 hard budgets 由 `check_docs.py` 一致性校验；fresh Coordinator 路径为 `AGENTS.md → docs/current.md → pointer → Packet → schema`。
+- Acceptance bootstrap governance：active pointer、Packet SHA-256、Work Item 与 exact Product head 由 `check_docs.py` 一致性校验；fresh Coordinator 路径为 `AGENTS.md → docs/current.md → pointer → Packet`。
 - Review Loop + Completion Gate suites：29/29 PASS；包含 canonical renderer → Transport preflight integration regression。
-- Transport suite：197/197 PASS；新增 exact `MESSAGE_ID` duplicate rejection、合法 `IN_REPLY_TO_MESSAGE_ID` acceptance 与 JSON outer packet duplicate rejection，canonical receipt no-resend regressions保持通过。
+- Transport suite：200/200 PASS；包含旧路径接近 60 秒时 status timeout clamp、新 operation 首次 status 获得正常 bounded timeout、timeout/nonzero send 仍进入 verification 且不重发、navigation bounds、canonical receipt 与 same-ID no-resend。
+- Real Agent Review Loop suite：19/19 PASS；未把本地 suite 写成真实 Browser Final `APPROVE`。
 - Package checker unit suite：14/14 PASS。正式 package checker 的字母排序 runner 两次分别在不同既有 Transport fixture 上失败；两项失败测试均立即单独 PASS，完整 197-test suite PASS。精确 runner failure cause 未证明，因此只记录为 package-runner-only intermittent failure，不升级为 Product Transport failure，也不放宽任何 runtime/test budget。
 - Package checker unit suite：14/14 PASS。完整 `check_skill_package.py` 的隔离 Transport subprocess 在既有 240 秒 runner 上限处 timeout；同一 194-test suite 已独立全绿。本 Work Item 不为此放宽 Transport 或 checker timeout。
 - `check_docs.py` 与 `git diff --check`：PASS。
@@ -184,7 +186,7 @@ ROOT_CAUSE: UNRESOLVED
 
 Browser Final `REVISE` 指出的 first-write 前 blocker 已归类为 `PRODUCT_VALIDATION_BUG`：旧实现错误地把 `new` command result row 当成继续验证的前置条件，而真正的 write gate 应是 post-new exact status `/new`（或 root）与 empty read。最小修复已完成并由两条新增 regression 覆盖。
 
-Browser-cleaned R3 Evidence 到位并实现 navigation wait 后，只运行了一次新的 bounded Product E2E。Message 1 使用 repository source `0.4.17` 与全新 Message ID；`new` command 在 15 秒 local wait 内 timeout，但后续 exact status `/new` 与 empty read 依照已批准 create-validation 规则建立 blank-page write gate；`send` 返回 0/`Success` 且写入计数为 1。Immediate post-send status 在约 2 秒内仍返回 `/new`。由于此前步骤已消耗约 42 秒，navigation wait 在总 60 秒 operation cap 中只获得 2.63 秒有效 budget；首个只读 status poll 在该局部 timeout 内被终止，最终 `navigation_poll_count=1`、`navigation_wait_elapsed=2.875`、`DELIVERY_UNKNOWN`，且禁止同 ID resend；Message 2 未启动。这是 Product budget allocation blocker，不是新的外部 completion-signal UNKNOWN，也不需要 Lab。
+Browser-cleaned R3 Evidence 到位并实现 navigation wait 后，只运行了一次新的 bounded Product E2E。Message 1 使用 repository source `0.4.17` 与全新 Message ID；`new` command 在 15 秒 local wait 内 timeout，但后续 exact status `/new` 与 empty read 建立 blank-page write gate；`send` 返回 0/`Success` 且写入计数为 1。真正的 starvation 发生在 navigation wait 之前：首次 `capture_post_send_status()` 仍调用受 pre-write/send operation 剩余时间 clamp 的 `command()`。因此不能表述为“30 秒 navigation budget 缩到 2.63 秒”；准确根因是 `PRE_WRITE_AND_POST_WRITE_VERIFICATION_SHARE_ONE_OPERATION_BUDGET`。最终仍为 `DELIVERY_UNKNOWN` 且禁止同 ID resend；Message 2 未启动。
 
 独立 navigation phase revision 后只运行了一次新的 bounded Product E2E。Message 1 使用 repository source `0.4.18` 与全新 Message ID，write count `1`；immediate status 为 `/new`，随后两次只读 status 在 `6.875` 秒内观察到 Conversation `6a79d6d2-cab8-83ea-9081-9604dfabd39d`。唯一 exact marker 经 bounded detail 验证后建立 Delivery A，并把 A 提升为下一 Target。Message 2 使用另一全新 Message ID 与 `send --conversation A`，write count `1`；post-send status/current-page read 的唯一 marker 再次建立 Delivery A。两条消息均未重发，`TRANSPORT_REAL_E2E_VALIDATED=YES`。
 
