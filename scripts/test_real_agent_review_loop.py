@@ -170,6 +170,33 @@ class RealAgentReviewLoopTests(unittest.TestCase):
         self.assertIn("\\u003c", first)
         self.assertIn("\\u007c", first)
 
+    def test_manual_copy_safe_presentation_is_explicit_and_keeps_wire_columns(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-COPY-SAFE-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        rendered = render_browser_review_message(
+            state, "COPY_SAFE_PLAIN_TEXT_BLOCK"
+        )
+        self.assertIn(
+            "BROWSER_RESPONSE_PRESENTATION: COPY_SAFE_PLAIN_TEXT_BLOCK", rendered
+        )
+        self.assertIn("block's copy control", rendered)
+        self.assertIn("must not include fence lines", rendered)
+        self.assertIn(
+            "EVIDENCE: write concrete evidence; use NONE only when status is not MET\n\nFINDINGS:",
+            rendered,
+        )
+        self.assertNotIn("\n  FINDINGS:", rendered)
+
+    def test_raw_wire_remains_default_for_automated_path(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-RAW-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        rendered = render_browser_review_message(state)
+        self.assertIn("BROWSER_RESPONSE_PRESENTATION: RAW_WIRE", rendered)
+        self.assertIn("Do not return JSON or Markdown fences", rendered)
+        self.assertNotIn("COPY_SAFE_PLAIN_TEXT_BLOCK", rendered)
+
     def test_canonical_wire_shape_is_accepted_by_frozen_transport_parser(self):
         request_id = f"{WORK_ITEM_ID}-WIRE-SHAPE-R1-FINAL"
         response = "\n".join((

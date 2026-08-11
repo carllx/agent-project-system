@@ -63,7 +63,9 @@ class TransitionResult:
     reason: str
 
 
-def render_browser_review_message(state: dict[str, Any]) -> str:
+def render_browser_review_message(
+    state: dict[str, Any], response_presentation: str = "RAW_WIRE"
+) -> str:
     """Render the one canonical Browser body for the pending Review Request.
 
     The renderer intentionally uses prose enums instead of shell-like placeholder
@@ -111,6 +113,17 @@ def render_browser_review_message(state: dict[str, Any]) -> str:
     request_json = json.dumps(pending, ensure_ascii=False, indent=2, sort_keys=True)
     for character in WINDOWS_CMD_METACHARACTERS:
         request_json = request_json.replace(character, f"\\u{ord(character):04x}")
+    if response_presentation == "RAW_WIRE":
+        presentation_contract = """BROWSER_RESPONSE_PRESENTATION: RAW_WIRE
+Return only one complete RR wire response. Do not return JSON or Markdown fences."""
+    elif response_presentation == "COPY_SAFE_PLAIN_TEXT_BLOCK":
+        presentation_contract = """BROWSER_RESPONSE_PRESENTATION: COPY_SAFE_PLAIN_TEXT_BLOCK
+In the ChatGPT UI, present the complete RR wire inside exactly one independently
+copyable plain-text code block and no surrounding prose. The user must use that
+block's copy control. The copied block content itself must not include fence lines;
+its first nonempty line is RR_REVIEW_BEGIN and its last is RR_REVIEW_END."""
+    else:
+        raise ValueError("unsupported Browser response presentation")
     return f"""ACF REVIEW REQUEST
 
 Independently review the supplied request and evidence. Do not infer a required decision.
@@ -127,7 +140,7 @@ REVIEW_REQUEST_PAYLOAD
 {request_json}
 
 STRICT_BROWSER_RESPONSE_CONTRACT
-Return only one complete RR wire response. Do not return JSON or Markdown fences.
+{presentation_contract}
 The first nonempty line must be RR_REVIEW_BEGIN.
 The last nonempty line must be RR_REVIEW_END.
 
@@ -172,6 +185,7 @@ REVIEW_DECISION: make one independent allowed decision
 WORK_ITEM_STATE: IN_PROGRESS
 ACCEPTANCE_STATUS:
 {status_template}
+
 FINDINGS: write review findings or NONE
 BLOCKERS: write blocking findings or NONE
 DEBT: write nonblocking debt or NONE

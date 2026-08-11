@@ -125,6 +125,11 @@ def main() -> int:
     render = subparsers.add_parser("render-review-message")
     render.add_argument("--state", required=True, type=Path)
     render.add_argument("--output", required=True, type=Path)
+    render.add_argument(
+        "--response-presentation",
+        choices=("RAW_WIRE", "COPY_SAFE_PLAIN_TEXT_BLOCK"),
+        default="RAW_WIRE",
+    )
 
     send = subparsers.add_parser("send-review")
     send.add_argument("--state", required=True, type=Path)
@@ -176,7 +181,10 @@ def main() -> int:
     elif args.command == "render-review-message":
         if args.output.exists():
             raise FileExistsError(f"refusing to overwrite canonical Browser message: {args.output}")
-        write_text_atomic(args.output, render_browser_review_message(state))
+        write_text_atomic(
+            args.output,
+            render_browser_review_message(state, args.response_presentation),
+        )
         output({"message_path": str(args.output), "review_request_id": pending_request_id(state)})
         return 0
     elif args.command == "send-review":
