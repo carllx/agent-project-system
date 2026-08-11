@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -159,6 +160,40 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         errors.append("active Execution Packet depends on forbidden historical conversation sources")
     if re.search(r"&(?:amp|lt|gt|quot|#\d+);", packet_text):
         errors.append("active Execution Packet contains escaped HTML/CLI garbage")
+    if packet.get("PACKET_TYPE") == "DIAGNOSTIC_BATCH_PACKET":
+        batch_id = packet.get("BATCH_ID")
+        if not batch_id or f"**Active Diagnostic Batch:** `{batch_id}`" not in current_text:
+            errors.append("docs/current.md active Diagnostic Batch does not match its Packet")
+        schema_relative = packet.get("EVIDENCE_MATRIX_SCHEMA")
+        if not schema_relative:
+            errors.append("Diagnostic Batch Packet has no Evidence Matrix schema")
+            return
+        schema_path = (ROOT / schema_relative).resolve()
+        if not schema_path.is_relative_to(ROOT) or not schema_path.is_file():
+            errors.append("Diagnostic Batch Evidence Matrix schema is missing or outside the repository")
+            return
+        try:
+            schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            errors.append(f"Diagnostic Batch Evidence Matrix schema is invalid JSON: {error}")
+            return
+        batch_const = schema.get("properties", {}).get("BATCH_ID", {}).get("const")
+        if batch_const != batch_id:
+            errors.append("Diagnostic Batch Evidence Matrix schema has the wrong Batch identity")
+        budget_properties = (
+            schema.get("properties", {}).get("BUDGET", {}).get("properties", {})
+        )
+        for field in (
+            "MAX_HYPOTHESES",
+            "MAX_RUNTIME_PROBES",
+            "MAX_BROWSER_WRITES",
+            "MAX_SHARED_RUNTIME_WRITES",
+            "MAX_SUBAGENTS",
+            "MAX_BATCH_ROUNDS",
+            "MAX_WALLCLOCK_MINUTES",
+        ):
+            if str(budget_properties.get(field, {}).get("const")) != packet.get(field):
+                errors.append(f"Diagnostic Batch budget mismatch for {field}")
 
 
 def main() -> int:

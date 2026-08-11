@@ -2,7 +2,7 @@
 
 PACKET_TYPE: ANTIGRAVITY_EXECUTION_PACKET
 
-PACKET_STATE: READY_NOT_STARTED
+PACKET_STATE: COMPLETED_CLEAN_FAIL
 
 PROTOCOL_VERSION: ACF-0.1
 
@@ -17,6 +17,20 @@ REPOSITORY: E:\PROJECTS\agent-project-system
 BRANCH: work/real-agent-review-loop-mvp-001
 
 RUNTIME_ROOT: C:\Users\carll\AppData\Local\Temp\agent-project-system\REAL-AGENT-REVIEW-LOOP-MVP-001\attempt-4
+
+## Canonical Closeout
+
+```text
+ATTEMPT_RESULT: CLEAN_FAIL
+PROTOCOL_VIOLATION: NO
+ROUND_1_WRITE_COUNT: 1
+RESEND_PERFORMED: NO
+FINAL_TRANSPORT_CLASSIFICATION: DELIVERY_UNKNOWN
+PRIMARY_OBSERVED_BLOCKER: OpenCLI send returned non-success after /new preparation, and exact Delivery Conversation identity could not be established.
+ROOT_CAUSE: UNRESOLVED
+```
+
+This closeout supersedes the operational `READY_NOT_STARTED` instructions below. They are retained only as the historical approved execution contract and must not be executed again.
 
 ## Goal
 

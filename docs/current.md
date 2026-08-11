@@ -53,6 +53,7 @@ Agent Project System
 - **Review Request ID:** `NONE`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
 - **Execution Packet state:** `READY / NOT_STARTED`
+- **Active Diagnostic Batch:** `REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -88,14 +89,36 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、canonical Browser message path、fail-closed Product Transport command path、tests 和完整 Execution Packet 已达到可以启动一次干净 Attempt 4 的位置；它不表示真实 Loop 已完成或本 Work Item 已完成。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效。Attempt 3 因 Execution Agent 修改/直调冻结 Transport、移动 canonical artifact 和重复执行 `send-review` 而无效；其后 `/new` failure 不作为 clean Evidence。两次 invalid attempt 均已保存于 repo 外 incident archive，不作为 Product completion Evidence。Attempt 3 独立暴露并由正式源码证明的 `TRANSPORT-MESSAGE-ID-HEADER-FALSE-POSITIVE` 已以 exact-header preflight 修正。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `DIAGNOSTIC_BATCH_READY / IN_PROGRESS`。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效。Attempt 3 因 Execution Agent 修改/直调冻结 Transport、移动 canonical artifact 和重复执行 `send-review` 而无效；其后 `/new` failure 不作为 clean Evidence。两次 invalid attempt 均已保存于 repo 外 incident archive，不作为 Product completion Evidence。Attempt 3 独立暴露并由正式源码证明的 `TRANSPORT-MESSAGE-ID-HEADER-FALSE-POSITIVE` 已以 exact-header preflight 修正。Attempt 4 已执行并以 clean fail 收口；不启动 Attempt 5，而是在同一 Work Item 内用 bounded Diagnostic Batch 解释 blocker。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
-### First real E2E task
+### Attempt 4 canonical closeout
 
-Attempt 4 的真实小任务不再修改 Product source。Execution Agent 只在 repo 外 Attempt Runtime 生成可复查的 Completion-Gate observation artifact：Round 1 记录 `UNRESOLVED_USER_DECISION=true` 的真实 Policy 结果，并把字符串 `UNVERIFIED` case 明确留为缺失 Evidence；Browser 必须基于实际 artifact/Evidence 独立决定，Product 不模拟 `REVISE`。收到匹配 `REVISE` 后，Execution Agent 只按 `REQUIRED_ACTIONS` 补充同一 Runtime artifact、以新 artifact SHA 和新 Final Request ID 再审；只有匹配且 current 的 Browser `APPROVE` 可以经 Completion Gate 完成。Attempt Agent 不得修改任何 repo 文件、Product source、Transport、Loop/Transport state 或 canonical artifact；Product command failure 必须立即停止。
+```text
+ATTEMPT_ID: ATTEMPT-4
+ATTEMPT_RESULT: CLEAN_FAIL
+PROTOCOL_VIOLATION: NO
+ROUND_1_WRITE_COUNT: 1
+RESEND_PERFORMED: NO
+FINAL_TRANSPORT_CLASSIFICATION: DELIVERY_UNKNOWN
+PRIMARY_OBSERVED_BLOCKER: OpenCLI send returned non-success after /new preparation, and exact Delivery Conversation identity could not be established.
+ROOT_CAUSE: UNRESOLVED
+```
+
+`DELIVERY_UNKNOWN` 不等于 `FAILED`。当前 Evidence 未证明 injection、click/send、Browser window/session、navigation、identity capture 或 post-send lifecycle 中的任何单一机制为 root cause。
+
+### Current Diagnostic Batch
+
+- **BATCH_ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001`
+- **State:** `READY / NOT_STARTED`
+- **Goal:** 解释 Attempt 4 在 `/new` preparation 后 send 非成功且无法建立 exact Delivery Conversation identity 的核心 UNKNOWN；最大化信息增益、区分竞争假设、缩小 UNKNOWN，并在 Evidence 支持后才决定 Product 是否需要修改。
+- **Product authority:** `E:\PROJECTS\agent-project-system`。
+- **Lab environment:** `E:\PROJECTS\rr-lead-skill-lab`。
+- **Active Packet:** 由 `docs/references/current-execution-packet.md` 唯一指向；本文不复制 Packet 正文。
+- **Boundary:** 本 Batch 属于当前 Work Item，不创建并行 Active Work Item；未来 `ANTIGRAVITY-BOUNDED-EXPERIMENT-BATCH-MVP-001` 仍为 `NOT_ACTIVE` 候选。
 
 ### Local integration validation
 
+- Diagnostic Batch bootstrap governance：active pointer、Packet SHA-256、Work Item、Batch ID、Product head、Lab/Product roots、Evidence Matrix schema 与 hard budgets 由 `check_docs.py` 一致性校验；fresh Coordinator 路径为 `AGENTS.md → docs/current.md → pointer → Packet → schema`。
 - Review Loop + Completion Gate suites：29/29 PASS；包含 canonical renderer → Transport preflight integration regression。
 - Transport suite：197/197 PASS；新增 exact `MESSAGE_ID` duplicate rejection、合法 `IN_REPLY_TO_MESSAGE_ID` acceptance 与 JSON outer packet duplicate rejection，canonical receipt no-resend regressions保持通过。
 - Package checker unit suite：14/14 PASS。正式 package checker 的字母排序 runner 两次分别在不同既有 Transport fixture 上失败；两项失败测试均立即单独 PASS，完整 197-test suite PASS。精确 runner failure cause 未证明，因此只记录为 package-runner-only intermittent failure，不升级为 Product Transport failure，也不放宽任何 runtime/test budget。
