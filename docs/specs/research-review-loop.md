@@ -239,17 +239,17 @@ PREPARE_MESSAGE
 → PARSE_RR_REVIEW
 ```
 
-当前 Wrapper 的正式发送由单一 `send --prepare-new` 调用完成：保存有限 recent history 基线，执行 `opencli chatgpt new`，用 `status` 与 current-page `read` 验证空白环境，再执行一次 `opencli chatgpt send`。发送后必须重新捕获 exact current identity；若 NEW first-write 的 immediate status 仍为 `/new` 或 root，则在 30 秒、最多 10 次的独立只读 phase 内只用 `status` 观察 URL completion。该 phase 不消耗普通 9-command gate，其 elapsed time 从旧 60 秒 operation budget 中显式排除；因此 qualifying operation 的物理 wall-clock 最多增加 30 秒，但 write/recovery/detail budget不变。首次 exact `/c/<id>` 只成为 current/navigation candidate，仍须以唯一 exact Work Item/Message marker 建立 delivery；new-session delivery 随后才可提升为下一轮 target。deadline、attempt exhaustion 或真实 status command error 以不同 stop reason 保持 `DELIVERY_UNKNOWN`，不扫描 history、不重发。后续轮次使用 `send --conversation <TARGET>`，仍须重新验证 current、delivery 与 target，且不使用该 new-session wait。`ask --new` 继续禁止。
+当前 Wrapper 的正式发送由单一 `send --prepare-new` 调用完成：保存有限 recent history 基线，执行 `opencli chatgpt new`，用 `status` 与 current-page `read` 验证空白环境，再执行一次 `opencli chatgpt send`。write 调用一旦返回控制权，无论 return code 为零、非零或 timeout，都必须在首次写后 status 前开始新的 `POST_SEND_VERIFICATION` bounded operation；该边界不重置发送计数、canonical receipt、Message ID 或 no-resend 语义。若 NEW first-write 的 immediate status 仍为 `/new` 或 root，则在 30 秒、最多 10 次的独立只读 navigation sub-budget 内只用 `status` 观察 URL completion。该 sub-budget 不消耗普通 command gate，elapsed time 从当前 post-send operation budget 中显式排除；write/recovery/detail budget不变。首次 exact `/c/<id>` 只成为 current/navigation candidate，仍须以唯一 exact Work Item/Message marker 建立 delivery；new-session delivery 随后才可提升为下一轮 target。deadline、attempt exhaustion 或真实 status command error 以不同 stop reason 保持 `DELIVERY_UNKNOWN`，不扫描 history、不重发。后续轮次使用 `send --conversation <TARGET>`，仍须重新验证 current、delivery 与 target，且不使用该 new-session wait。`ask --new` 继续禁止。
 
 正常恢复不得扫描全部 pre-send Conversation。existing-target write 必须先 exact-detail 持久 target，即使 post-send Browser current 仍位于其他 Conversation；new-session 发送后 status 若给出 exact current ID，恢复只对该 exact ID 执行最多一次 detail。status 无 exact ID 时，才刷新同一 bounded history window、排除基线并要求唯一 `NEW_CANDIDATE_DIFF`。只搜索精确 `WORK_ITEM_ID` 与 `MESSAGE_ID`，且必须恰好命中一个 user marker；returned identity、current identity 和 history candidate 都只是 observation，不能单独建立 delivery。当前发送后目标若属于发送前 ID，或 existing-target delivery 与 target 不同，且 exact marker 命中，则为 `MISROUTED_DELIVERY`；找不到或 marker 重复则保持 `DELIVERY_UNKNOWN` 并永久禁止该 Message ID 重发。
 
 Runtime State 至少记录 `work_item_id`、`message_id`、五类 Conversation identity、target-at-send、identity observations/establishment、`delivery_state`、`send_attempt_count`、`recovery_attempt_count`、`misroute_detected`、`started_at`、`stopped_at` 和 `stop_reason`。记录位于系统临时目录且不保存 Cookie、Token 或账号凭据；完成后显式清理。
 
-默认实验预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=9`、`MAX_EXPERIMENT_SECONDS=60`。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
+默认有界操作预算为 `MAX_SEND_ATTEMPTS_PER_MESSAGE=1`、`MAX_RECOVERY_ATTEMPTS=1`、`MAX_DETAIL_CHECKS=1`、`MAX_EXTERNAL_COMMANDS=9`、`MAX_EXPERIMENT_SECONDS=60`。write 前准备与 send 属于原操作；write 返回后的 observation/recovery 属于 `POST_SEND_VERIFICATION` 操作。两个操作均使用既有有限 command/time 上限，且新的操作边界不得改变每 Message ID 一次 write、recovery/detail 或 receipt 限制。数值可以在受控实验配置中进一步收紧或明确调整，但必须有限；任一上限到达立即停止。
 
 ### Integrated start-new-and-send interface
 
-Wrapper 必须提供单一正式命令 `send --prepare-new`。它在同一进程、同一 Runtime 状态和同一预算内执行：
+Wrapper 必须提供单一正式命令 `send --prepare-new`。它在同一进程和同一 Runtime 状态内跨两个连续、分别有界的操作执行：
 
 ```text
 PRE_SEND_HISTORY_BASELINE
@@ -258,6 +258,7 @@ PRE_SEND_HISTORY_BASELINE
 → VERIFY_EMPTY_READ
 → SEND_ONCE
 → RECORD_SEND_OBSERVATIONS
+→ BEGIN_POST_SEND_VERIFICATION
 → POST_SEND_STATUS
 → POST_SEND_HISTORY_DIFF_IF_NEEDED
 → AT_MOST_ONE_DETAIL

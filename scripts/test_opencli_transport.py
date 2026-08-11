@@ -719,6 +719,90 @@ def legacy_result(
     }
 
 
+def command_budget_state(root: Path) -> dict:
+    started = TRANSPORT_MODULE.utc_now()
+    return {
+        "started_at": started,
+        "current_operation": "SEND",
+        "current_operation_started_at": started,
+        "current_operation_external_command_count": 5,
+        "external_command_count": 5,
+        "operation_budget_excluded_navigation_seconds": 0.0,
+        "send_attempted": True,
+        "send_attempt_count": 1,
+        "message_send_count": 1,
+        "work_item_state": "IN_PROGRESS",
+        "stopped_at": None,
+        "stop_reason": None,
+        "raw_outputs": [],
+        "state_file": str(root / "state.json"),
+        "parameters": {
+            "max_external_commands": 9,
+            "max_experiment_seconds": 60,
+            "command_wait_seconds": 30,
+        },
+    }
+
+
+def test_pre_write_send_operation_clamps_status_timeout_near_sixty_seconds() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-shared-budget-regression-"))
+    state = command_budget_state(root)
+    captured: list[float] = []
+    original_elapsed = TRANSPORT_MODULE.operation_elapsed_seconds
+    original_run = TRANSPORT_MODULE.run_opencli
+    try:
+        TRANSPORT_MODULE.operation_elapsed_seconds = lambda unused: 57.2
+        TRANSPORT_MODULE.run_opencli = lambda unused_args, timeout: (
+            captured.append(timeout) or legacy_result()
+        )
+        result = TRANSPORT_MODULE.command(
+            state, root / "state.json", "status-after-send",
+            ["chatgpt", "status"], 30,
+        )
+    finally:
+        TRANSPORT_MODULE.operation_elapsed_seconds = original_elapsed
+        TRANSPORT_MODULE.run_opencli = original_run
+    assert result is not None
+    assert captured == [2]
+
+
+def test_post_send_verification_starts_with_normal_bounded_status_timeout() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-post-send-budget-regression-"))
+    state = command_budget_state(root)
+    captured: list[float] = []
+    original_elapsed = TRANSPORT_MODULE.operation_elapsed_seconds
+    original_run = TRANSPORT_MODULE.run_opencli
+    try:
+        TRANSPORT_MODULE.operation_elapsed_seconds = lambda value: (
+            57.2 if value.get("current_operation") == "SEND" else 0.2
+        )
+        TRANSPORT_MODULE.begin_post_send_verification(state)
+        TRANSPORT_MODULE.run_opencli = lambda unused_args, timeout: (
+            captured.append(timeout) or legacy_result()
+        )
+        result = TRANSPORT_MODULE.command(
+            state, root / "state.json", "status-after-send",
+            ["chatgpt", "status"], 30,
+        )
+    finally:
+        TRANSPORT_MODULE.operation_elapsed_seconds = original_elapsed
+        TRANSPORT_MODULE.run_opencli = original_run
+    assert result is not None
+    assert captured == [30]
+    assert state["current_operation"] == "POST_SEND_VERIFICATION"
+    assert state["current_operation_external_command_count"] == 1
+    assert state["send_attempt_count"] == 1
+    assert state["message_send_count"] == 1
+    assert state["post_send_verification_boundary"] == {
+        "trigger": "WRITE_INVOCATION_RETURNED_CONTROL",
+        "previous_operation": "SEND",
+        "previous_operation_started_at": state["started_at"],
+        "previous_operation_external_command_count": 5,
+        "previous_operation_elapsed_seconds": 57.2,
+        "started_at": state["current_operation_started_at"],
+    }
+
+
 def send_cli_command(
     root: Path, *, max_external_commands: int = 9, manual_new_url: str | None = None,
     conversation: str | None = None, prepare_new: bool = False,
@@ -798,7 +882,7 @@ def run_send_case(
     )
     state = json.loads((root / "state.json").read_text(encoding="utf-8"))
     calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-    assert len(calls) <= max_external_commands + state.get("navigation_poll_count", 0)
+    assert len(calls) <= (max_external_commands * 2) + state.get("navigation_poll_count", 0)
     return completed, state, calls, command, env
 
 
@@ -1862,9 +1946,11 @@ def test_detail_count_only_increments_on_real_invocation() -> None:
         legacy_history(OLD_ID, NEW_ID),
     ], max_external_commands=8)
     assert completed.returncode == 2
-    assert state["external_command_count"] == 8
-    assert state["detail_check_count"] == 0
-    assert [call[1] for call in calls].count("detail") == 0
+    assert state["external_command_count"] == 9
+    assert state["current_operation"] == "POST_SEND_VERIFICATION"
+    assert state["current_operation_external_command_count"] == 3
+    assert state["detail_check_count"] == 1
+    assert [call[1] for call in calls].count("detail") == 1
 
 
 def test_navigation_deadline_never_promotes_unobserved_history_candidates() -> None:
@@ -3200,14 +3286,33 @@ def test_mvp_post_write_recovery_budget_exhaustion_stays_unknown() -> None:
 
 def test_mvp_timeout_with_exact_marker_records_recovered_provenance() -> None:
     timed_out = legacy_result(returncode=75, timed_out=True, stderr="TIMEOUT")
-    _, state, _, _, _ = run_send_case(
+    _, state, calls, _, _ = run_send_case(
         mvp_new_sequence(send_result=timed_out),
         prepare_new=True, legacy_sequence=False,
     )
     assert state["send_timed_out"] is True
+    assert state["current_operation"] == "POST_SEND_VERIFICATION"
+    assert state["send_attempt_count"] == state["message_send_count"] == 1
+    assert sum(call[1] == "send" for call in calls) == 1
     assert state["recovered_conversation_id"] == NEW_ID
     assert state["delivery_conversation_id"] == NEW_ID
     assert state["identity_establishment"]["RECOVERED"]["source_kind"] == "POST_WRITE_UNCERTAIN_CURRENT_CANDIDATE"
+
+
+def test_mvp_nonzero_send_enters_post_send_verification_without_resend() -> None:
+    nonzero = legacy_result(returncode=66, stderr="OPENCLI_SEND_FAILED")
+    _, state, calls, _, _ = run_send_case(
+        mvp_new_sequence(send_result=nonzero),
+        prepare_new=True, legacy_sequence=False,
+    )
+    assert state["send_return_code"] == 66
+    assert state["current_operation"] == "POST_SEND_VERIFICATION"
+    assert state["post_send_verification_boundary"]["trigger"] == (
+        "WRITE_INVOCATION_RETURNED_CONTROL"
+    )
+    assert state["send_attempt_count"] == state["message_send_count"] == 1
+    assert sum(call[1] == "send" for call in calls) == 1
+    assert state["delivery_conversation_id"] == NEW_ID
 
 
 def test_mvp_manual_export_after_write_is_forbidden() -> None:
@@ -3239,6 +3344,8 @@ def test_mvp_manual_export_after_write_is_forbidden() -> None:
 
 def main() -> int:
     tests = [
+        test_pre_write_send_operation_clamps_status_timeout_near_sixty_seconds,
+        test_post_send_verification_starts_with_normal_bounded_status_timeout,
         test_experiment_protocol_module_is_loadable,
         test_opencli_transport_reexports_protocol_api,
         test_direct_opencli_transport_help_still_works,
@@ -3435,6 +3542,7 @@ def main() -> int:
         test_mvp_same_id_different_state_file_is_blocked_by_write_receipt,
         test_mvp_post_write_recovery_budget_exhaustion_stays_unknown,
         test_mvp_timeout_with_exact_marker_records_recovered_provenance,
+        test_mvp_nonzero_send_enters_post_send_verification_without_resend,
         test_mvp_manual_export_after_write_is_forbidden,
     ]
     for test in tests:

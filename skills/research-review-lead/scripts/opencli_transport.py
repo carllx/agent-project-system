@@ -400,6 +400,29 @@ def begin_operation(state: dict[str, Any], operation: str) -> None:
         state["pending_response_last_checked_at"] = started
 
 
+def begin_post_send_verification(state: dict[str, Any]) -> None:
+    """Start the bounded post-write observation operation after one write returned."""
+    if not state.get("send_attempted") or state.get("send_attempt_count") != 1:
+        raise RuntimeError(
+            "POST_SEND_VERIFICATION requires exactly one recorded send attempt"
+        )
+    boundary = {
+        "trigger": "WRITE_INVOCATION_RETURNED_CONTROL",
+        "previous_operation": state.get("current_operation"),
+        "previous_operation_started_at": state.get("current_operation_started_at"),
+        "previous_operation_external_command_count": state.get(
+            "current_operation_external_command_count", 0
+        ),
+        "previous_operation_elapsed_seconds": round(
+            operation_elapsed_seconds(state), 3
+        ),
+    }
+    begin_operation(state, "POST_SEND_VERIFICATION")
+    state["operation_budget_excluded_navigation_seconds"] = 0.0
+    boundary["started_at"] = state["current_operation_started_at"]
+    state["post_send_verification_boundary"] = boundary
+
+
 def operation_elapsed_seconds(state: dict[str, Any]) -> float:
     started_at = state.get("current_operation_started_at") or state["started_at"]
     started = datetime.fromisoformat(started_at)
@@ -1904,6 +1927,7 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         state, "WRITE_REPORTED_CANDIDATE", returned_id, "SEND_RESULT",
         state["raw_outputs"][-1],
     )
+    begin_post_send_verification(state)
     post_status = capture_post_send_status(state, state_path)
     if post_status is None:
         set_state(state, "DELIVERY_UNKNOWN", "post-send Browser identity could not be captured")
