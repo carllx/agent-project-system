@@ -10,6 +10,14 @@
 4. `docs/current.md`
 5. 根据 Index 的 `Read when` 读取适用的 Spec、ADR、Skill 或模板
 
+## NEW_AGENT_BOOTSTRAP
+
+1. 读取 `docs/current.md`。
+2. 读取其中精确的 `ACTIVE_EXECUTION_PACKET_POINTER`，再读取该 pointer 指向的 Packet。
+3. 只执行该 Packet。
+4. 不得从历史 transcript、Agent memory 或全局搜索恢复当前指令。
+5. pointer、Packet、Work Item 或 required head 不一致时，以 `ACTIVE_EXECUTION_PACKET_INVALID` 停止。
+
 ## 项目目录
 
 - `docs/`：登记表、当前状态、Spec 与 ADR 等权威知识。

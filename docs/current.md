@@ -51,6 +51,8 @@ Agent Project System
 - **State:** `IN_PROGRESS`
 - **Workflow state:** `EXECUTING`
 - **Review Request ID:** `NONE`
+- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
+- **Execution Packet state:** `READY / NOT_STARTED`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。

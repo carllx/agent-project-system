@@ -8,6 +8,8 @@
 | `README.md` | 项目身份、Browser 新对话 exact-ref bootstrap、当前阶段和入口 | 每次会话启动或跨 Browser Conversation 恢复 | Active | 2026-08-10 |
 | `docs/index.md` | 长期 Markdown 唯一登记表 | 查找权威资料或创建文档前 | Active | 2026-08-11 |
 | `docs/current.md` | 当前唯一 Work Item、Lab Evidence、下一动作与事实状态 | 每次会话启动及状态流转时 | Active | 2026-08-11 |
+| `docs/references/current-execution-packet.md` | 当前 Execution Packet 的稳定 pointer；不保存 Packet 正文 | 新 Execution Agent 从当前 Work Item 定位精确执行契约时 | Active | 2026-08-11 |
+| `docs/references/real-agent-review-loop-mvp-001-attempt-4.md` | Attempt 4 已批准的 self-contained Antigravity Execution Packet | 启动或审计 `REAL-AGENT-REVIEW-LOOP-MVP-001` Attempt 4 时 | Ready / Not started | 2026-08-11 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision、Completion Authority 与 Review Artifact access path | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
 | `docs/specs/antigravity-completion-gate-adapter.md` | Antigravity Completion-Gate Adapter 的状态映射、Contract、bounded continuation 与失败语义 | 设计、实现或验证 Antigravity execution termination gate 时 | Active | 2026-08-09 |
