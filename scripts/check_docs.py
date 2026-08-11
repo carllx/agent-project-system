@@ -140,8 +140,12 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         errors.append("active Execution Packet Work Item does not match its pointer")
     if packet.get("REQUIRED_PRODUCT_HEAD") != pointer["REQUIRED_PRODUCT_HEAD"]:
         errors.append("active Execution Packet required Product head does not match its pointer")
-    if pointer["PACKET_STATE"] != "READY_NOT_STARTED" or packet.get("PACKET_STATE") != "READY_NOT_STARTED":
-        errors.append("active Execution Packet must be READY_NOT_STARTED")
+    allowed_packet_states = {"READY_NOT_STARTED", "BLOCKED_NOT_READY"}
+    if (
+        pointer["PACKET_STATE"] not in allowed_packet_states
+        or packet.get("PACKET_STATE") != pointer["PACKET_STATE"]
+    ):
+        errors.append("active Execution Packet state is invalid or does not match its pointer")
     canonical_packet_bytes = packet_text.replace("\r\n", "\n").encode("utf-8")
     actual_hash = hashlib.sha256(canonical_packet_bytes).hexdigest()
     if pointer["ACTIVE_PACKET_SHA256"] != actual_hash:
@@ -153,13 +157,36 @@ def validate_active_execution_packet(errors: list[str]) -> None:
         errors.append("docs/current.md active Work Item does not match the Packet pointer")
     if "**ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`" not in current_text:
         errors.append("docs/current.md does not identify the stable active Packet pointer")
-    if "**Execution Packet state:** `READY / NOT_STARTED`" not in current_text:
-        errors.append("docs/current.md does not record READY / NOT_STARTED Packet state")
+    current_packet_state = {
+        "READY_NOT_STARTED": "**Execution Packet state:** `READY / NOT_STARTED`",
+        "BLOCKED_NOT_READY": "**Execution Packet state:** `BLOCKED / NOT READY`",
+    }[pointer["PACKET_STATE"]]
+    if current_packet_state not in current_text:
+        errors.append("docs/current.md does not record the active Packet state")
     forbidden = ("transcript.jsonl", ".gemini\\antigravity\\brain")
     if any(value.lower() in packet_text.lower() for value in forbidden):
         errors.append("active Execution Packet depends on forbidden historical conversation sources")
     if re.search(r"&(?:amp|lt|gt|quot|#\d+);", packet_text):
         errors.append("active Execution Packet contains escaped HTML/CLI garbage")
+    if packet.get("PACKET_TYPE") == "REAL_AGENT_REVIEW_LOOP_MANUAL_RELAY_PACKET":
+        forbidden_automatic_tokens = (
+            "opencli_transport.py",
+            "send-review",
+            "recover-review",
+            "--prepare-new",
+            "--previous-transport-state",
+        )
+        automatic_cli_call = re.search(
+            r"(?im)^\s*(?:opencli(?:\.exe)?\s|python\s+\S*opencli_transport\.py\s)",
+            packet_text,
+        )
+        if automatic_cli_call or any(
+            token in packet_text.lower() for token in forbidden_automatic_tokens
+        ):
+            errors.append("Manual Relay Packet contains an automatic Transport command")
+        readiness = packet.get("MANUAL_RELAY_ACCEPTANCE_READY")
+        if pointer["PACKET_STATE"] == "BLOCKED_NOT_READY" and readiness != "NO":
+            errors.append("blocked Manual Relay Packet must record readiness NO")
     if packet.get("PACKET_TYPE") == "DIAGNOSTIC_BATCH_PACKET":
         batch_id = packet.get("BATCH_ID")
         if not batch_id or f"**Active Diagnostic Batch:** `{batch_id}`" not in current_text:

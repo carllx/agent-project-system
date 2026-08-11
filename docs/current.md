@@ -52,8 +52,8 @@ Agent Project System
 - **Workflow state:** `EXECUTING`
 - **Review Request ID:** `NONE`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
-- **Execution Packet state:** `READY / NOT_STARTED`
-- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-001`
+- **Execution Packet state:** `BLOCKED / NOT READY`
+- **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL`
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
 - **Transport approved artifact:** `5482df126647687c1b837bbffa56c43da3b7346d`；`FROZEN_AT_MVP_0`。
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
@@ -89,7 +89,14 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_STATE:** `ACCEPTANCE_PACKET_READY / IN_PROGRESS`。Attempt 2 与 Attempt 3 因既有 protocol/authority violations 无效；Attempt 4 以 clean `DELIVERY_UNKNOWN` 收口。后续 Diagnostic Batch 已把 H6 证明为根因：write 前准备/send 与首次 post-write identity observation 共用同一 operation budget，使首次写后 status 在接近 60 秒时被 `command()` 压缩，而 dedicated navigation wait 尚未可靠介入。最小 Option-C 修复已通过本地回归；新的多轮 Acceptance Packet 已准备但未启动。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_STATE:** `MANUAL_RELAY_ACCEPTANCE_BLOCKED / IN_PROGRESS`。Attempt 2 与 Attempt 3 因既有 protocol/authority violations 无效；Attempt 4 以 clean `DELIVERY_UNKNOWN` 收口。Diagnostic Batch 已把 H6 证明为根因，最小 Option-C 修复已通过本地回归。自动 Acceptance 仍受 Windows OpenCLI long-argv blocker 阻塞。Manual Relay outbound canonical body 可由现有 Product renderer 生成，但现有 Product driver 只接收冻结 Transport 已验证的 state，不能把用户原样贴回的 raw `RR_REVIEW` response 严格解析、绑定并 ingest；因此 Manual Relay Acceptance 不可启动。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+
+### Manual Relay readiness blocker
+
+- **MANUAL_RELAY_ACCEPTANCE_READY:** `NO`。
+- **Available:** `initialize`、`submit-review`、`render-review-message`、revision state transition 与 Completion Gate policy。
+- **Missing:** 一个最小、正式、fail-closed 的 Manual Relay response ingest adapter，用于保存 raw Browser response、严格解析 envelope、验证 Protocol/Work Item/Request ID/Review Kind/Acceptance coverage，并把已验证 Decision 交给现有 Review Loop。
+- **Boundary:** 本轮未实现该 adapter；不得用手工构造 Transport state、直接调用内部函数或猜测 Decision 代替它。Browser Lead/用户另行授权 Product change 前，Packet 保持 `BLOCKED_NOT_READY`，不得启动 Acceptance。
 
 ### Attempt 4 canonical closeout
 
