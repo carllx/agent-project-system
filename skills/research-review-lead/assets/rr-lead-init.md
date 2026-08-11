@@ -51,6 +51,8 @@ Judge only the declared acceptance criteria. Do not add new pass conditions with
 
 ## Required response
 
+For automated Browser Transport, put the complete machine RR wire inside exactly one fenced `text` code block and put no text before or after that block. The fence is presentation only: OpenCLI plain extraction must yield `RR_REVIEW_BEGIN` as the first non-empty line and `RR_REVIEW_END` as the last non-empty line, with literal underscores, list hyphens, indentation, and every top-level field preserved exactly. Do not normalize, dedent, repair, or convert the extracted wire before strict parsing.
+
 ```text
 RR_REVIEW_BEGIN
 WORK_ITEM_ID: <exact supplied Work Item ID>

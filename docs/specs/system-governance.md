@@ -58,6 +58,8 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 源 Skill 包必须携带运行所需的模板和资源，不得依赖源仓库的 `docs/`、根目录资产或固定绝对路径。目标项目无需克隆 Source Repository，也不要求采用 Agent Project System 的目录结构。安装和更新必须从源包进行并验证完整性，不得静默覆盖安装位置中的未知修改。项目级同名 Skill 与用户级 Skill 不得无意并存；发现同名来源时必须显式处理版本和选择，不能假设静默覆盖。
 
+本仓库的 Antigravity 项目级 runtime copy 只允许通过 `scripts/sync_skill_runtime.py` 从 `skills/research-review-lead/` 单向更新到显式目标。工具只覆盖源包声明的九个文件，遇到未知目标文件即停止，并在写入后验证 VERSION 与每个声明文件的 SHA-256；`.agents/` 是本地部署产物，不是 Product source 或 Git 事实源。
+
 ## User communication and decision gates
 
 与用户沟通使用白话并尽量减少打扰。只有目标方向、成本付费、账号权限、隐私数据、文件公开上传、不可逆操作、重大安全风险或必须接受降级时请求决定。所有决策请求必须提供三个白话选项和一个明确推荐。

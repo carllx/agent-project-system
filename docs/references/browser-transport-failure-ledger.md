@@ -12,6 +12,52 @@
 
 命中 `DO_NOT_REPEAT_WHEN` 时，只有 `RETRY_ONLY_IF` 中的变量确实改变后才可重试。相同失败条件、相同机制和相同 Evidence 预算下不得重复实验。
 
+正式 bounded experiment 默认 `ONE_GOAL_ONE_FRESH_CONVERSATION`，顺序固定为 `/goal → read AGENTS/rules → read this Ledger → execute → report → stop`。新 Conversation 从本 Ledger 获得历史失败知识，不依赖旧 Conversation memory。已知 working path 和已查明的 CLI capability 不重新探索；一个实验不得边执行边持续重写 runner；background task 不得无界 schedule/poll；Evidence 足够后立即收口。
+
+## KG-002 — Fenced code block to strict RR parser compatibility
+
+- **EXPERIMENT_ID:** `RR-CODEBLOCK-PARSER-COMPAT-001`
+- **EVIDENCE_CLASS:** `PROVEN`
+- **PATH:** Browser unique fenced code block → OpenCLI plain extraction → unchanged repository-source `rr_response_fields()`.
+- **RESULT:** `CODEBLOCK_STRICT_RR_COMPATIBILITY=PROVEN`; strict parse accepted `IN_REPLY_TO_MESSAGE_ID=RR-CODEBLOCK-PARSER-COMPAT-001-R1` and `REVIEW_DECISION=REVISE`.
+- **FIRST_FAILURE_STAGE:** `NONE`.
+- **RAW_ERROR:** `NONE`.
+- **EVIDENCE:** Extracted plain text began/ended with exact RR sentinels and preserved literal underscores, list hyphens, and Status/Evidence indentation without normalize, replace, dedent, repair, or Markdown conversion.
+- **CONFIDENCE:** `HIGH` for this exact representation path.
+- **DO_NOT_REPEAT_WHEN:** The proposal only seeks to re-prove fenced-code-block compatibility with the unchanged strict parser.
+- **RETRY_ONLY_IF:** Browser/OpenCLI plain extraction or strict parser behavior materially changes.
+- **KNOWN_GOOD_ALTERNATIVE:** Require the complete machine RR wire in one fenced `text` code block with no outside text.
+
+## KB-003 — SMOKE-002 representation false negative
+
+- **EXPERIMENT_ID:** `SMOKE-002`
+- **EVIDENCE_CLASS:** `OBSERVED`
+- **PATH:** Automated Browser response representation used by SMOKE-002.
+- **RESULT:** `SMOKE-002_RESPONSE_ACTUALLY_EXISTED=OBSERVED`; `SMOKE-002_FALSE_NEGATIVE_REPRESENTATION=OBSERVED`.
+- **FIRST_FAILURE_STAGE:** Browser response representation / machine extraction classification.
+- **RAW_ERROR:** The Product path classified the response as unavailable even though a Browser response was later observed to exist; no parser relaxation is authorized.
+- **EVIDENCE:** Cleaned experiment result accepted by the user; KG-002 separately proves the copy-safe fenced representation path.
+- **CONFIDENCE:** `HIGH` that the false negative occurred; broader causes remain unproven.
+- **DO_NOT_REPEAT_WHEN:** Machine RR wire is again returned as ordinary Markdown prose instead of the known-good unique fenced block.
+- **RETRY_ONLY_IF:** The response presentation changes to KG-002 or a causally relevant extraction variable changes.
+- **KNOWN_GOOD_ALTERNATIVE:** KG-002 fenced code block presentation plus unchanged plain extraction and strict parser.
+
+## U-003 — Intermittent stale controlled tab
+
+- **EXPERIMENT_ID:** `NOT_ASSIGNED`.
+- **EVIDENCE_CLASS:** `OBSERVED`
+- **PATH:** Antigravity/OpenCLI controlled Browser tab state.
+- **RESULT:** `INTERMITTENT_STALE_CONTROLLED_TAB=USER_OBSERVED_NOT_REPRODUCED`.
+- **FIRST_FAILURE_STAGE:** `UNVERIFIED`.
+- **RAW_ERROR:** No reproducible raw error captured.
+- **EVIDENCE:** User observation only; current controlled reproduction did not reproduce it.
+- **CONFIDENCE:** `LOW` pending a natural future occurrence.
+- **DO_NOT_REPEAT_WHEN:** The sole purpose is to force reproduction without a real Product blocker.
+- **RETRY_ONLY_IF:** A future bounded Product run naturally exposes the same symptom with capturable Evidence.
+- **KNOWN_GOOD_ALTERNATIVE:** Use the current known-good fresh-Conversation path.
+
+This entry is not `STALE_CONTROLLED_TAB_DISPROVEN`.
+
 ## KG-001 — Direct Node minimal autonomous loop
 
 - **EXPERIMENT_ID:** `AG-BROWSER-AUTONOMOUS-MULTIPATH-BATCH-001`

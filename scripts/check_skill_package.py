@@ -26,6 +26,11 @@ REQUIRED_ASSETS = {
     "handoff.md",
     "rr-lead-init.md",
 }
+REQUIRED_RR_INIT_MARKERS = {
+    "exactly one fenced `text` code block",
+    "put no text before or after that block",
+    "Do not normalize, dedent, repair, or convert",
+}
 EXPECTED_PACKAGE_FILES = {
     "SKILL.md",
     "VERSION",
@@ -481,6 +486,15 @@ def check_assets_and_references(skill_text: str) -> list[str]:
     for relative in sorted(referenced_assets):
         if not (PACKAGE / relative).is_file():
             errors.append(f"SKILL.md references missing package resource: {relative}")
+    rr_init = asset_dir / "rr-lead-init.md"
+    if rr_init.is_file():
+        rr_init_text = rr_init.read_text(encoding="utf-8")
+        for marker in sorted(REQUIRED_RR_INIT_MARKERS):
+            if marker not in rr_init_text:
+                errors.append(
+                    "rr-lead-init.md is missing fenced response contract marker: "
+                    f"{marker}"
+                )
     return errors
 
 
@@ -525,6 +539,7 @@ def check_repository_hygiene() -> list[str]:
             path
             for path in ROOT.rglob(name)
             if ".git" not in path.relative_to(ROOT).parts
+            and ".agents" not in path.relative_to(ROOT).parts
         ]
         if len(copies) != 1:
             listed = ", ".join(path.relative_to(ROOT).as_posix() for path in copies)

@@ -19,9 +19,87 @@ SPEC = importlib.util.spec_from_file_location("check_skill_package", CHECKER)
 assert SPEC and SPEC.loader
 CHECKER_MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER_MODULE)
+SYNC_SCRIPT = ROOT / "scripts" / "sync_skill_runtime.py"
+SYNC_SPEC = importlib.util.spec_from_file_location("sync_skill_runtime", SYNC_SCRIPT)
+assert SYNC_SPEC and SYNC_SPEC.loader
+SYNC_MODULE = importlib.util.module_from_spec(SYNC_SPEC)
+SYNC_SPEC.loader.exec_module(SYNC_MODULE)
 
 
 class PackageCheckerExecutionTests(unittest.TestCase):
+    def make_runtime_package(self, root: Path, version: str) -> Path:
+        package = root / "research-review-lead"
+        for relative in SYNC_MODULE.PACKAGE_FILES:
+            path = package / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                f"{version}\n" if relative == "VERSION" else f"{relative}:{version}\n",
+                encoding="utf-8",
+            )
+        return package
+
+    def test_runtime_sync_updates_version_and_all_declared_hashes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-sync-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.18")
+            target = self.make_runtime_package(root / "target", "0.4.14")
+
+            report = SYNC_MODULE.sync_runtime(source, target)
+
+            self.assertEqual(report["runtime_version_before"], "0.4.14")
+            self.assertEqual(report["runtime_version_after"], "0.4.18")
+            self.assertTrue(report["hash_parity"])
+            self.assertEqual(
+                SYNC_MODULE.declared_snapshot(source),
+                SYNC_MODULE.declared_snapshot(target),
+            )
+
+    def test_runtime_sync_refuses_unknown_target_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-sync-extra-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.18")
+            target = self.make_runtime_package(root / "target", "0.4.14")
+            (target / "unknown.txt").write_text("do not overwrite\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "unknown files"):
+                SYNC_MODULE.sync_runtime(source, target)
+
+            self.assertEqual((target / "VERSION").read_text(encoding="utf-8"), "0.4.14\n")
+
+    def test_runtime_check_only_rejects_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-check-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.18")
+            target = self.make_runtime_package(root / "target", "0.4.18")
+            (target / "SKILL.md").write_text("stale\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "hash_mismatches=SKILL.md"):
+                SYNC_MODULE.sync_runtime(source, target, check_only=True)
+
+    def test_rr_lead_init_enforces_fenced_machine_response_contract(self) -> None:
+        rr_init = (
+            ROOT / "skills" / "research-review-lead" / "assets" / "rr-lead-init.md"
+        ).read_text(encoding="utf-8")
+        for marker in CHECKER_MODULE.REQUIRED_RR_INIT_MARKERS:
+            self.assertIn(marker, rr_init)
+
+    def test_repository_hygiene_ignores_agents_runtime_deployment_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-hygiene-test-") as directory:
+            root = Path(directory)
+            package = root / "skills" / "research-review-lead"
+            runtime = root / ".agents" / "skills" / "research-review-lead"
+            for asset in CHECKER_MODULE.REQUIRED_ASSETS:
+                for destination in (package / "assets" / asset, runtime / "assets" / asset):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("fixture\n", encoding="utf-8")
+
+            with mock.patch.multiple(CHECKER_MODULE, ROOT=root, PACKAGE=package):
+                errors = CHECKER_MODULE.check_repository_hygiene()
+
+            self.assertFalse(
+                any("expected one authoritative" in error for error in errors), errors
+            )
+
     def run_fake_test_file(
         self, source: str, *, timeout_seconds: float = 5
     ) -> tuple[int, list[str]]:

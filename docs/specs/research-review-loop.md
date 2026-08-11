@@ -117,7 +117,9 @@ submit-review
 
 `ingest-manual-review` 要求严格 UTF-8、精确且唯一的 RR sentinels、完整有序的顶层字段、正确 Round，以及与 pending Request 完全匹配的 Work Item、Request ID、Review Kind、ACF binding、Acceptance coverage 和 reviewed artifact identity。权威 `REVISE` 仍须含可执行 Required Actions；权威 Final `APPROVE` 仍须全部 criteria 为 `MET` 且无 blocker、Required Actions 或 unresolved User Decision。任何缺失、重复、错绑或 stale 都保持 pending 且返回 `NON_AUTHORITATIVE`。
 
-Manual Relay 必须用 `render-review-message --response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK` 生成 Browser contract。Browser 在普通 Markdown prose 之外提供唯一独立、可复制的 plain-text block；用户只使用该 block 的 copy control，保存的 raw 内容不含 fence delimiters，第一/最后非空行仍为 RR sentinels，所有顶层字段仍从 column zero 开始。最后一项 Acceptance Evidence 与 `FINDINGS:` 之间建议保留一个空行，避免 UI 把后续字段渲染为列表 continuation。这个空行只是 presentation boundary，不授权 parser 去缩进、猜测或修复 malformed wire。自动路径仍使用默认 `RAW_WIRE` presentation，既有 Transport contract 不变。
+Manual Relay 必须用 `render-review-message --response-presentation COPY_SAFE_PLAIN_TEXT_BLOCK` 生成 Browser contract。Browser 在普通 Markdown prose 之外提供唯一独立、可复制的 plain-text block；用户只使用该 block 的 copy control，保存的 raw 内容不含 fence delimiters，第一/最后非空行仍为 RR sentinels，所有顶层字段仍从 column zero 开始。最后一项 Acceptance Evidence 与 `FINDINGS:` 之间建议保留一个空行，避免 UI 把后续字段渲染为列表 continuation。这个空行只是 presentation boundary，不授权 parser 去缩进、猜测或修复 malformed wire。
+
+Automated Browser Transport 的 presentation contract 不使用普通 Markdown prose 或 `RAW_WIRE` 渲染。Browser 必须把完整 machine RR wire 放入唯一 fenced `text` code block，block 外不得有任何文字。OpenCLI plain extraction 后，第一/最后非空行必须仍为 RR sentinels，literal underscore、list hyphen、Status/Evidence indentation 与 column-zero 顶层字段必须原样保留；提取结果直接进入既有 strict parser，不经过 Markdown converter、normalize、replace、dedent 或 repair。`CODEBLOCK_STRICT_RR_COMPATIBILITY=PROVEN` 只证明该 presentation path 与 repository-source `rr_response_fields()` 兼容，不放宽 parser。
 
 成功的 Manual ingest 在 Review History 记录 `REVIEW_SOURCE=MANUAL_RELAY`、raw response path/hash、Request ID、reviewed artifact ID 和时间。它不得写入或推断 automated Transport identity、Conversation identity 或 same-Conversation machine verification。用户在同一个 Browser Lead Conversation 中完成两轮只属于用户维持的操作事实；Manual Relay 可验证功能闭环，但不能把 automated Browser Transport 标为已验证。
 
@@ -243,7 +245,7 @@ FAILED
 
 正式 RR Lead 回复采用两层身份绑定。Transport 必须把一次 `detail` 或同一次 `ask` 结果产生的 Conversation ID、messages、来源类型和原始输出路径封装成不可拆分的 `ResponseMessageBatch`。`verified_target_conversation_id` 必须在进入正式回复验证前由调用层显式建立；`accept_delivery` 只能消费该 Batch，不得写入或覆盖 verified target。传输来源必须证明 `response_batch.conversation_id == verified_target_conversation_id`，不得信任回复正文自报的 Conversation ID。
 
-正式回复必须由第一条非空行 `RR_REVIEW_BEGIN` 和最后一条非空行 `RR_REVIEW_END` 完整封包，封包外不得有说明、示例、引用或其他文字。封包内必须完整包含 `WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID`、`ROUND`、`REVIEW_DECISION`、`WORK_ITEM_STATE`、`ACCEPTANCE_STATUS`、`FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`；字段不得重复，前三项必须分别与当前 Work Item、最后发送的完整 Message ID 和预期 Round 精确相等。
+正式回复的 extracted plain wire 必须由第一条非空行 `RR_REVIEW_BEGIN` 和最后一条非空行 `RR_REVIEW_END` 完整封包，wire 内不得有说明、示例、引用或其他文字。Automated Browser presentation 只允许外层唯一 fenced code block；fence delimiters 不进入 plain wire。封包内必须完整包含 `WORK_ITEM_ID`、`IN_REPLY_TO_MESSAGE_ID`、`ROUND`、`REVIEW_DECISION`、`WORK_ITEM_STATE`、`ACCEPTANCE_STATUS`、`FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`；字段不得重复，前三项必须分别与当前 Work Item、最后发送的完整 Message ID 和预期 Round 精确相等。
 
 解析器先在已验证 Conversation 的有序消息中收集同时精确包含目标 `WORK_ITEM_ID` 与 `MESSAGE_ID` 的 user-role 消息。零个返回 `RESPONSE_IDENTITY_MISMATCH`；多于一个返回 `OUTBOUND_MESSAGE_IDENTITY_AMBIGUOUS`，不得任意选择锚点或进入正式 Review Parser；恰好一个时只检查其后的 assistant-role 消息。用户引用、较早回复、其他 Conversation、缺字段、前缀或子串碰撞、封包外文字均不可成为正式审核，也不得本地补值。唯一完整匹配回复进入 `RESPONSE_IDENTITY_VERIFIED`；无回复保持 `RESPONSE_PENDING`，缺字段、身份不匹配、多个完整匹配或来源错误分别记录为 `RESPONSE_IDENTITY_MISSING`、`RESPONSE_IDENTITY_MISMATCH`、`RESPONSE_IDENTITY_AMBIGUOUS` 或 `RESPONSE_SOURCE_CONVERSATION_MISMATCH`。这些失败状态不得进入正式 Review Parser，也不得允许相同 Message ID 重发。
 

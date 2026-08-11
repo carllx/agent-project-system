@@ -13,6 +13,7 @@
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
 - **Source Skill VERSION:** `0.4.18`。
+- **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.18`，九个声明文件 SHA-256 parity `PASS`。实验输入曾观察旧 runtime VERSION `0.4.14`；本轮 Product workspace 的 pre-sync 只读检查发现目标路径当时不存在，因此两项按 provenance 分开记录，不互相覆盖。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
 - **CANONICAL_DEPLOYMENT_PATH:** `UNVERIFIED`。仓库没有安装脚本；项目历史记录了 `.codex\skills` 的本机安装结果，但不能证明它是所有平台通用的 canonical Codex 用户级 Skill 路径。
@@ -59,6 +60,13 @@ Agent Project System
 - **Objective:** 让真实 Antigravity Execution Agent 与独立 Browser GPT Supervisor 完成一次 `Execute → Review → Revise → Review → Approve` 协作循环，并且只有匹配的 Final Browser `APPROVE` 才能完成 Work Item。
 - **Scope:** 选择一个安全、真实、可快速复查的小任务；建立最小 Loop Driver/状态桥接；提交 identity-bound Review Request 与 Evidence；接收并执行 Browser `REVISE`；重新 Review；把匹配的 Final `APPROVE` 映射到 Completion Gate 与 Work Item completion。
 - **Out of scope:** 主动扩展 OpenCLI Transport、补证 timeout/no-extra-conversation、Codex Adapter、MCP、Plugin、通用 orchestration、UI、多 Browser Lead、并发、quorum 或长期 Hook deployment 裁决。
+
+### Post-closeout Product integration candidate
+
+- `DIRECT_NODE_PRODUCT_INTEGRATION_CANDIDATE` 已进入 Product source；不等于 autonomous Product loop 已验证。
+- `CODEBLOCK_STRICT_RR_COMPATIBILITY=PROVEN`：Automated Browser 的完整 machine RR wire 使用唯一 fenced `text` code block，OpenCLI plain extraction 后原样进入 strict parser；block 外不得有文字，不使用 Markdown converter、normalize、replace、dedent 或 repair。
+- `.agents` Antigravity runtime copy 已单向同步到 authoritative Product VERSION `0.4.18`，九个声明文件 VERSION/hash parity `PASS`；`.agents` 仍是 ignored deployment artifact，不是 source。
+- `PRODUCT_AUTONOMOUS_SMOKE_NOT_YET_RUN=YES`；本记录不重开 `REAL-AGENT-REVIEW-LOOP-MVP-001`，其状态仍为 `ACHIEVED / COMPLETED`。
 
 ### Acceptance Criteria
 

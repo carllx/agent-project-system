@@ -94,7 +94,7 @@ Execution / Experiment Agent MUST NOT:
 - change docs/index.md
 - repair Product
 - create retry run
-- Browser / Transport 实验前读取 `docs/references/browser-transport-failure-ledger.md`；未改变 `RETRY_ONLY_IF` 变量时不得重复命中 `DO_NOT_REPEAT_WHEN` 的路径，也不得把 `OBSERVED` / `INFERENCE` 升级为 `PROVEN`。
+- 正式 bounded experiment 默认 `ONE_GOAL_ONE_FRESH_CONVERSATION`：`/goal → read AGENTS/rules → read Failure Ledger → execute → report → stop`；不重复探索 working path/已查 CLI capability，不边执行边重写 runner，不无界 schedule/poll，Evidence 足够即收口，并且未改变 `RETRY_ONLY_IF` 变量时不得重复命中 `DO_NOT_REPEAT_WHEN` 的路径或把 `OBSERVED` / `INFERENCE` 升级为 `PROVEN`。
 
 When a blocker occurs:
 STOP → Evidence → Project Agent → Browser Lead decision

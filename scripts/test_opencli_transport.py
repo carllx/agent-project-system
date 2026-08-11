@@ -2513,6 +2513,45 @@ def test_exact_rr_review_envelope_is_accepted() -> None:
     assert result["status"] == "RESPONSE_IDENTITY_VERIFIED"
 
 
+def test_codeblock_plain_extraction_preserves_strict_rr_wire() -> None:
+    reply_id = "RR-CODEBLOCK-PARSER-COMPAT-001-R1"
+    plain = (
+        "RR_REVIEW_BEGIN\n"
+        f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+        f"IN_REPLY_TO_MESSAGE_ID: {reply_id}\n"
+        "ROUND: 1\n"
+        "REVIEW_DECISION: REVISE\n"
+        "WORK_ITEM_STATE: IN_PROGRESS\n"
+        "ACCEPTANCE_STATUS:\n"
+        "  - Criterion: AC1\n"
+        "    Status: NOT_MET\n"
+        "    Evidence: TOKEN_B missing\n"
+        "FINDINGS: TOKEN_B is required.\n"
+        "BLOCKERS: NONE\n"
+        "DEBT: NONE\n"
+        "NEXT_WORK_ORDER: ADD_TOKEN_B\n"
+        "VALIDATION: Re-read the revised artifact.\n"
+        "USER_DECISION_REQUIRED: NONE\n"
+        "RR_REVIEW_END"
+    )
+
+    parsed = TRANSPORT_MODULE.rr_response_fields(
+        plain,
+        expected_message_id=reply_id,
+        expected_work_item_id=LEGACY_WORK_ITEM,
+        expected_round=1,
+    )
+
+    assert plain.splitlines()[0] == "RR_REVIEW_BEGIN"
+    assert plain.splitlines()[-1] == "RR_REVIEW_END"
+    assert "IN_REPLY_TO_MESSAGE_ID" in plain
+    assert "  - Criterion: AC1" in plain
+    assert "    Status: NOT_MET" in plain
+    assert "    Evidence: TOKEN_B missing" in plain
+    assert parsed["IN_REPLY_TO_MESSAGE_ID"] == reply_id
+    assert parsed["REVIEW_DECISION"] == "REVISE"
+
+
 def test_assistant_quoted_rr_review_is_rejected() -> None:
     result = rr_identity_result([
         "Below is an example, not a formal review:\n\n" + rr_review_text()

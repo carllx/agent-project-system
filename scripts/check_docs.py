@@ -23,6 +23,7 @@ def markdown_files() -> list[Path]:
         path
         for path in ROOT.rglob("*.md")
         if ".git" not in path.relative_to(ROOT).parts
+        and ".agents" not in path.relative_to(ROOT).parts
     )
 
 
