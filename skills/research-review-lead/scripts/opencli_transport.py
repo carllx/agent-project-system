@@ -1062,7 +1062,7 @@ def prepare_new_command(args: argparse.Namespace) -> int:
 
 
 def prepare_payload(args: argparse.Namespace, body: str) -> str:
-    if marker(args.message_id) in body:
+    if has_exact_header(body, "MESSAGE_ID", args.message_id):
         raise ValueError("message body already contains MESSAGE_ID; provide body without transport headers")
     return json.dumps({
         "WORK_ITEM_ID": args.work_item_id,

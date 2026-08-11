@@ -1378,6 +1378,51 @@ def test_compact_packet_payload_is_single_line_and_lossless() -> None:
     } <= packet.keys()
 
 
+def test_prepare_payload_accepts_in_reply_to_message_id() -> None:
+    args = type("Args", (), {
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": "MSG-1",
+        "round": 1,
+        "message_type": "REVIEW_REQUEST",
+    })()
+    payload = TRANSPORT_MODULE.prepare_payload(
+        args, "IN_REPLY_TO_MESSAGE_ID: MSG-1\nFINDINGS: NONE"
+    )
+    assert json.loads(payload)["EVIDENCE"].startswith("IN_REPLY_TO_MESSAGE_ID: MSG-1")
+
+
+def test_prepare_payload_rejects_exact_message_id_header() -> None:
+    args = type("Args", (), {
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": "MSG-1",
+        "round": 1,
+        "message_type": "REVIEW_REQUEST",
+    })()
+    try:
+        TRANSPORT_MODULE.prepare_payload(args, "MESSAGE_ID: MSG-1\nFINDINGS: NONE")
+    except ValueError as error:
+        assert "already contains MESSAGE_ID" in str(error)
+    else:
+        raise AssertionError("exact MESSAGE_ID header was not rejected")
+
+
+def test_prepare_payload_rejects_top_level_json_message_id() -> None:
+    args = type("Args", (), {
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": "MSG-1",
+        "round": 1,
+        "message_type": "REVIEW_REQUEST",
+    })()
+    try:
+        TRANSPORT_MODULE.prepare_payload(
+            args, json.dumps({"MESSAGE_ID": "MSG-1", "EVIDENCE": "duplicate"})
+        )
+    except ValueError as error:
+        assert "already contains MESSAGE_ID" in str(error)
+    else:
+        raise AssertionError("top-level JSON MESSAGE_ID was not rejected")
+
+
 def test_compact_packet_identity_is_accepted_with_formatter_suffix() -> None:
     text = json.dumps({
         "WORK_ITEM_ID": LEGACY_WORK_ITEM,
@@ -3258,6 +3303,9 @@ def main() -> int:
         test_pending_resume_rejects_wrong_reply_identity,
         test_pending_resume_stops_at_configured_limit,
         test_compact_packet_payload_is_single_line_and_lossless,
+        test_prepare_payload_accepts_in_reply_to_message_id,
+        test_prepare_payload_rejects_exact_message_id_header,
+        test_prepare_payload_rejects_top_level_json_message_id,
         test_compact_packet_identity_is_accepted_with_formatter_suffix,
         test_compact_packet_wrong_identity_is_rejected,
         test_send_passes_one_complete_single_line_packet_to_opencli,

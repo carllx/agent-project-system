@@ -166,6 +166,22 @@ class RealAgentReviewLoopTests(unittest.TestCase):
         self.assertIn("ACF_BINDING_BEGIN", parsed["VALIDATION"])
         self.assertIn("CRITERION: AC2", parsed["ACCEPTANCE_STATUS"])
 
+    def test_canonical_browser_message_passes_transport_preflight(self):
+        state = loop_state()
+        request_id = f"{WORK_ITEM_ID}-PREFLIGHT-R1-FINAL"
+        submit_review_request(state, final_request(request_id), "artifact-1")
+        body = render_browser_review_message(state)
+        args = type("Args", (), {
+            "work_item_id": WORK_ITEM_ID,
+            "message_id": request_id,
+            "round": 1,
+            "message_type": "REVIEW_REQUEST",
+        })()
+        payload = TRANSPORT_MODULE.prepare_payload(args, body)
+        packet = json.loads(payload)
+        self.assertEqual(packet["MESSAGE_ID"], request_id)
+        self.assertIn(f"IN_REPLY_TO_MESSAGE_ID: {request_id}", packet["EVIDENCE"])
+
     def test_send_review_uses_one_fail_closed_canonical_path(self):
         with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:
             directory = Path(temporary_directory)

@@ -101,6 +101,8 @@ submit-review
 
 `send-review` 从 pending Request 推导 Message ID 和 Round，生成不可覆盖的 canonical message/Transport state path，并使用冻结 Transport 默认预算；同一 Request 的本地发送 artifact 已存在时 fail closed。`recover-review` 只接受与当前 pending Work Item/Request 匹配、且已有一次 write 的 Transport state，并只调用 no-write pending recovery。Execution Agent 不得删除 canonical write receipt、删除或重建 Transport state、直接编辑 Loop/Transport JSON，或扩大任何 retry/recovery budget。
 
+Transport payload preflight 只把行首精确 `MESSAGE_ID: <current id>` 或 JSON outer packet 的同名顶层字段视为重复 Transport header。合法 RR 字段 `IN_REPLY_TO_MESSAGE_ID: <current id>` 不得因 substring overlap 被拒绝；该修正只收紧 header identity 判断，不改变 canonical receipt 或 same-Message-ID no-resend。
+
 为避免 Windows `.cmd` 路径中未验证的 payload metacharacter 风险，renderer 自身不生成尖括号或竖线占位语法；Request JSON 中的 Windows command metacharacter 使用 JSON Unicode escape 表示，identity 字段包含这些字符时直接拒绝。此 serializer 约束不等于已证明 `.cmd` root cause，也不授权修改冻结 Transport。
 
 为不向冻结 RR wire parser 增加 ACF-specific 顶层字段，Browser Lead 在现有 `VALIDATION` 多行字段中返回以下精确 compatibility binding：

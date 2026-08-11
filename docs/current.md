@@ -86,7 +86,7 @@ Agent Project System
 
 **TRUE_EXTERNAL_UNKNOWN:** 无会改变最小 bridge 实现选择的外部未知量。实际 Antigravity route 触发和 Browser 对 compatibility envelope 的服从将在真实 Loop 中观察；失败时才形成直接 blocker。
 
-**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、canonical Browser message path、fail-closed Product Transport command path、tests 和完整 Execution Packet 已达到可以启动一次干净 Attempt 3 的位置；它不表示真实 Loop 已完成或本 Work Item 已完成。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效，已保存于 repo 外 incident archive，不作为 Product completion Evidence。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
+**REAL_LOOP_READY:** `YES`，含义仅为 Product integration、state bridge、canonical Browser message path、fail-closed Product Transport command path、tests 和完整 Execution Packet 已达到可以启动一次干净 Attempt 4 的位置；它不表示真实 Loop 已完成或本 Work Item 已完成。Attempt 2 的 initial Browser delivery 有效但 response 因 outgoing body 缺失 strict wire contract 而 `NON_AUTHORITATIVE`；R1B 因 state/receipt/budget protocol violations 无效。Attempt 3 因 Execution Agent 修改/直调冻结 Transport、移动 canonical artifact 和重复执行 `send-review` 而无效；其后 `/new` failure 不作为 clean Evidence。两次 invalid attempt 均已保存于 repo 外 incident archive，不作为 Product completion Evidence。Attempt 3 独立暴露并由正式源码证明的 `TRANSPORT-MESSAGE-ID-HEADER-FALSE-POSITIVE` 已以 exact-header preflight 修正。Work Item 继续为 `IN_PROGRESS / EXECUTING`。
 
 ### First real E2E task
 
@@ -94,8 +94,9 @@ Agent Project System
 
 ### Local integration validation
 
-- Review Loop + Completion Gate suites：28/28 PASS，包含 canonical renderer、strict contract completeness、frozen wire-parser compatibility、metacharacter-safe JSON rendering、fail-closed first send 与 verified continuation target regression。
-- 冻结 Transport suite：194/194 PASS；`skills/research-review-lead/scripts/opencli_transport.py` 零修改。
+- Review Loop + Completion Gate suites：29/29 PASS；包含 canonical renderer → Transport preflight integration regression。
+- Transport suite：197/197 PASS；新增 exact `MESSAGE_ID` duplicate rejection、合法 `IN_REPLY_TO_MESSAGE_ID` acceptance 与 JSON outer packet duplicate rejection，canonical receipt no-resend regressions保持通过。
+- Package checker unit suite：14/14 PASS。正式 package checker 的字母排序 runner 两次分别在不同既有 Transport fixture 上失败；两项失败测试均立即单独 PASS，完整 197-test suite PASS。精确 runner failure cause 未证明，因此只记录为 package-runner-only intermittent failure，不升级为 Product Transport failure，也不放宽任何 runtime/test budget。
 - Package checker unit suite：14/14 PASS。完整 `check_skill_package.py` 的隔离 Transport subprocess 在既有 240 秒 runner 上限处 timeout；同一 194-test suite 已独立全绿。本 Work Item 不为此放宽 Transport 或 checker timeout。
 - `check_docs.py` 与 `git diff --check`：PASS。
 - 尚未运行真实 Antigravity/Browser E2E；不得把本地测试写成 Browser `APPROVE`。
