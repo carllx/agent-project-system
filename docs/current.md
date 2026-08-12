@@ -6,6 +6,7 @@
 - **North star:** 建立一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。见 `docs/adr/0003-agent-collaboration-framework.md`。
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
+- **Project phase:** `USABLE / MAINTENANCE`；停止主动开发与实验，只在真实使用暴露直接 blocker 时另行授权最小修复。
 - **Active branch:** `work/real-agent-review-loop-mvp-001`；未完成 Work Item 不在 `main`。
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（上一 Work Item closeout）；它不是当前 Work Item 的初始化 commit。
@@ -61,12 +62,13 @@ Agent Project System
 - **Scope:** 选择一个安全、真实、可快速复查的小任务；建立最小 Loop Driver/状态桥接；提交 identity-bound Review Request 与 Evidence；接收并执行 Browser `REVISE`；重新 Review；把匹配的 Final `APPROVE` 映射到 Completion Gate 与 Work Item completion。
 - **Out of scope:** 主动扩展 OpenCLI Transport、补证 timeout/no-extra-conversation、Codex Adapter、MCP、Plugin、通用 orchestration、UI、多 Browser Lead、并发、quorum 或长期 Hook deployment 裁决。
 
-### Post-closeout Product integration candidate
+### Post-closeout Product integration outcome
 
-- `DIRECT_NODE_PRODUCT_INTEGRATION_CANDIDATE` 已进入 Product source；不等于 autonomous Product loop 已验证。
+- `DIRECT_NODE_PRODUCT_INTEGRATION` 已进入 Product source，并由 `AUTONOMOUS-BROWSER-PRODUCT-FINAL-SMOKE-001` 在 Product HEAD `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da` 完成真实 autonomous Product loop 验证。
 - `CODEBLOCK_STRICT_RR_COMPATIBILITY=PROVEN`：Automated Browser 的完整 machine RR wire 使用唯一 fenced `text` code block，OpenCLI plain extraction 后原样进入 strict parser；block 外不得有文字，不使用 Markdown converter、normalize、replace、dedent 或 repair。
 - `.agents` Antigravity runtime copy 已单向同步到 authoritative Product VERSION `0.4.18`，九个声明文件 VERSION/hash parity `PASS`；`.agents` 仍是 ignored deployment artifact，不是 source。
-- `PRODUCT_AUTONOMOUS_SMOKE_NOT_YET_RUN=YES`；本记录不重开 `REAL-AGENT-REVIEW-LOOP-MVP-001`，其状态仍为 `ACHIEVED / COMPLETED`。
+- `AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`；`PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`；`USER_MANUAL_RELAY_COUNT=0`；`HOOK_USED=NO`。本验证不重开 `REAL-AGENT-REVIEW-LOOP-MVP-001`，其状态仍为 `ACHIEVED / COMPLETED`。
+- **Known-good baseline:** Product HEAD `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da`，Conversation `6a7b4841-8188-83ea-b5cb-e15373446131`；R1 Delivery/Response identity verified 后返回 `REVISE`，Required Action 已执行，R2 在同一 Conversation Delivery/Response identity verified 后返回 `APPROVE`。结论只覆盖该 Product、environment 与 workflow，不推广到所有未来 Browser/OpenCLI 情况。
 
 ### Acceptance Criteria
 
@@ -109,8 +111,8 @@ Agent Project System
 - **Copy-safe contract:** Manual renderer 使用 `BROWSER_RESPONSE_PRESENTATION=COPY_SAFE_PLAIN_TEXT_BLOCK`；用户只使用独立 block 的 copy control，raw wire 不含 fence，顶层字段保持 column zero，并建议在最后一项 Acceptance Evidence 与 `FINDINGS:` 之间留空行。Parser strictness 不变。
 - **Two-gate contract:** Gate A 仅含 Browser 输出当前 Decision 前已经存在并可审查的事实；Gate B 在 Final response 保存/ingest 后，由现有 Product state、Manual provenance 与 Completion Gate 验证。Gate B 失败为 `POST_INGEST_COMPLETION_FAILURE`，不得倒改 Browser 历史 Decision。
 - **Manual-003 verified:** R1 raw SHA-256 `98cf130d5ba507d646d48e011577862ca7c32570453c95f5a65bd5e6114f00ad`；R1 artifact SHA-256 `e08d9ad1d1867d0982dcdae387b54c65e89c07d2688ec1c2d974d385d68ebc0f`；R2 raw SHA-256 `b9e2981a9738421d7e7025646a850b8b2818b22942726697491564b7e2d6e0c5`；R2/current artifact SHA-256 `62196d412c338988c9d1a51fb09746af61ad82c2c63a2d14453ba4268ea08dcf`。
-- **Final outcome:** `REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED=YES`；`MANUAL_RELAY_VALIDATED=YES`；`COLLABORATION_MVP_USABLE=YES`。
-- **Boundary:** `AUTOMATED_BROWSER_TRANSPORT_VALIDATED=NO`；`WINDOWS_OPENCLI_LONG_ARGV_BLOCKER=OPEN`。本 Work Item 只证明真实 Manual Relay 的 `Execute → Browser REVISE → ingest → Revision → Browser APPROVE → ingest → Completion`；不证明 automated Browser Transport 已完成。
+- **Final outcome:** `REAL_AGENT_REVIEW_LOOP_FUNCTIONALLY_VALIDATED=YES`；`MANUAL_RELAY_VALIDATED=YES`；`AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`；`PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`；`COLLABORATION_MVP_USABLE=YES`。
+- **Boundary:** Manual Relay 与当前 Direct Node automated Product path 均已验证；Windows `.cmd` / observed long-argv failure record 仍保留，但不阻塞当前 known-good Direct Node path。结论只覆盖已验证 Product/environment/workflow，不证明所有未来 Browser/OpenCLI 状态。
 
 ### Attempt 4 canonical closeout
 

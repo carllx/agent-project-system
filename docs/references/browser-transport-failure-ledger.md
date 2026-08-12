@@ -74,6 +74,22 @@ This entry is not `STALE_CONTROLLED_TAB_DISPROVEN`.
 
 This failure occurred before Response 1 entered formal reading. It is not evidence of Gemini, `/goal`, Hook, or autonomous continuation failure.
 
+## KG-003 — Final autonomous Product loop baseline
+
+- **EXPERIMENT_ID:** `AUTONOMOUS-BROWSER-PRODUCT-FINAL-SMOKE-001`.
+- **EVIDENCE_CLASS:** `PROVEN` within the exact Product, environment, and workflow exercised.
+- **PATH:** Product HEAD `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da` → Direct Node OpenCLI → new Conversation → R1 exact Delivery/Response identity → Required Action → R2 explicit same-Conversation exact Delivery/Response identity.
+- **RESULT:** `AUTONOMOUS_PRODUCT_FINAL_SMOKE=PASS`; `AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`; `PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`; Final Decision `APPROVE`; `USER_MANUAL_RELAY_COUNT=0`; `HOOK_USED=NO`.
+- **FIRST_FAILURE_STAGE:** `NONE`.
+- **RAW_ERROR:** `NONE`.
+- **EVIDENCE:** R1 state SHA-256 `68f139710bad753b6aef2dd2f31e84e216f83bd6202b4a63081cee63de365ebc` records one write, Delivery/Target `6a7b4841-8188-83ea-b5cb-e15373446131`, `RESPONSE_IDENTITY_VERIFIED`, and `REVISE`. R2 state SHA-256 `79c1c7c37378ce64273845ea9370d872a4fbc68801cf77406f623849c3010363` records one write, the same exact Delivery/Target, `RESPONSE_IDENTITY_VERIFIED`, and `APPROVE` after the required action.
+- **CONFIDENCE:** `HIGH` for this exact Product/environment/workflow; not a universal Browser/OpenCLI reliability claim.
+- **DO_NOT_REPEAT_WHEN:** The proposal only seeks to re-prove the unchanged known-good baseline without a new real-use blocker or changed causal variable.
+- **RETRY_ONLY_IF:** Real maintenance use exposes a direct blocker, or Product/environment/workflow changes require a newly authorized bounded validation.
+- **KNOWN_GOOD_ALTERNATIVE:** Use the reviewed Direct Node Product path and existing strict identity/no-resend rules at this baseline.
+
+All earlier Known Bad, Observed, Inference, and Unresolved entries remain part of the Ledger and are not erased by this pass.
+
 ## KG-001 — Direct Node minimal autonomous loop
 
 - **EXPERIMENT_ID:** `AG-BROWSER-AUTONOMOUS-MULTIPATH-BATCH-001`
