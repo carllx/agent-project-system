@@ -6,8 +6,8 @@
 - **North star:** 建立一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。见 `docs/adr/0003-agent-collaboration-framework.md`。
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
-- **Project phase:** `USABLE / MAINTENANCE`；停止主动开发与实验，只在真实使用暴露直接 blocker 时另行授权最小修复。
-- **Active branch:** `work/real-agent-review-loop-mvp-001`；未完成 Work Item 不在 `main`。
+- **Project phase:** `USABLE / MVP-1 MAINLINE INTEGRATION`；继续适用 Maintenance policy，不主动开发或实验。
+- **Active branch:** `integration/autonomous-review-loop-main`；`work/real-agent-review-loop-mvp-001` 冻结为历史 Known Good branch，不再修改。
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（上一 Work Item closeout）；它不是当前 Work Item 的初始化 commit。
 - **Work Item initialization commit:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；它不是 Phase baseline。当前 Git HEAD 由 Git/交接消息提供，本文件不自包含其所在 commit 的 SHA。
@@ -45,6 +45,20 @@ Agent Project System
 - OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
 - `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
 - `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。自动路径消费冻结 Transport 已做 identity verification 的 RR response；Manual 路径消费严格绑定且记录 `MANUAL_RELAY` provenance 的 raw RR wire。两者均不承担 Browser Transport 或 IDE lifecycle translation。
+
+## MVP-1 Mainline Integration
+
+- **Integration state:** `IN_PROGRESS / DRAFT_PR_FINAL_REVIEW_PENDING`。
+- **GitHub authority:** Issue `#2`；Draft PR `#3`，base `main`，head `integration/autonomous-review-loop-main`。
+- **Integration start:** `9e264a765f524d7e23a6333b9a0a50d9281be983`；frozen historical branch `work/real-agent-review-loop-mvp-001`。
+- **Known Good functional baseline:** `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da`；`AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`，`PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`。
+- **CORE / KEEP:** Product Browser Transport、Conversation/Delivery/Response identity、no-resend、`runtime/review_loop.py`、`scripts/acf_review_loop.py` application driver、Completion Gate、Failure Ledger、source-to-runtime parity/sync。
+- **OPTIONAL:** Manual Relay 只作 fallback；Antigravity Stop Hook 只作 bounded lifecycle insurance，默认关闭，二者均不得成为 autonomous Browser collaboration 的核心前置条件。
+- **DEBT / NON-BLOCKING:** strict RR wire grammar 双实现、Review round derivation 多处实现、atomic write helper 重复、Browser response contract 镜像。本轮不重构。
+- **HISTORICAL_ONLY:** 已完成或失败的 Acceptance/Diagnostic Packets 保留为审计 Evidence；不得继续复制整份 Packet 创建新运行实例。
+- **Responsibility audit:** `/goal` 是外部 Antigravity execution entrypoint；`acf_review_loop.py` 不实现 `/goal` continuation，只负责持久化 ACF state、调用 Runtime 和受限 Product Transport，因此本轮不简化代码。
+- **Execution boundary:** 不创建新的 Execution Packet；`docs/references/current-execution-packet.md` 继续只指向已 `COMPLETED` 的历史 Manual Acceptance，不得再次执行。
+- **Merge gate:** 现有相关回归和文档检查通过后提交 PR #3 最终 Browser Review；本文件不自行授权 merge。
 
 ## Current Work Item Closeout
 
