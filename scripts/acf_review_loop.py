@@ -109,6 +109,42 @@ def run_product_transport(arguments: list[str]) -> int:
     return completed.returncode
 
 
+def run_pending_response_windows(
+    transport_path: Path, *, allow_late_check: bool = False
+) -> int:
+    """Consume bounded no-write response windows without exposing pending to the IDE."""
+    state = load_json(transport_path)
+    if state.get("delivery_state") == "BLOCKED_RESPONSE_TIMEOUT":
+        if not allow_late_check:
+            return 2
+        return run_product_transport([
+            "recover", "--state-file", str(transport_path),
+            "--continue-pending", "--late-check",
+        ])
+
+    while state.get("delivery_state") == "RESPONSE_PENDING":
+        before = int(state.get("pending_response_continuation_count", 0))
+        limit = int(
+            state.get("parameters", {}).get("max_pending_response_continuations", 0)
+        )
+        if limit <= 0:
+            return 2
+        if before >= limit:
+            return run_product_transport([
+                "recover", "--state-file", str(transport_path), "--continue-pending",
+            ])
+        result = run_product_transport([
+            "recover", "--state-file", str(transport_path), "--continue-pending",
+        ])
+        state = load_json(transport_path)
+        if state.get("delivery_state") != "RESPONSE_PENDING":
+            return result
+        after = int(state.get("pending_response_continuation_count", 0))
+        if after <= before:
+            raise RuntimeError("pending response continuation made no bounded progress")
+    return 0 if state.get("delivery_state") == "RESPONSE_READY" else 2
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -208,9 +244,15 @@ def main() -> int:
             transport_arguments.append("--prepare-new")
         else:
             transport_arguments.extend([
-                "--conversation", verified_continuation_target(args.previous_transport_state)
+                "--conversation", verified_continuation_target(args.previous_transport_state),
+                "--verified-continuation-state", str(args.previous_transport_state),
             ])
-        return run_product_transport(transport_arguments)
+        result = run_product_transport(transport_arguments)
+        if transport_path.exists():
+            transport = load_json(transport_path)
+            if transport.get("delivery_state") == "RESPONSE_PENDING":
+                return run_pending_response_windows(transport_path)
+        return result
     elif args.command == "recover-review":
         request_id = pending_request_id(state)
         transport = load_json(args.transport_state)
@@ -220,9 +262,10 @@ def main() -> int:
             or transport.get("send_attempt_count") != 1
         ):
             raise ValueError("Transport state is not bound to the pending one-write Review Request")
-        return run_product_transport([
-            "recover", "--state-file", str(args.transport_state), "--continue-pending"
-        ])
+        return run_pending_response_windows(
+            args.transport_state,
+            allow_late_check=transport.get("delivery_state") == "BLOCKED_RESPONSE_TIMEOUT",
+        )
     elif args.command == "ingest-review":
         result = apply_transport_review(
             state, load_json(args.transport_state), args.current_artifact_id

@@ -311,6 +311,93 @@ class RealAgentReviewLoopTests(unittest.TestCase):
             arguments = transport.call_args.args[0]
             self.assertNotIn("--prepare-new", arguments)
             self.assertEqual(arguments[arguments.index("--conversation") + 1], conversation_id)
+            self.assertEqual(
+                arguments[arguments.index("--verified-continuation-state") + 1],
+                str(previous_path),
+            )
+
+    def test_driver_consumes_first_second_or_third_pending_window_without_resend(self):
+        for completed_window in (1, 2, 3):
+            with self.subTest(completed_window=completed_window), tempfile.TemporaryDirectory(
+                dir=ROOT
+            ) as temporary_directory:
+                state_path = Path(temporary_directory) / "transport.json"
+                transport_state = {
+                    "delivery_state": "RESPONSE_PENDING",
+                    "response_identity_status": "RESPONSE_PENDING",
+                    "pending_response_continuation_count": 0,
+                    "send_attempt_count": 1,
+                    "message_send_count": 1,
+                    "message_id": "MESSAGE-1",
+                    "parameters": {"max_pending_response_continuations": 3},
+                }
+                state_path.write_text(json.dumps(transport_state), encoding="utf-8")
+                calls = []
+
+                def continue_window(arguments):
+                    calls.append(arguments)
+                    current = json.loads(state_path.read_text(encoding="utf-8"))
+                    current["pending_response_continuation_count"] += 1
+                    if current["pending_response_continuation_count"] == completed_window:
+                        current["delivery_state"] = "RESPONSE_READY"
+                        current["response_identity_status"] = "RESPONSE_IDENTITY_VERIFIED"
+                        result = 0
+                    else:
+                        result = 2
+                    state_path.write_text(json.dumps(current), encoding="utf-8")
+                    return result
+
+                with mock.patch.object(
+                    acf_review_loop, "run_product_transport", side_effect=continue_window
+                ):
+                    self.assertEqual(
+                        acf_review_loop.run_pending_response_windows(state_path), 0
+                    )
+                self.assertEqual(len(calls), completed_window)
+                self.assertTrue(all(call[0] == "recover" for call in calls))
+                self.assertTrue(all("--continue-pending" in call for call in calls))
+                final = json.loads(state_path.read_text(encoding="utf-8"))
+                self.assertEqual(final["send_attempt_count"], 1)
+                self.assertEqual(final["message_send_count"], 1)
+
+    def test_driver_stops_after_three_pending_windows_without_local_review(self):
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary_directory:
+            state_path = Path(temporary_directory) / "transport.json"
+            state_path.write_text(json.dumps({
+                "delivery_state": "RESPONSE_PENDING",
+                "response_identity_status": "RESPONSE_PENDING",
+                "pending_response_continuation_count": 0,
+                "send_attempt_count": 1,
+                "message_send_count": 1,
+                "message_id": "MESSAGE-1",
+                "parameters": {"max_pending_response_continuations": 3},
+            }), encoding="utf-8")
+            calls = []
+
+            def pending_window(arguments):
+                calls.append(arguments)
+                current = json.loads(state_path.read_text(encoding="utf-8"))
+                current["pending_response_continuation_count"] += 1
+                if current["pending_response_continuation_count"] == 3:
+                    current["delivery_state"] = "BLOCKED_RESPONSE_TIMEOUT"
+                    current["work_item_state"] = "STALLED"
+                    current["stop_reason"] = (
+                        "BLOCKED_RESPONSE_TIMEOUT: no authoritative Browser reply; "
+                        "local Review is forbidden"
+                    )
+                state_path.write_text(json.dumps(current), encoding="utf-8")
+                return 2
+
+            with mock.patch.object(
+                acf_review_loop, "run_product_transport", side_effect=pending_window
+            ):
+                self.assertEqual(acf_review_loop.run_pending_response_windows(state_path), 2)
+            final = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(calls), 3)
+            self.assertEqual(final["work_item_state"], "STALLED")
+            self.assertNotIn("verified_rr_review", final)
+            self.assertEqual(final["send_attempt_count"], 1)
+            self.assertEqual(final["message_send_count"], 1)
 
     def test_full_final_revise_revision_final_approve_loop(self):
         state = loop_state()

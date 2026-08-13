@@ -52,7 +52,7 @@ WORK_ITEM_ID
 MESSAGE_ID: when applicable
 ```
 
-相同角色出现不同非空值时进入 `IDENTITY_CONFLICT`；不得覆盖先前值。history 只允许使用发送前保存的有限基线与一次相同窗口 refresh，不能依赖 newest-first 排序，也不能扫描全部对话。
+相同角色出现不同非空值时进入 `IDENTITY_CONFLICT`；不得覆盖先前值。history 只允许使用发送前保存的有限基线与一次相同窗口 refresh，不能依赖 newest-first 排序，也不能扫描全部对话。History 是 discovery Evidence，不是 persisted known-target continuation 的重新授权来源；暂时失败或目标未出现在 recent window 中，不能反向否决上一轮已由 exact marker 建立的 delivery/target。
 
 ### 3. VERIFY
 
@@ -88,7 +88,7 @@ PERSISTED_TARGET_OR_SEND_OBSERVATION
 → ONE EXACT-ID DETAIL CHECK
 ```
 
-只有已有 `TARGET_CONVERSATION_ID`，或 bounded evidence 得到唯一候选时，才允许 exact-ID recovery。existing-target recovery 必须优先核验持久的 target；post-send current 只记录 navigation observation，不能替换 target。选中候选时记录 `RECOVERED_CONVERSATION_ID` 与来源；detail 中 exact Work Item/Message marker 成功后才能建立 delivery。若一次 write 已记录、exact-ID detail 的 user message 明确以尾行 `Show more` 标记折叠，且普通 marker 解析为零，则同一 detail 结果可以严格核验 Product compact JSON 的固定开头 `WORK_ITEM_ID` 与 `MESSAGE_ID`；只允许唯一匹配，且不得修复正文、增加读取或重发。无候选、多候选、来源冲突、detail 不可读或 marker 不唯一时必须保持 `DELIVERY_UNKNOWN`，停止自动执行并禁止 resend。
+只有已有 `TARGET_CONVERSATION_ID`，或 bounded evidence 得到唯一候选时，才允许 exact-ID recovery。下一轮 known-target continuation 必须先从上一轮 Product state 精确绑定已验证的 delivery/target，再针对该 exact ID 做有界只读 detail，并以唯一上一轮 Work Item/Message marker 证明仍可访问；当前 active Conversation 可不同，recent history 可为空。proof/detail 无效时必须在 write 前 `BLOCKED`，不猜测、不误发，也不自动要求 Manual Relay。existing-target recovery 必须优先核验持久的 target；post-send current 只记录 navigation observation，不能替换 target。选中候选时记录 `RECOVERED_CONVERSATION_ID` 与来源；detail 中 exact Work Item/Message marker 成功后才能建立 delivery。若一次 write 已记录、exact-ID detail 的 user message 明确以尾行 `Show more` 标记折叠，且普通 marker 解析为零，则同一 detail 结果可以严格核验 Product compact JSON 的固定开头 `WORK_ITEM_ID` 与 `MESSAGE_ID`；只允许唯一匹配，且不得修复正文、增加读取或重发。无候选、多候选、来源冲突、detail 不可读或 marker 不唯一时必须保持 `DELIVERY_UNKNOWN`，停止自动执行并禁止 resend。
 
 ## Mismatch detection
 

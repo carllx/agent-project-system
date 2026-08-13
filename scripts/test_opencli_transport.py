@@ -856,6 +856,7 @@ def send_cli_command(
     max_navigation_wait_seconds: float = 1.5,
     max_navigation_status_checks: int = 10,
     navigation_poll_interval_seconds: float = 0.1,
+    verified_continuation_state: Path | None = None,
 ) -> list[str]:
     message_file = root / "message.txt"
     message_file.write_text("synthetic body", encoding="utf-8")
@@ -881,6 +882,10 @@ def send_cli_command(
         command.extend(["--manual-new-url", manual_new_url])
     if conversation:
         command.extend(["--conversation", conversation])
+    if verified_continuation_state:
+        command.extend([
+            "--verified-continuation-state", str(verified_continuation_state)
+        ])
     if prepare_new:
         command.append("--prepare-new")
     return command
@@ -894,6 +899,7 @@ def run_send_case(
     max_navigation_wait_seconds: float = 1.5,
     max_navigation_status_checks: int = 10,
     navigation_poll_interval_seconds: float = 0.1,
+    verified_continuation_state: dict | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]], list[str], dict[str, str]]:
     root = Path(tempfile.mkdtemp(prefix="rr-send-regression-"))
     fake = root / "fake_opencli.py"
@@ -915,6 +921,10 @@ def run_send_case(
         "OPENCLI_FAKE_LOG": str(log),
         "OPENCLI_TRANSPORT_RECEIPT_DIR": str(root / "write-receipts"),
     })
+    proof_path = None
+    if verified_continuation_state is not None:
+        proof_path = root / "previous-transport.json"
+        proof_path.write_text(json.dumps(verified_continuation_state), encoding="utf-8")
     command = send_cli_command(
         root, max_external_commands=max_external_commands, manual_new_url=manual_new_url,
         conversation=conversation, prepare_new=prepare_new,
@@ -922,6 +932,7 @@ def run_send_case(
         max_navigation_wait_seconds=max_navigation_wait_seconds,
         max_navigation_status_checks=max_navigation_status_checks,
         navigation_poll_interval_seconds=navigation_poll_interval_seconds,
+        verified_continuation_state=proof_path,
     )
     completed = subprocess.run(
         command, capture_output=True, text=True, encoding="utf-8", env=env, check=False
@@ -1397,6 +1408,11 @@ def test_pending_resume_never_invokes_ask_send_or_new() -> None:
     continuation_verbs = [call[1] for call in calls[-1:]]
     assert continuation_verbs == ["detail"]
     assert not {"ask", "send", "new"}.intersection(continuation_verbs)
+    detail_call = calls[-1]
+    assert "--wait" in detail_call
+    assert detail_call[detail_call.index("--timeout") + 1] == str(
+        TRANSPORT_MODULE.TOTAL_RESPONSE_WAIT_SECONDS
+    )
 
 
 def test_pending_resume_does_not_change_send_count() -> None:
@@ -1429,16 +1445,12 @@ def test_pending_resume_preserves_message_identity() -> None:
 
 def test_pending_resume_remains_pending_for_incomplete_reply() -> None:
     incomplete = legacy_detail(False)
-    command, env, _ = pending_resume_case([
-        incomplete,
-        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
-        incomplete,
-    ])
+    command, env, _ = pending_resume_case([incomplete])
     completed, state, calls = run_pending_resume(command, env)
     assert completed.returncode == 2
     assert state["delivery_state"] == "RESPONSE_PENDING"
     assert state["pending_response_last_result"] == "RESPONSE_PENDING"
-    assert [call[1] for call in calls[-3:]] == ["detail", "status", "read"]
+    assert [call[1] for call in calls[-1:]] == ["detail"]
 
 
 def test_pending_resume_accepts_later_complete_rr_review() -> None:
@@ -1467,11 +1479,7 @@ def test_pending_resume_rejects_wrong_reply_identity() -> None:
 
 def test_pending_resume_stops_at_configured_limit() -> None:
     incomplete = legacy_detail(False)
-    command, env, state = pending_resume_case([
-        incomplete,
-        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
-        incomplete,
-    ])
+    command, env, state = pending_resume_case([incomplete])
     state_path = Path(command[command.index("--state-file") + 1])
     state["parameters"]["max_pending_response_continuations"] = 1
     state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -1480,7 +1488,37 @@ def test_pending_resume_stops_at_configured_limit() -> None:
     assert resumed["delivery_state"] == "BLOCKED_RESPONSE_TIMEOUT"
     assert resumed["pending_response_continuation_count"] == 1
     assert resumed["pending_response_last_result"] == "BLOCKED_RESPONSE_TIMEOUT"
+    assert resumed["work_item_state"] == "STALLED"
+    assert resumed["response_identity_status"] == "RESPONSE_PENDING"
     assert TRANSPORT_MODULE.MAX_PENDING_RESPONSE_CONTINUATIONS == 3
+
+
+def test_late_response_after_window_stall_is_read_only_and_recoverable() -> None:
+    incomplete = legacy_detail(False)
+    command, env, state = pending_resume_case([incomplete, legacy_detail()])
+    state_path = Path(command[command.index("--state-file") + 1])
+    state["parameters"]["max_pending_response_continuations"] = 1
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    first, stalled, calls = run_pending_resume(command, env)
+    assert first.returncode == 2
+    assert stalled["delivery_state"] == "BLOCKED_RESPONSE_TIMEOUT"
+    send_count = sum(call[1] == "send" for call in calls)
+    late = subprocess.run(
+        [
+            sys.executable, str(TRANSPORT), "recover", "--state-file", str(state_path),
+            "--continue-pending", "--late-check",
+        ],
+        capture_output=True, text=True, encoding="utf-8", env=env, check=False,
+    )
+    recovered = json.loads(state_path.read_text(encoding="utf-8"))
+    all_calls = [
+        json.loads(line)
+        for line in Path(env["OPENCLI_FAKE_LOG"]).read_text(encoding="utf-8").splitlines()
+    ]
+    assert late.returncode == 0
+    assert recovered["delivery_state"] == "RESPONSE_READY"
+    assert recovered["late_response_check_count"] == 1
+    assert sum(call[1] == "send" for call in all_calls) == send_count
 
 
 def test_compact_packet_payload_is_single_line_and_lossless() -> None:
@@ -2985,6 +3023,38 @@ def mvp_existing_sequence(
     ]
 
 
+def verified_previous_transport_state(target: str = NEW_ID) -> dict:
+    return {
+        "schema_version": 5,
+        "work_item_id": LEGACY_WORK_ITEM,
+        "message_id": LEGACY_MESSAGE_ID,
+        "delivery_state": "RESPONSE_READY",
+        "send_attempt_count": 1,
+        "target_conversation_id": target,
+        "delivery_conversation_id": target,
+        "actual_delivery_conversation_id": target,
+        "identity_establishment": {
+            "DELIVERY": {
+                "value": target,
+                "exact_marker_verified": True,
+            }
+        },
+    }
+
+
+def known_target_sequence(
+    *, target: str = NEW_ID, current: str = OLD_ID,
+    proof_result: dict | None = None, post_current: str | None = None,
+) -> list[dict]:
+    return [
+        legacy_status(f"https://chatgpt.com/c/{current}"),
+        proof_result if proof_result is not None else mvp_marker_result(),
+        legacy_result([{"Status": "Message sent"}]),
+        legacy_status(f"https://chatgpt.com/c/{post_current or target}"),
+        mvp_marker_result(ready=True),
+    ]
+
+
 def test_mvp_new_session_first_write_uses_send_once() -> None:
     completed, state, calls, _, _ = run_send_case(
         mvp_new_sequence(marker=mvp_marker_result(ready=True)),
@@ -3195,6 +3265,66 @@ def test_mvp_second_explicit_target_stays_in_promoted_conversation() -> None:
     assert second["target_conversation_id_at_send"] == target
     assert second["current_browser_conversation_id"] == target
     assert second["delivery_conversation_id"] == target
+
+
+def test_known_target_continues_when_history_would_be_transiently_unavailable() -> None:
+    _, state, calls, _, _ = run_send_case(
+        known_target_sequence(),
+        conversation=NEW_ID,
+        verified_continuation_state=verified_previous_transport_state(),
+        legacy_sequence=False,
+    )
+    verbs = [call[1] for call in calls]
+    assert verbs == ["status", "detail", "send", "status", "read"]
+    assert "history" not in verbs
+    assert state["known_target_verification"] == "EXACT_IDENTITY_VERIFIED"
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_known_target_need_not_appear_in_recent_three() -> None:
+    _, state, calls, _, _ = run_send_case(
+        known_target_sequence(),
+        conversation=NEW_ID,
+        verified_continuation_state=verified_previous_transport_state(),
+        legacy_sequence=False,
+    )
+    assert all(call[1] != "history" for call in calls)
+    assert state["pre_send_recent_conversation_ids"] == []
+    assert state["target_conversation_id_at_send"] == NEW_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_known_target_ignores_different_active_tab_and_sends_exact_target() -> None:
+    _, state, calls, _, _ = run_send_case(
+        known_target_sequence(current=OLD_ID),
+        conversation=NEW_ID,
+        verified_continuation_state=verified_previous_transport_state(),
+        legacy_sequence=False,
+    )
+    send_call = next(call for call in calls if call[1] == "send")
+    assert send_call[send_call.index("--conversation") + 1] == NEW_ID
+    assert state["pre_send_active_conversation_id"] == OLD_ID
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_known_target_inaccessible_blocks_without_write_or_manual_relay() -> None:
+    inaccessible = legacy_result(
+        [], returncode=1, stderr="exact conversation unavailable",
+    )
+    completed, state, calls, _, _ = run_send_case(
+        known_target_sequence(proof_result=inaccessible)[:2],
+        conversation=NEW_ID,
+        verified_continuation_state=verified_previous_transport_state(),
+        legacy_sequence=False,
+    )
+    assert completed.returncode == 2
+    assert [call[1] for call in calls] == ["status", "detail"]
+    assert state["send_attempt_count"] == 0
+    assert state["message_send_count"] == 0
+    assert state["work_item_state"] == "BLOCKED"
+    assert state["delivery_state"] == "VERIFYING_CONVERSATION"
+    assert state["known_target_verification"] == "EXACT_IDENTITY_UNVERIFIED"
+    assert "MANUAL_RELAY" not in state["stop_reason"]
 
 
 def test_mvp_current_target_mismatch_without_marker_is_unknown() -> None:
@@ -3556,6 +3686,7 @@ def main() -> int:
         test_pending_resume_accepts_later_complete_rr_review,
         test_pending_resume_rejects_wrong_reply_identity,
         test_pending_resume_stops_at_configured_limit,
+        test_late_response_after_window_stall_is_read_only_and_recoverable,
         test_compact_packet_payload_is_single_line_and_lossless,
         test_prepare_payload_accepts_in_reply_to_message_id,
         test_prepare_payload_rejects_exact_message_id_header,
@@ -3676,6 +3807,10 @@ def main() -> int:
         test_mvp_uncertain_new_result_old_page_still_blocks_before_write,
         test_mvp_verified_delivery_promotes_next_target_with_provenance,
         test_mvp_second_explicit_target_stays_in_promoted_conversation,
+        test_known_target_continues_when_history_would_be_transiently_unavailable,
+        test_known_target_need_not_appear_in_recent_three,
+        test_known_target_ignores_different_active_tab_and_sends_exact_target,
+        test_known_target_inaccessible_blocks_without_write_or_manual_relay,
         test_mvp_current_target_mismatch_without_marker_is_unknown,
         test_mvp_missing_marker_is_delivery_unknown,
         test_mvp_exact_id_recovery_accepts_one_collapsed_product_packet_identity,

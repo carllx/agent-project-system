@@ -191,7 +191,7 @@ $packet | python <skill-dir>/scripts/opencli_transport.py send --prepare-new `
 python <skill-dir>/scripts/opencli_transport.py recover --state-file <recorded-state-file>
 ```
 
-For subsequent rounds add `--conversation <recorded-id>`. The wrapper uses one `send`, then at most one recovery; it never repeats the write for the same Message ID. Always recapture post-send current identity and require one exact user marker for the Work Item and Message ID. Establish delivery before promoting a new-session target; for existing-target writes require delivery to equal target and make the persisted target the first exact recovery identity even if Browser current mismatches. For new-session recovery, if status has an exact ID, go directly to `EXACT_ID_DETAIL_CHECK`; otherwise use one bounded `POST_SEND_HISTORY_REFRESH`, require one unique `NEW_CANDIDATE_DIFF`, and then perform the exact detail check. If that exact-ID detail explicitly marks the Product packet as collapsed with a trailing `Show more`, normal marker parsing found zero matches, and the one write is already recorded, the same detail result may verify the exact compact Product packet identity prefix. It must still find exactly one matching user message; wrong or duplicate identity remains unknown. This fallback repairs no text and adds no read, detail, recovery, or write attempt. Missing/duplicate markers, candidate conflicts, recovery failure, or target/delivery mismatch preserve `DELIVERY_UNKNOWN` or `MISROUTED_DELIVERY` and forbid resend. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false. Bind messages and source as one immutable `ResponseMessageBatch`; never trust a Conversation ID claimed by the response body.
+For subsequent rounds the Product driver supplies `--conversation <recorded-id>` together with the prior verified Transport state. The wrapper requires the prior exact delivery/target identity and unique marker establishment to agree, then performs one bounded read-only exact-ID detail of the prior message before any write. This known-target path does not query recent history and does not depend on the active Browser tab; history is discovery Evidence and cannot revoke a persisted exact target. An inaccessible target or missing/duplicate prior marker stops `BLOCKED` before write and does not automatically switch to Manual Relay. The wrapper uses one `send`, then at most one delivery recovery; it never repeats the write for the same Message ID. Always recapture post-send current identity and require one exact user marker for the Work Item and Message ID. Establish delivery before promoting a new-session target; for existing-target writes require delivery to equal target and make the persisted target the first exact recovery identity even if Browser current mismatches. For new-session recovery, if status has an exact ID, go directly to `EXACT_ID_DETAIL_CHECK`; otherwise use one bounded `POST_SEND_HISTORY_REFRESH`, require one unique `NEW_CANDIDATE_DIFF`, and then perform the exact detail check. If that exact-ID detail explicitly marks the Product packet as collapsed with a trailing `Show more`, normal marker parsing found zero matches, and the one write is already recorded, the same detail result may verify the exact compact Product packet identity prefix. It must still find exactly one matching user message; wrong or duplicate identity remains unknown. This fallback repairs no text and adds no read, detail, recovery, or write attempt. Missing/duplicate markers, candidate conflicts, recovery failure, or target/delivery mismatch preserve `DELIVERY_UNKNOWN` or `MISROUTED_DELIVERY` and forbid resend. Do not parse an RR response before `RESPONSE_READY`, and never parse one when `official_response_eligible` is false. Bind messages and source as one immutable `ResponseMessageBatch`; never trust a Conversation ID claimed by the response body.
 
 Default adjustable parameters are:
 
@@ -206,10 +206,11 @@ MAX_EXTERNAL_COMMANDS=9
 MAX_EXPERIMENT_SECONDS=60
 MAX_BACKGROUND_RESULT_CHECKS=1
 MAX_BACKGROUND_WAIT_SECONDS=15
+MAX_PENDING_RESPONSE_CONTINUATIONS=3
 FIXED_SCHEDULE_TIMER_ALLOWED=false
 ```
 
-Keep each command wait short, impose a total response bound, and never use unlimited technical retries. At the bound, preserve the Conversation ID and Handoff and enter `BLOCKED` or `STALLED` as appropriate.
+`TOTAL_RESPONSE_WAIT_SECONDS=30` defines one exact-ID, read-only Browser response poll window, not a Review timeout or authority transfer. The Product driver automatically chains at most three such windows against the same Conversation and Message, returns immediately when an authoritative reply completes, and performs no new/send/resend. Three pending windows end in explicit `BLOCKED_RESPONSE_TIMEOUT / STALLED`; no local Decision, Next Work Order, or completion may be generated. A later explicit recover may perform one further bounded read-only check against the same saved state. Keep every window bounded and never use unlimited technical retries.
 
 ## Deterministic Bootstrap and Manual Relay
 
@@ -235,7 +236,7 @@ python <skill-dir>/scripts/opencli_transport.py manual-export `
 
 Paste only the `BEGIN_MESSAGE` ... `END_MESSAGE` body into the Browser RR Lead conversation so the on-wire bytes match the reported SHA-256. After the RR Lead replies in the Browser, recover with `recover --continue-pending --state-file <same-path>`.
 
-A Manual Relay is NOT Browser E2E verification; it only hands a prepared packet to a human. A Local Sub Agent review is only a degraded alternative and never satisfies Browser acceptance.
+A Manual Relay is NOT Browser E2E verification; it only hands a prepared packet to a human. It is an explicit user-selected fallback, not the automatic result of a known-target continuation verification failure. A Local Sub Agent review is only a degraded alternative and never satisfies Browser acceptance.
 
 ## Bound recovery and experiments
 

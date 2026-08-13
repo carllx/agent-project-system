@@ -1297,6 +1297,8 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "manual_recover_started_at": None,
         "manual_recover_external_command_count": 0,
         "pending_response_continuation_count": 0,
+        "late_response_check_count": 0,
+        "pending_response_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         "pending_response_last_checked_at": None,
         "pending_response_last_result": None,
         "stopped_at": None,
@@ -1353,6 +1355,7 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
             ),
             "recent_candidate_limit": args.recent_candidate_limit,
             "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
+            "pending_response_wait_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         },
     }
 
@@ -1569,6 +1572,58 @@ def pre_send_ids(state: dict[str, Any]) -> set[str]:
     if state.get("pre_send_active_conversation_id"):
         identities.add(state["pre_send_active_conversation_id"])
     return identities
+
+
+def verify_persisted_continuation_target(
+    state: dict[str, Any], state_path: Path, proof_path: Path, target: str,
+) -> bool:
+    """Verify one previously established delivery through its exact ID and marker."""
+    try:
+        previous = ensure_identity_schema(read_json(proof_path))
+    except (OSError, ValueError, json.JSONDecodeError):
+        state["known_target_verification"] = "INVALID_PROOF_STATE"
+        return False
+    previous_delivery = previous.get("delivery_conversation_id")
+    previous_target = previous.get("target_conversation_id")
+    establishment = previous.get("identity_establishment", {}).get("DELIVERY", {})
+    proof_valid = bool(
+        previous.get("work_item_id") == state.get("work_item_id")
+        and previous.get("delivery_state") in {"DELIVERED", "RESPONSE_PENDING", "RESPONSE_READY"}
+        and previous_delivery == target
+        and previous_target == target
+        and previous.get("send_attempt_count") == 1
+        and establishment.get("value") == target
+        and establishment.get("exact_marker_verified") is True
+        and isinstance(previous.get("message_id"), str)
+        and previous.get("message_id")
+    )
+    if not proof_valid:
+        state["known_target_verification"] = "INVALID_PROOF_STATE"
+        return False
+
+    result = command(
+        state,
+        state_path,
+        "verify-known-continuation-target",
+        ["chatgpt", "detail", target, "-f", "json", "--window", "background"],
+        state["parameters"]["command_wait_seconds"],
+    )
+    marker_count = exact_delivery_marker_count(
+        result_rows(result), previous["work_item_id"], previous["message_id"]
+    )
+    state["known_target_proof_state"] = str(proof_path.resolve())
+    state["known_target_proof_message_id"] = previous["message_id"]
+    state["known_target_exact_marker_count"] = marker_count
+    state["known_target_verification"] = (
+        "EXACT_IDENTITY_VERIFIED" if marker_count == 1 else "EXACT_IDENTITY_UNVERIFIED"
+    )
+    if marker_count != 1:
+        return False
+    record_identity_observation(
+        state, "TARGET", target, "PERSISTED_DELIVERY_EXACT_DETAIL",
+        state["raw_outputs"][-1] if result is not None else None,
+    )
+    return True
 
 
 def accept_delivery(state: dict[str, Any], response_batch: ResponseMessageBatch) -> None:
@@ -1934,17 +1989,25 @@ def verify_new_conversation(
 def send_command(args: argparse.Namespace, payload_body: str | None = None) -> int:
     if args.prepare_new and (args.conversation or args.manual_new_url):
         raise ValueError("--prepare-new cannot be combined with --conversation or --manual-new-url")
+    verified_continuation_state = getattr(args, "verified_continuation_state", None)
+    if verified_continuation_state and (args.prepare_new or not args.conversation):
+        raise ValueError(
+            "--verified-continuation-state requires one explicit --conversation target"
+        )
     required_values = {
         "WORK_ITEM_ID": args.work_item_id,
         "MESSAGE_ID": args.message_id,
         "MESSAGE_TYPE": args.message_type,
     }
     for name in (
-        "conversation", "manual_new_url", "message_file", "state_file",
+        "conversation", "manual_new_url",
+        "message_file", "state_file",
     ):
         value = getattr(args, name, None)
         if value is not None:
             required_values[name.upper()] = value
+    if verified_continuation_state is not None:
+        required_values["VERIFIED_CONTINUATION_STATE"] = verified_continuation_state
     unresolved = unresolved_required_values(required_values)
     if unresolved:
         report = assess_experiment_protocol(required_values, [])
@@ -1997,12 +2060,31 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         stop(state, "VERIFY_NEW_CONVERSATION_FAILED: current URL does not match manual blank URL")
         write_json(state_path, state)
         return output_state(state)
-    if not args.prepare_new:
+    if not args.prepare_new and not verified_continuation_state:
         pre_rows = history(state, state_path)
     state["pre_send_recent_conversation_ids"] = [identity for row in pre_rows if (identity := conversation_identity(row)[0])]
     write_json(state_path, state)
     if args.conversation:
-        if args.conversation not in state["pre_send_recent_conversation_ids"] and args.conversation != state["pre_send_active_conversation_id"]:
+        if verified_continuation_state:
+            verified = verify_persisted_continuation_target(
+                state, state_path, Path(verified_continuation_state),
+                args.conversation,
+            )
+            if not verified:
+                set_state(
+                    state, "VERIFYING_CONVERSATION",
+                    "persisted exact continuation target could not be verified read-only",
+                )
+                stop(
+                    state,
+                    "VERIFY_EXISTING_CONVERSATION_FAILED: persisted exact target is inaccessible or identity-unverified",
+                )
+                write_json(state_path, state)
+                return output_state(state)
+        elif (
+            args.conversation not in state["pre_send_recent_conversation_ids"]
+            and args.conversation != state["pre_send_active_conversation_id"]
+        ):
             stop(state, "VERIFY_EXISTING_CONVERSATION_FAILED: explicit target was not observed in bounded pre-send evidence")
             write_json(state_path, state)
             return output_state(state)
@@ -2150,7 +2232,9 @@ def recover_command(args: argparse.Namespace) -> int:
     state_path = Path(args.state_file)
     state = ensure_identity_schema(read_json(state_path))
     if args.continue_pending:
-        return continue_pending_response(state, state_path)
+        return continue_pending_response(
+            state, state_path, allow_after_window_limit=bool(args.late_check)
+        )
     if state.get("delivery_state") == "MISROUTED_DELIVERY":
         return output_state(state)
     if not recovery_budget_available(state, "manual"):
@@ -2170,8 +2254,10 @@ def recover_command(args: argparse.Namespace) -> int:
     return output_state(state)
 
 
-def continue_pending_response(state: dict[str, Any], state_path: Path) -> int:
-    """Read one already-delivered pending response without sending or navigating elsewhere."""
+def continue_pending_response(
+    state: dict[str, Any], state_path: Path, *, allow_after_window_limit: bool = False,
+) -> int:
+    """Run one bounded exact-ID response window without sending or changing target."""
     state.setdefault("pending_response_continuation_count", 0)
     state.setdefault("pending_response_last_checked_at", None)
     state.setdefault("pending_response_last_result", None)
@@ -2179,8 +2265,11 @@ def continue_pending_response(state: dict[str, Any], state_path: Path) -> int:
         "max_pending_response_continuations", MAX_PENDING_RESPONSE_CONTINUATIONS
     )
     target = state.get("verified_target_conversation_id")
+    allowed_delivery_states = {"RESPONSE_PENDING"}
+    if allow_after_window_limit:
+        allowed_delivery_states.add("BLOCKED_RESPONSE_TIMEOUT")
     if (
-        state.get("delivery_state") != "RESPONSE_PENDING"
+        state.get("delivery_state") not in allowed_delivery_states
         or state.get("response_identity_status") != "RESPONSE_PENDING"
         or not target
         or not state.get("work_item_id")
@@ -2192,22 +2281,44 @@ def continue_pending_response(state: dict[str, Any], state_path: Path) -> int:
             "saved identity, and matching verified Conversation"
         )
     limit = state["parameters"]["max_pending_response_continuations"]
-    if state["pending_response_continuation_count"] >= limit:
+    if state["pending_response_continuation_count"] >= limit and not allow_after_window_limit:
         state["pending_response_last_result"] = "BLOCKED_RESPONSE_TIMEOUT"
-        set_state(state, "BLOCKED_RESPONSE_TIMEOUT", "pending response continuation limit exhausted")
-        stop(state, "BLOCKED_RESPONSE_TIMEOUT")
+        set_state(
+            state, "BLOCKED_RESPONSE_TIMEOUT",
+            "bounded Browser response windows exhausted without authoritative reply",
+        )
+        stop(
+            state,
+            "BLOCKED_RESPONSE_TIMEOUT: no authoritative Browser reply; local Review is forbidden",
+            "STALLED",
+        )
         write_json(state_path, state)
         return output_state(state)
 
     begin_operation(state, "PENDING_RESPONSE_CONTINUATION")
-    state["pending_response_continuation_count"] += 1
+    if allow_after_window_limit:
+        state["late_response_check_count"] = state.get("late_response_check_count", 0) + 1
+    else:
+        state["pending_response_continuation_count"] += 1
+    state["pending_response_window_seconds"] = TOTAL_RESPONSE_WAIT_SECONDS
     write_json(state_path, state)
     result = command(
         state,
         state_path,
         "pending-response-detail",
-        ["chatgpt", "detail", target, "-f", "json", "--window", "background"],
-        state["parameters"]["command_wait_seconds"],
+        [
+            "chatgpt", "detail", target, "--wait",
+            "--timeout", str(TOTAL_RESPONSE_WAIT_SECONDS),
+            "--stable", str(STABLE_SECONDS),
+            "-f", "json", "--window", "background",
+        ],
+        TOTAL_RESPONSE_WAIT_SECONDS + ASK_HARD_TIMEOUT_GRACE_SECONDS,
+    )
+    result_available = bool(
+        result is not None
+        and not result.get("timed_out")
+        and result.get("returncode") == 0
+        and isinstance(parse_json(str(result.get("stdout") or "")), (dict, list))
     )
     batch = ResponseMessageBatch(
         conversation_id=target,
@@ -2215,49 +2326,32 @@ def continue_pending_response(state: dict[str, Any], state_path: Path) -> int:
         source_kind="PENDING_DETAIL_RESULT",
         raw_output_path=state["raw_outputs"][-1] if result is not None else None,
     )
-    stable_assistant_found = any(stable_assistant_text(message) for message in batch.messages)
-    if not stable_assistant_found:
-        status = command(
-            state,
-            state_path,
-            "pending-response-status",
-            ["chatgpt", "status", "-f", "json", "--window", "background"],
-            state["parameters"]["command_wait_seconds"],
+    if result_available:
+        accept_delivery(state, batch)
+    else:
+        state["response_identity_status"] = "RESPONSE_PENDING"
+        state["official_response_eligible"] = False
+        set_state(
+            state, "RESPONSE_PENDING",
+            "bounded exact-ID response window ended without a readable completed response",
         )
-        current_id = conversation_id_from_url(status_url(status) or "")
-        if current_id != target:
-            state["pending_response_last_identity_status"] = "RESPONSE_SOURCE_CONVERSATION_MISMATCH"
-            state["response_identity_status"] = "RESPONSE_IDENTITY_REJECTED"
-            state["official_response_eligible"] = False
-            state["pending_response_last_result"] = "RESPONSE_IDENTITY_REJECTED"
-            set_state(state, "RESPONSE_IDENTITY_REJECTED", "pending read source did not match saved Conversation")
-            stop(state, "RESPONSE_IDENTITY_REJECTED", "IN_PROGRESS")
-            write_json(state_path, state)
-            return output_state(state)
-        read_result = command(
-            state,
-            state_path,
-            "pending-response-read",
-            ["chatgpt", "read", "-f", "json", "--window", "background"],
-            state["parameters"]["command_wait_seconds"],
-        )
-        batch = ResponseMessageBatch(
-            conversation_id=target,
-            messages=tuple(result_rows(read_result)),
-            source_kind="PENDING_READ_RESULT",
-            raw_output_path=state["raw_outputs"][-1] if read_result is not None else None,
-        )
-
-    accept_delivery(state, batch)
+        stop(state, "RESPONSE_PENDING: Browser Review Authority remains pending", "IN_PROGRESS")
     identity_status = state["response_identity_status"]
     state["pending_response_last_identity_status"] = identity_status
     if identity_status == "RESPONSE_IDENTITY_VERIFIED":
         state["pending_response_last_result"] = "RESPONSE_READY"
     elif identity_status == "RESPONSE_PENDING":
-        if state["pending_response_continuation_count"] >= limit:
+        if allow_after_window_limit or state["pending_response_continuation_count"] >= limit:
             state["pending_response_last_result"] = "BLOCKED_RESPONSE_TIMEOUT"
-            set_state(state, "BLOCKED_RESPONSE_TIMEOUT", "pending response continuation limit exhausted")
-            stop(state, "BLOCKED_RESPONSE_TIMEOUT")
+            set_state(
+                state, "BLOCKED_RESPONSE_TIMEOUT",
+                "bounded Browser response windows exhausted without authoritative reply",
+            )
+            stop(
+                state,
+                "BLOCKED_RESPONSE_TIMEOUT: no authoritative Browser reply; local Review is forbidden",
+                "STALLED",
+            )
         else:
             state["pending_response_last_result"] = "RESPONSE_PENDING"
     else:
@@ -2316,7 +2410,8 @@ def _manual_export_state(args: argparse.Namespace, state_path: Path) -> dict[str
         "current_operation": "MANUAL_EXPORT", "current_operation_started_at": started,
         "current_operation_external_command_count": 0,
         "manual_recover_started_at": None, "manual_recover_external_command_count": 0,
-        "pending_response_continuation_count": 0,
+        "pending_response_continuation_count": 0, "late_response_check_count": 0,
+        "pending_response_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         "pending_response_last_checked_at": None, "pending_response_last_result": None,
         "stopped_at": None, "stop_reason": None, "updated_at": utc_now(),
         "state_file": str(state_path), "raw_outputs": [], "transitions": [],
@@ -2338,6 +2433,7 @@ def _manual_export_state(args: argparse.Namespace, state_path: Path) -> dict[str
             "max_experiment_seconds": MAX_EXPERIMENT_SECONDS,
             "recent_candidate_limit": RECENT_CANDIDATE_LIMIT,
             "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
+            "pending_response_wait_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         },
     }
 
@@ -2456,6 +2552,10 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("--message-type", required=True)
     send.add_argument("--conversation", help="explicit existing Conversation ID for a continuation")
     send.add_argument(
+        "--verified-continuation-state",
+        help="prior Product Transport state proving the exact continuation target",
+    )
+    send.add_argument(
         "--prepare-new", action="store_true",
         help="START_NEW_AND_SEND: create, verify, send once, and recover in one Wrapper call",
     )
@@ -2488,6 +2588,10 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="read one saved RESPONSE_PENDING Conversation without ask, send, or new",
     )
+    recover.add_argument(
+        "--late-check", action="store_true",
+        help="perform one explicit read-only check after automatic response windows stalled",
+    )
     recover.set_defaults(handler=recover_command)
     cleanup = sub.add_parser("cleanup")
     cleanup.add_argument("--state-file", required=True)
@@ -2507,6 +2611,7 @@ def parser() -> argparse.ArgumentParser:
         help="START_NEW_AND_SEND: create, verify, send once, and recover in one Wrapper call",
     )
     bootstrap.add_argument("--conversation", help="explicit existing Conversation ID for a continuation")
+    bootstrap.add_argument("--verified-continuation-state")
     bootstrap.add_argument("--manual-new-url", help="current manually opened blank ChatGPT URL; must match status")
     bootstrap.add_argument("--state-file")
     bootstrap.add_argument("--command-wait-seconds", type=int, default=COMMAND_WAIT_SECONDS)
