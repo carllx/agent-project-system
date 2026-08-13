@@ -57,7 +57,7 @@ Agent Project System
 - **DEBT / NON-BLOCKING:** strict RR wire grammar 双实现、Review round derivation 多处实现、atomic write helper 重复、Browser response contract 镜像。本轮不重构。
 - **HISTORICAL_ONLY:** 已完成或失败的 Acceptance/Diagnostic Packets 保留为审计 Evidence；不得继续复制整份 Packet 创建新运行实例。
 - **Responsibility audit:** `/goal` 是外部 Antigravity execution entrypoint；`acf_review_loop.py` 不实现 `/goal` continuation，只负责持久化 ACF state、调用 Runtime 和受限 Product Transport，因此本轮不简化代码。
-- **MVP-1 blocker repair:** Issue `#4` 已在 Product driver 串联最多三个 30 秒 exact-ID no-write response windows；三窗未取得 authoritative reply 时进入 `BLOCKED_RESPONSE_TIMEOUT / STALLED`，不转移 Review Authority，后续仍可显式 late read-only recover。Issue `#5` 已使下一轮 persisted exact delivery/target 通过 prior-state + exact-detail marker 进行发送前验证；recent history 与 active tab 不再反向否决 known target，真正不可访问时在 write 前安全 `BLOCKED`，Manual Relay 不自动触发。两项等待 PR `#3` Browser Final Review。
+- **MVP-1 blocker repair:** Issue `#4` 已验收关闭，其三个 30 秒 exact-ID no-write response windows 未再修改。Issue `#5` 的下一轮 persisted exact delivery/target 通过 prior-state + 最多三次同-ID read-only detail marker 进行发送前验证；只对 transient read failure 重试，成功立即停止，recent history 与 active tab 不反向否决 known target，耗尽时 write count 保持零并安全 `BLOCKED`，Manual Relay 不自动触发。等待 PR `#3` Browser Final Review。
 - **Execution boundary:** 不创建新的 Execution Packet；`docs/references/current-execution-packet.md` 继续只指向已 `COMPLETED` 的历史 Manual Acceptance，不得再次执行。
 - **Merge gate:** 现有相关回归和文档检查通过后提交 PR #3 最终 Browser Review；本文件不自行授权 merge。
 

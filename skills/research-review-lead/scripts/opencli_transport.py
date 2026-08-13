@@ -41,6 +41,7 @@ MAX_NAVIGATION_STATUS_CHECKS = 10
 MIN_NAVIGATION_STATUS_COMMAND_BUDGET_SECONDS = 3
 POST_SEND_NAVIGATION_POLL_INTERVAL_SECONDS = 1
 MAX_PENDING_RESPONSE_CONTINUATIONS = 3
+MAX_KNOWN_TARGET_VERIFICATION_ATTEMPTS = 3
 PREPARE_MAX_SEND_ATTEMPTS = 0
 PREPARE_MAX_RECOVERY_ATTEMPTS = 0
 PREPARE_MAX_DETAIL_CHECKS = 0
@@ -1301,6 +1302,8 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "pending_response_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         "pending_response_last_checked_at": None,
         "pending_response_last_result": None,
+        "known_target_verification_attempt_count": 0,
+        "known_target_verification_attempts": [],
         "stopped_at": None,
         "stop_reason": None, "updated_at": utc_now(), "state_file": str(state_path),
         "raw_outputs": [], "transitions": [],
@@ -1355,6 +1358,7 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
             ),
             "recent_candidate_limit": args.recent_candidate_limit,
             "max_pending_response_continuations": MAX_PENDING_RESPONSE_CONTINUATIONS,
+            "max_known_target_verification_attempts": MAX_KNOWN_TARGET_VERIFICATION_ATTEMPTS,
             "pending_response_wait_window_seconds": TOTAL_RESPONSE_WAIT_SECONDS,
         },
     }
@@ -1601,29 +1605,59 @@ def verify_persisted_continuation_target(
         state["known_target_verification"] = "INVALID_PROOF_STATE"
         return False
 
-    result = command(
-        state,
-        state_path,
-        "verify-known-continuation-target",
-        ["chatgpt", "detail", target, "-f", "json", "--window", "background"],
-        state["parameters"]["command_wait_seconds"],
-    )
-    marker_count = exact_delivery_marker_count(
-        result_rows(result), previous["work_item_id"], previous["message_id"]
-    )
     state["known_target_proof_state"] = str(proof_path.resolve())
     state["known_target_proof_message_id"] = previous["message_id"]
-    state["known_target_exact_marker_count"] = marker_count
-    state["known_target_verification"] = (
-        "EXACT_IDENTITY_VERIFIED" if marker_count == 1 else "EXACT_IDENTITY_UNVERIFIED"
-    )
-    if marker_count != 1:
-        return False
-    record_identity_observation(
-        state, "TARGET", target, "PERSISTED_DELIVERY_EXACT_DETAIL",
-        state["raw_outputs"][-1] if result is not None else None,
-    )
-    return True
+    state.setdefault("known_target_verification_attempt_count", 0)
+    attempts = state.setdefault("known_target_verification_attempts", [])
+    limit = int(state["parameters"].get(
+        "max_known_target_verification_attempts",
+        MAX_KNOWN_TARGET_VERIFICATION_ATTEMPTS,
+    ))
+    for attempt_number in range(1, limit + 1):
+        before_command_count = state["external_command_count"]
+        result = command(
+            state,
+            state_path,
+            f"verify-known-continuation-target-{attempt_number}",
+            ["chatgpt", "detail", target, "-f", "json", "--window", "background"],
+            state["parameters"]["command_wait_seconds"],
+        )
+        if state["external_command_count"] == before_command_count:
+            break
+        state["known_target_verification_attempt_count"] += 1
+        parsed = parse_json(str(result.get("stdout") or "")) if result else None
+        readable = bool(
+            result is not None
+            and not result.get("timed_out")
+            and result.get("returncode") == 0
+            and isinstance(parsed, (dict, list))
+        )
+        attempt = {
+            "attempt": attempt_number,
+            "conversation_id": target,
+            "result": "READABLE" if readable else "TRANSIENT_READ_FAILURE",
+            "raw_output_path": state["raw_outputs"][-1] if result is not None else None,
+        }
+        attempts.append(attempt)
+        if not readable:
+            continue
+        marker_count = exact_delivery_marker_count(
+            rows(parsed), previous["work_item_id"], previous["message_id"]
+        )
+        attempt["exact_marker_count"] = marker_count
+        state["known_target_exact_marker_count"] = marker_count
+        state["known_target_verification"] = (
+            "EXACT_IDENTITY_VERIFIED" if marker_count == 1 else "EXACT_IDENTITY_UNVERIFIED"
+        )
+        if marker_count != 1:
+            return False
+        record_identity_observation(
+            state, "TARGET", target, "PERSISTED_DELIVERY_EXACT_DETAIL",
+            attempt["raw_output_path"],
+        )
+        return True
+    state["known_target_verification"] = "EXACT_IDENTITY_UNVERIFIED"
+    return False
 
 
 def accept_delivery(state: dict[str, Any], response_batch: ResponseMessageBatch) -> None:

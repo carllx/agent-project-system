@@ -3278,6 +3278,37 @@ def test_known_target_continues_when_history_would_be_transiently_unavailable() 
     assert verbs == ["status", "detail", "send", "status", "read"]
     assert "history" not in verbs
     assert state["known_target_verification"] == "EXACT_IDENTITY_VERIFIED"
+    assert state["known_target_verification_attempt_count"] == 1
+    assert state["delivery_conversation_id"] == NEW_ID
+
+
+def test_known_target_transient_detail_failure_retries_then_continues() -> None:
+    transient = legacy_result(
+        "not-json", returncode=1, stderr="temporary exact detail failure",
+    )
+    sequence = [
+        legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+        transient,
+        mvp_marker_result(),
+        legacy_result([{"Status": "Message sent"}]),
+        legacy_status(f"https://chatgpt.com/c/{NEW_ID}"),
+        mvp_marker_result(ready=True),
+    ]
+    _, state, calls, _, _ = run_send_case(
+        sequence,
+        conversation=NEW_ID,
+        verified_continuation_state=verified_previous_transport_state(),
+        legacy_sequence=False,
+    )
+    verbs = [call[1] for call in calls]
+    assert verbs == ["status", "detail", "detail", "send", "status", "read"]
+    assert "history" not in verbs and "new" not in verbs
+    assert state["known_target_verification_attempt_count"] == 2
+    assert [attempt["result"] for attempt in state["known_target_verification_attempts"]] == [
+        "TRANSIENT_READ_FAILURE", "READABLE",
+    ]
+    assert state["known_target_verification"] == "EXACT_IDENTITY_VERIFIED"
+    assert state["send_attempt_count"] == state["message_send_count"] == 1
     assert state["delivery_conversation_id"] == NEW_ID
 
 
@@ -3312,18 +3343,28 @@ def test_known_target_inaccessible_blocks_without_write_or_manual_relay() -> Non
         [], returncode=1, stderr="exact conversation unavailable",
     )
     completed, state, calls, _, _ = run_send_case(
-        known_target_sequence(proof_result=inaccessible)[:2],
+        [
+            legacy_status(f"https://chatgpt.com/c/{OLD_ID}"),
+            inaccessible, inaccessible, inaccessible,
+        ],
         conversation=NEW_ID,
         verified_continuation_state=verified_previous_transport_state(),
         legacy_sequence=False,
     )
     assert completed.returncode == 2
-    assert [call[1] for call in calls] == ["status", "detail"]
+    assert [call[1] for call in calls] == ["status", "detail", "detail", "detail"]
+    assert all(call[2] == NEW_ID for call in calls[1:])
+    assert not {"history", "send", "new"}.intersection(call[1] for call in calls)
     assert state["send_attempt_count"] == 0
     assert state["message_send_count"] == 0
     assert state["work_item_state"] == "BLOCKED"
     assert state["delivery_state"] == "VERIFYING_CONVERSATION"
     assert state["known_target_verification"] == "EXACT_IDENTITY_UNVERIFIED"
+    assert state["known_target_verification_attempt_count"] == 3
+    assert all(
+        attempt["result"] == "TRANSIENT_READ_FAILURE"
+        for attempt in state["known_target_verification_attempts"]
+    )
     assert "MANUAL_RELAY" not in state["stop_reason"]
 
 
@@ -3808,6 +3849,7 @@ def main() -> int:
         test_mvp_verified_delivery_promotes_next_target_with_provenance,
         test_mvp_second_explicit_target_stays_in_promoted_conversation,
         test_known_target_continues_when_history_would_be_transiently_unavailable,
+        test_known_target_transient_detail_failure_retries_then_continues,
         test_known_target_need_not_appear_in_recent_three,
         test_known_target_ignores_different_active_tab_and_sends_exact_target,
         test_known_target_inaccessible_blocks_without_write_or_manual_relay,
