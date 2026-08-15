@@ -869,6 +869,7 @@ def send_cli_command(
         "--message-file", str(message_file),
         "--state-file", str(root / "state.json"),
         "--command-wait-seconds", "1",
+        "--send-command-wait-seconds", "1",
         "--max-recovery-attempts", str(max_recovery_attempts),
         "--max-detail-checks", "1",
         "--max-external-commands", str(max_external_commands),
@@ -981,6 +982,7 @@ def run_bootstrap_case(
         "--context-file", str(context_file),
         "--state-file", str(root / "state.json"),
         "--command-wait-seconds", "1",
+        "--send-command-wait-seconds", "1",
         "--max-recovery-attempts", "1",
         "--max-detail-checks", "1",
         "--max-external-commands", str(max_external_commands),
@@ -2997,6 +2999,53 @@ def test_automatic_recovery_exhaustion_enters_manual_relay_required() -> None:
     assert state["send_attempted"] is False
 
 
+def test_first_new_send_timeout_allows_observed_success_window() -> None:
+    root = Path(tempfile.mkdtemp(prefix="rr-send-timeout-regression-"))
+    init_file = root / "init.md"
+    init_file.write_text("INIT RULES", encoding="utf-8")
+    context_file = root / "context.md"
+    context_file.write_text("CONTEXT BODY", encoding="utf-8")
+    state_file = root / "state.json"
+    parser = TRANSPORT_MODULE.parser()
+    args = parser.parse_args([
+        "bootstrap",
+        "--work-item-id", LEGACY_WORK_ITEM,
+        "--message-id", LEGACY_MESSAGE_ID,
+        "--init-file", str(init_file),
+        "--context-file", str(context_file),
+        "--prepare-new",
+        "--state-file", str(state_file),
+    ])
+    seq = iter(mvp_new_sequence(marker=mvp_marker_result(ready=True)))
+    captured_timeouts: list[tuple[str, float]] = []
+    original_run = TRANSPORT_MODULE.run_opencli
+    previous_receipt_dir = os.environ.get("OPENCLI_TRANSPORT_RECEIPT_DIR")
+    os.environ["OPENCLI_TRANSPORT_RECEIPT_DIR"] = str(root / "receipts")
+    try:
+        def fake_run(cmd_args: list[str], timeout: float) -> dict[str, Any]:
+            label = cmd_args[1] if len(cmd_args) > 1 else cmd_args[0]
+            captured_timeouts.append((label, timeout))
+            return next(seq)
+
+        TRANSPORT_MODULE.run_opencli = fake_run
+        ret = TRANSPORT_MODULE.bootstrap_command(args)
+    finally:
+        TRANSPORT_MODULE.run_opencli = original_run
+        if previous_receipt_dir is None:
+            os.environ.pop("OPENCLI_TRANSPORT_RECEIPT_DIR", None)
+        else:
+            os.environ["OPENCLI_TRANSPORT_RECEIPT_DIR"] = previous_receipt_dir
+
+    assert ret == 0
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    send_timeouts = [t for (lbl, t) in captured_timeouts if lbl == "send"]
+    assert len(send_timeouts) == 1
+    send_timeout = send_timeouts[0]
+    assert send_timeout > 22.296, f"send timeout {send_timeout} is too short for observed 22.296s"
+    assert send_timeout >= 30.0, f"send timeout {send_timeout} must be at least 30s"
+    assert state["parameters"].get("send_hard_timeout_seconds", 0) >= 30.0
+
+
 def test_send_command_still_accepts_normal_message_file() -> None:
     # Old send/recover behavior must not regress.
     completed, state, calls, _, _ = run_send_case([
@@ -3925,6 +3974,7 @@ def main() -> int:
         test_mvp_timeout_with_exact_marker_records_recovered_provenance,
         test_mvp_nonzero_send_enters_post_send_verification_without_resend,
         test_mvp_manual_export_after_write_is_forbidden,
+        test_first_new_send_timeout_allows_observed_success_window,
     ]
     for test in tests:
         test()

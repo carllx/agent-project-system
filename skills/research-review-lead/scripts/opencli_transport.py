@@ -28,6 +28,7 @@ from urllib.parse import urlparse
 PROCESS_MONOTONIC_STARTED = time.monotonic()
 PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
 COMMAND_WAIT_SECONDS = 15
+SEND_COMMAND_WAIT_SECONDS = 30
 ASK_HARD_TIMEOUT_GRACE_SECONDS = 1
 POLL_INTERVAL_SECONDS = 5
 TOTAL_RESPONSE_WAIT_SECONDS = 30
@@ -1330,6 +1331,9 @@ def new_state(args: argparse.Namespace, state_path: Path) -> dict[str, Any]:
         "operation_budget_excluded_navigation_seconds": 0.0,
         "parameters": {
             "command_wait_seconds": args.command_wait_seconds,
+            "send_command_wait_seconds": getattr(
+                args, "send_command_wait_seconds", SEND_COMMAND_WAIT_SECONDS
+            ),
             "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
             "max_recovery_attempts": args.max_recovery_attempts,
             "max_detail_checks": args.max_detail_checks,
@@ -2147,8 +2151,15 @@ def send_command(args: argparse.Namespace, payload_body: str | None = None) -> i
         state["message_send_count"] = 1
         write_json(state_path, state)
 
+    send_wait = getattr(
+        args,
+        "send_command_wait_seconds",
+        state.get("parameters", {}).get(
+            "send_command_wait_seconds", SEND_COMMAND_WAIT_SECONDS
+        ),
+    )
     send_hard_timeout = min(
-        float(args.command_wait_seconds) + ASK_HARD_TIMEOUT_GRACE_SECONDS,
+        float(send_wait) + ASK_HARD_TIMEOUT_GRACE_SECONDS,
         remaining_experiment_seconds(state),
     )
     if send_hard_timeout <= 0:
@@ -2478,6 +2489,7 @@ def _manual_export_state(args: argparse.Namespace, state_path: Path) -> dict[str
         "manual_export_at": started, "exported_body_sha256": None, "exported_body_byte_length": None,
         "parameters": {
             "command_wait_seconds": COMMAND_WAIT_SECONDS,
+            "send_command_wait_seconds": SEND_COMMAND_WAIT_SECONDS,
             "max_send_attempts_per_message": MAX_SEND_ATTEMPTS_PER_MESSAGE,
             "max_recovery_attempts": MAX_RECOVERY_ATTEMPTS,
             "max_detail_checks": MAX_DETAIL_CHECKS,
@@ -2615,6 +2627,11 @@ def parser() -> argparse.ArgumentParser:
     send.add_argument("--message-file")
     send.add_argument("--state-file")
     send.add_argument("--command-wait-seconds", type=int, default=COMMAND_WAIT_SECONDS)
+    send.add_argument(
+        "--send-command-wait-seconds",
+        type=float,
+        default=SEND_COMMAND_WAIT_SECONDS,
+    )
     send.add_argument("--max-recovery-attempts", type=int, default=MAX_RECOVERY_ATTEMPTS)
     send.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
     send.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
@@ -2667,6 +2684,11 @@ def parser() -> argparse.ArgumentParser:
     bootstrap.add_argument("--manual-new-url", help="current manually opened blank ChatGPT URL; must match status")
     bootstrap.add_argument("--state-file")
     bootstrap.add_argument("--command-wait-seconds", type=int, default=COMMAND_WAIT_SECONDS)
+    bootstrap.add_argument(
+        "--send-command-wait-seconds",
+        type=float,
+        default=SEND_COMMAND_WAIT_SECONDS,
+    )
     bootstrap.add_argument("--max-recovery-attempts", type=int, default=MAX_RECOVERY_ATTEMPTS)
     bootstrap.add_argument("--max-detail-checks", type=int, default=MAX_DETAIL_CHECKS)
     bootstrap.add_argument("--max-external-commands", type=int, default=MAX_EXTERNAL_COMMANDS)
