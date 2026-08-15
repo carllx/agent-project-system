@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = ROOT / "docs" / "index.md"
-ALLOWED_ROOT = {"AGENTS.md", "README.md", "CLAUDE.md"}
+ALLOWED_ROOT = {"AGENTS.md", "README.md", "CLAUDE.md", "CONTEXT.md"}
 GARBAGE_WORDS = {"v2", "final", "backup", "old"}
 ACTIVE_PACKET_POINTER = ROOT / "docs" / "references" / "current-execution-packet.md"
 CURRENT_STATE = ROOT / "docs" / "current.md"
@@ -38,6 +38,7 @@ def is_allowed(path: Path) -> bool:
         "specs",
         "adr",
         "references",
+        "agents",
     }:
         return True
     if len(parts) == 3 and parts[0] == "skills" and parts[2] == "SKILL.md":

@@ -23,9 +23,9 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 长期 Markdown 只允许以下类型：
 
-- `AGENTS.md`、`README.md` 和可选的根目录 `CLAUDE.md`
+- `AGENTS.md`、`README.md`、`CONTEXT.md` 和可选的根目录 `CLAUDE.md`
 - `docs/index.md`、`docs/current.md`
-- `docs/specs/*.md`、`docs/adr/*.md`、`docs/references/*.md`
+- `docs/specs/*.md`、`docs/adr/*.md`、`docs/references/*.md`、`docs/agents/*.md`
 - `skills/*/SKILL.md`、`skills/*/assets/*.md`
 
 未登记的 Markdown 不属于项目知识系统。不得创建 `old`、`final`、`v2`、`backup`、日期 Handoff、Session Summary 或 Next Steps 文件来保存历史。
@@ -46,6 +46,16 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 ## Modules, assets, and adapters
 
 运行模块和随包模板资产是允许进入仓库的产品文件，但必须登记并保持边界清楚。工具适配文件只能作为薄适配层，引用现有权威文档；不得复制整套规则或成为新的事实源。第一版不预建未经批准的模块。
+
+## Engineering skills and process authority
+
+本仓库 Engineering Skills（如 setup-matt-pocock-skills、domain-modeling、triage 等）基准配置对齐：
+
+- **MAT_REPO:** `https://github.com/mattpocock/skills`
+- **MAT_REF:** `8b78b531ab965735c5dc74f6f7a219e1e37326df`
+- **TARGET_SKILL:** `skills/engineering/setup-matt-pocock-skills/SKILL.md`
+
+`docs/agents/` 存放针对 Engineering Skills 的配置适配文档（如 `issue-tracker.md`、`domain.md`、`triage-labels.md`），`CONTEXT.md` 存放全局领域语言词汇表与系统边界定义。
 
 ## Skill source and deployment model
 

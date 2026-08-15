@@ -6,8 +6,12 @@
 | --- | --- | --- | --- | --- |
 | `AGENTS.md` | 每次任务的硬规则与安全边界 | 每次会话首先读取 | Active | 2026-08-05 |
 | `README.md` | 项目身份、Browser 新对话 exact-ref bootstrap、当前阶段和入口 | 每次会话启动或跨 Browser Conversation 恢复 | Active | 2026-08-12 |
+| `CONTEXT.md` | 领域语言词汇表与系统边界定义 | 涉及领域概念、术语对齐或架构探索时 | Active | 2026-08-15 |
 | `docs/index.md` | 长期 Markdown 唯一登记表 | 查找权威资料或创建文档前 | Active | 2026-08-12 |
 | `docs/current.md` | 当前唯一 Work Item、Lab Evidence、下一动作与事实状态 | 每次会话启动及状态流转时 | Active | 2026-08-13 |
+| `docs/agents/issue-tracker.md` | Issue Tracker 配置与 GitHub Issues / `gh` CLI 操作约定 | 涉及 issue/spec 交互、wayfinder 或 ticket 查询时 | Active | 2026-08-15 |
+| `docs/agents/domain.md` | 领域文档消费规则与目录结构（single-context） | 探索代码库、引用领域知识或 ADR 时 | Active | 2026-08-15 |
+| `docs/agents/triage-labels.md` | Canonical Triage 标签与角色映射表 | 进行 issue 分流、状态流转或 triage brief 编写时 | Active | 2026-08-15 |
 | `docs/references/current-execution-packet.md` | 当前 Execution Packet 的稳定 pointer；不保存 Packet 正文 | 新 Execution Agent 从当前 Work Item 定位精确执行契约时 | Active | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-attempt-4.md` | Attempt 4 的 canonical Execution Packet 与 clean-fail closeout | 审计 `REAL-AGENT-REVIEW-LOOP-MVP-001` Attempt 4 时 | Completed / Clean fail | 2026-08-11 |
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-batch-001.md` | bounded Diagnostic Batch 的历史 self-contained Execution Contract | 审计已完成的 Diagnostic Batch 时 | Completed / Superseded | 2026-08-11 |

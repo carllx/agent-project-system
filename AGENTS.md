@@ -4,11 +4,7 @@
 
 ## 会话启动顺序
 
-1. `AGENTS.md`
-2. `README.md`
-3. `docs/index.md`
-4. `docs/current.md`
-5. 根据 Index 的 `Read when` 读取适用的 Spec、ADR、Skill 或模板
+1. `AGENTS.md` 2. `README.md` 3. `docs/index.md` 4. `docs/current.md` 5. 根据 Index 的 `Read when` 读取适用的 Spec、ADR、Skill 或模板
 
 ## NEW_AGENT_BOOTSTRAP
 
@@ -27,25 +23,12 @@
 
 ## 决策与规则权威
 
-由高到低：
-
-1. 用户当前明确决定和授权
-2. `AGENTS.md`
-3. 已登记且适用的 ADR / Spec
-4. 当前 Work Item 的目标和验收标准
-5. Skill 的操作步骤
-
+由高到低：1. 用户当前明确决定和授权 2. `AGENTS.md` 3. 已登记且适用的 ADR / Spec 4. 当前 Work Item 的目标和验收标准 5. Skill 的操作步骤。
 所有决定都必须处于安全、隐私、权限和不可逆操作边界内。Skill 或状态记录不能推翻用户当前决定。
 
 ## 事实与证据权威
 
-由高到低：
-
-1. 真实文件、命令输出、测试结果和 Git Diff
-2. `docs/current.md` 中已记录的事实
-3. Agent 摘要
-4. 外部推测和未验证建议
-
+由高到低：1. 真实文件、命令输出、测试结果和 Git Diff 2. `docs/current.md` 中已记录的事实 3. Agent 摘要 4. 外部推测和未验证建议。
 规则不能伪造事实；事实也不能擅自覆盖用户决定或安全边界。外部判断与本地证据冲突时，以本地证据纠偏并如实报告。
 
 ## 执行边界
@@ -61,25 +44,29 @@
 ## 文档创建闸门
 
 新增长期 Markdown 前必须同时满足：
-
-1. 路径符合 `docs/specs/`、`docs/adr/`、`docs/references/`、`skills/*/SKILL.md` 或 `assets/packets/` 的允许类型；
+1. 路径符合 `docs/specs/`、`docs/adr/`、`docs/references/`、`docs/agents/`、`skills/*/SKILL.md` 或 `assets/packets/` 的允许类型；
 2. 内容不是现有权威文档的重复事实源；
 3. 已登记到 `docs/index.md`，写明 Authority、Read when、Status 和 Last verified；
 4. 通过 `python scripts/check_docs.py`。
+根目录只允许 `AGENTS.md`、`README.md`、`CONTEXT.md` 和可选的 `CLAUDE.md`。工具适配文件只能引用权威文档，不得复制规则。无法满足闸门时暂停并请求用户决定。
 
-根目录只允许 `AGENTS.md`、`README.md` 和可选的 `CLAUDE.md`。工具适配文件只能引用权威文档，不得复制规则。无法满足闸门时暂停并请求用户决定。
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues via `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical triage roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context (`CONTEXT.md` + `docs/adr/`). See `docs/agents/domain.md`.
 
 ## 验证命令
 
-本项目当前没有构建步骤。修改后至少运行：
-
-```bash
-python scripts/check_docs.py
-git diff --check
-git status --short
-```
-
-需要说明变更时使用 `git diff --stat` 和必要的关键 Diff，不得虚构验证结果。
+本项目当前没有构建步骤。修改后至少运行：`python scripts/check_docs.py`、`git diff --check`、`git status --short`。需要说明变更时使用 `git diff --stat` 和必要的关键 Diff，不得虚构验证结果。
 
 ## 用户决策闸口
 
