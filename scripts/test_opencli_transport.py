@@ -1477,6 +1477,58 @@ def test_pending_resume_rejects_wrong_reply_identity() -> None:
     assert state["official_response_eligible"] is False
 
 
+def test_stable_final_incomplete_rr_response_is_format_failure_not_identity_rejection() -> None:
+    incomplete_envelope_text = (
+        "RR_REVIEW_BEGIN\n"
+        f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\n"
+        f"IN_REPLY_TO_MESSAGE_ID: {LEGACY_MESSAGE_ID}\n"
+        "ROUND: 0\n"
+        "REVIEW_DECISION: PASS\n"
+        "WORK_ITEM_STATE: ACHIEVED\n"
+        "FINDINGS\n"
+        "  some incomplete findings without closing sentinel"
+    )
+    incomplete_response = legacy_detail(False)
+    incomplete_response["stdout"] = json.dumps([
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"},
+        {"Role": "assistant", "Text": incomplete_envelope_text, "Generating": False, "StableSeconds": 3},
+    ])
+    command, env, _ = pending_resume_case([incomplete_response])
+    completed, state, _ = run_pending_resume(command, env)
+    assert state["delivery_state"] != "RESPONSE_IDENTITY_REJECTED"
+    assert state["delivery_state"] != "RESPONSE_PENDING"
+    assert state["delivery_state"] != "RESPONSE_READY"
+    assert state["official_response_eligible"] is False
+    assert state["delivery_state"] == "FAILED"
+    assert state["pending_response_last_result"] == "FINAL_RESPONSE_INCOMPLETE"
+    assert "FINAL_RESPONSE_INCOMPLETE" in state["stop_reason"]
+    assert state["actual_delivery_conversation_id"] is not None
+    assert state["verified_target_conversation_id"] is not None
+
+
+def test_stable_final_protocol_rejected_rr_response_is_not_incomplete() -> None:
+    protocol_violation_text = rr_review_text(extra_fields=[("UNKNOWN_FIELD", "value")])
+    protocol_response = legacy_detail(False)
+    protocol_response["stdout"] = json.dumps([
+        {"Role": "user", "Text": f"WORK_ITEM_ID: {LEGACY_WORK_ITEM}\nMESSAGE_ID: {LEGACY_MESSAGE_ID}\nROUND: 0"},
+        {"Role": "assistant", "Text": protocol_violation_text, "Generating": False, "StableSeconds": 3},
+    ])
+    command, env, _ = pending_resume_case([protocol_response])
+    completed, state, _ = run_pending_resume(command, env)
+    assert state["delivery_state"] != "RESPONSE_IDENTITY_REJECTED"
+    assert state["delivery_state"] != "RESPONSE_PENDING"
+    assert state["delivery_state"] != "RESPONSE_READY"
+    assert state["official_response_eligible"] is False
+    assert state["delivery_state"] == "FAILED"
+    assert state["response_identity_status"] == "RESPONSE_PROTOCOL_REJECTED"
+    assert state["pending_response_last_result"] == "FINAL_RESPONSE_PROTOCOL_REJECTED"
+    assert "FINAL_RESPONSE_PROTOCOL_REJECTED" in state["stop_reason"]
+    assert state["actual_delivery_conversation_id"] is not None
+    assert state["verified_target_conversation_id"] is not None
+
+
+
+
 def test_pending_resume_stops_at_configured_limit() -> None:
     incomplete = legacy_detail(False)
     command, env, state = pending_resume_case([incomplete])
@@ -3726,6 +3778,8 @@ def main() -> int:
         test_pending_resume_remains_pending_for_incomplete_reply,
         test_pending_resume_accepts_later_complete_rr_review,
         test_pending_resume_rejects_wrong_reply_identity,
+        test_stable_final_incomplete_rr_response_is_format_failure_not_identity_rejection,
+        test_stable_final_protocol_rejected_rr_response_is_not_incomplete,
         test_pending_resume_stops_at_configured_limit,
         test_late_response_after_window_stall_is_read_only_and_recoverable,
         test_compact_packet_payload_is_single_line_and_lossless,

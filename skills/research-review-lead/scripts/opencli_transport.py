@@ -2388,6 +2388,24 @@ def continue_pending_response(
             )
         else:
             state["pending_response_last_result"] = "RESPONSE_PENDING"
+    elif identity_status == "RESPONSE_IDENTITY_MISSING":
+        state["pending_response_last_result"] = "FINAL_RESPONSE_INCOMPLETE"
+        state["response_identity_status"] = identity_status
+        set_state(state, "FAILED", "stable Assistant response was incomplete or malformed")
+        stop(
+            state,
+            f"FINAL_RESPONSE_INCOMPLETE: stable Assistant response was incomplete or malformed ({identity_status}); same Message ID resend remains forbidden",
+            "IN_PROGRESS",
+        )
+    elif identity_status == "RESPONSE_PROTOCOL_REJECTED":
+        state["pending_response_last_result"] = "FINAL_RESPONSE_PROTOCOL_REJECTED"
+        state["response_identity_status"] = identity_status
+        set_state(state, "FAILED", "stable Assistant response violated the RR response protocol")
+        stop(
+            state,
+            f"FINAL_RESPONSE_PROTOCOL_REJECTED: stable Assistant response violated the RR response protocol ({identity_status}); same Message ID resend remains forbidden",
+            "IN_PROGRESS",
+        )
     else:
         state["pending_response_last_result"] = "RESPONSE_IDENTITY_REJECTED"
         state["response_identity_status"] = "RESPONSE_IDENTITY_REJECTED"
