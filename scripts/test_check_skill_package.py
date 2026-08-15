@@ -83,6 +83,23 @@ class PackageCheckerExecutionTests(unittest.TestCase):
         for marker in CHECKER_MODULE.REQUIRED_RR_INIT_MARKERS:
             self.assertIn(marker, rr_init)
 
+    def test_explicit_skill_selection_requires_bootstrap_before_domain_work(self) -> None:
+        skill_text = (ROOT / "skills" / "research-review-lead" / "SKILL.md").read_text(
+            encoding="utf-8"
+        )
+        required_invocation_markers = [
+            "EXPLICIT_SELECTION_BOOTSTRAP_GATE",
+            "PRECHECK_IS_NOT_BOOTSTRAP",
+            "NO_DOMAIN_WORK_BEFORE_BOOTSTRAP",
+            "NO_LOCAL_BROWSER_REVIEW_SUBSTITUTE",
+        ]
+        for marker in required_invocation_markers:
+            self.assertIn(
+                marker,
+                skill_text,
+                f"SKILL.md missing explicit invocation gate marker: {marker}",
+            )
+
     def test_repository_hygiene_ignores_agents_runtime_deployment_copy(self) -> None:
         with tempfile.TemporaryDirectory(prefix="runtime-hygiene-test-") as directory:
             root = Path(directory)

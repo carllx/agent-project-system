@@ -31,6 +31,13 @@ Filled Packets, receipts, transport records, and Handoffs are temporary by defau
 
 ## Invocation, Assets, and Handoff
 
+### Explicit Selection Bootstrap Gate
+
+- `EXPLICIT_SELECTION_BOOTSTRAP_GATE`: When the user or platform explicitly invokes `research-review-lead` for a Browser Research / Review loop, the IDE-side agent must enter the deterministic Browser bootstrap flow before performing any domain work. Prior to establishing the Browser RR Lead bootstrap, the IDE-side agent is restricted to skill/package resource resolution, Context Packet preparation, necessary transport PRECHECK, and executing the bootstrap path.
+- `NO_DOMAIN_WORK_BEFORE_BOOTSTRAP`: Before the Browser RR Lead bootstrap is established, the IDE-side agent MUST NOT execute `search_web`, web domain research, local investigation, local code reviews, or generate domain conclusions for the user's request. The IDE-side agent must never substitute itself for the Browser RR Lead.
+- `PRECHECK_IS_NOT_BOOTSTRAP`: Running `opencli chatgpt status` or other PRECHECK steps only verifies transport prerequisites. Successful PRECHECK does not mean the Browser RR loop is running. After a successful PRECHECK, the agent must continue into the deterministic bootstrap flow; it must never branch from PRECHECK status into local research or domain execution.
+- `NO_LOCAL_BROWSER_REVIEW_SUBSTITUTE`: If bootstrap is blocked, failed, delivery state is unresolved, or prerequisites are unavailable, the agent must STOP and report the actual blocked/failure state. It must never fall back to local research/review or manufacture a browser-style review as a substitute.
+
 - Use the target Agent platform's Skill selection entry to invoke `research-review-lead` manually when the user requests a Browser Research / Review loop.
 - The frontmatter `description` supplies semantic candidate signals, but the platform may not proactively select this Skill without an explicit selection. Do not treat that platform behavior as a project-level installation failure.
 - After the Skill is selected, resolve bundled paths relative to this `SKILL.md` and read only the asset required by the current scenario. Use `rr-lead-init.md` for creating the Browser RR Lead conversation, `context-packet.md` for the first Work Item sync, `evidence-packet.md` for verified execution evidence, `decision-request.md` for a genuine user decision gate, and `handoff.md` when continuity or Agent handoff is needed.
