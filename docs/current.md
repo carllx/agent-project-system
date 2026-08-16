@@ -6,12 +6,14 @@
 - **North star:** 建立一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。见 `docs/adr/0003-agent-collaboration-framework.md`。
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
-- **Project phase:** `CONTROL_PLANE_MIGRATION_PLANNING`；Message Hub 生产控制面迁移规划阶段。
-- **Active branch:** `planning/message-hub-control-plane-migration-001`
-- **Authoritative tracker:** `https://github.com/carllx/agent-project-system/issues/9`
-- **Active Work Item:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **Project phase:** `MESSAGE_HUB_M1_DURABLE_CORE_IMPLEMENTATION`；Message Hub M1 持久化核心实现阶段。
+- **Active branch:** `work/message-hub-m1-durable-core-001`
+- **Authoritative tracker:** `https://github.com/carllx/agent-project-system/issues/10`
+- **Active Work Item:** `APS-MESSAGE-HUB-M1-001`
 - **MESSAGE_HUB_CONTROL_PLANE_CANDIDATE:** `YES`
 - **MESSAGE_HUB_PRODUCTION_MIGRATION_AUTHORIZED:** `NO`
+- **M1_IMPLEMENTATION_AUTHORIZED:** `YES`
+- **M2_IMPLEMENTATION_AUTHORIZED:** `NO`
 - **PR8_ROLE:** `ACCEPTED_POC_REFERENCE`
 - **PR8_ACCEPTED_HEAD:** `83a78fccf7556c647d8cf0ae8f59a021e38e4716`
 - **PR3_ROLE:** `ROLLBACK_CONTROL_BASELINE`
@@ -19,7 +21,7 @@
 - **REAL_BROWSER_PUSH_INGRESS:** `NOT_AVAILABLE / NOT_PROVEN`
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Phase baseline:** `d7651f95059694047d2a7e280afe761264a54058`（PR #3 Minimal Bridge baseline）。
-- **Work Item initialization authority:** `https://github.com/carllx/agent-project-system/issues/9`
+- **Work Item initialization authority:** `https://github.com/carllx/agent-project-system/issues/10`
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Source Skill VERSION:** `0.4.21`。
 - **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.21`，九个声明文件 SHA-256 parity `PASS`。
@@ -54,22 +56,32 @@ Agent Project System
 - `skills/research-review-lead/scripts/opencli_transport.py`：Minimal Browser Review Bridge CLI facade，提供 `review-bootstrap` 与 `review`（含 `--reconcile`）。
 - `skills/research-review-lead/scripts/minimal_bridge.py`：Minimal Browser Review Bridge 核心实现。
 - `docs/specs/message-hub-control-plane-migration.md`：Message Hub 生产控制面迁移规划规范。
+- `runtime/message_hub/`：Message Hub M1 持久化核心模块（`storage.py`）。
 
-## Active Work Item: Message Hub Control Plane Migration Planning
+## Active Work Item: Message Hub M1 Durable Core Implementation
+
+- **ID:** `APS-MESSAGE-HUB-M1-001`
+- **Name:** Message Hub M1 Durable Core
+- **State:** `IN_PROGRESS`
+- **Workflow state:** `IN_PROGRESS`
+- **Authoritative Issue Tracker:** `https://github.com/carllx/agent-project-system/issues/10`
+- **Architecture Model:** Message Hub 作为 APS 通信与事件控制面候选实现，M1 实现纯 SQLite 关系型持久化核心。
+- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
+- **Execution Packet state:** `COMPLETED`
+- **Validation:** `scripts/check_docs.py`；`scripts/check_skill_package.py`；`scripts/test_minimal_review_bridge.py`；`tests/test_message_hub_storage.py`。
+- **PR #8 Status:** `ACCEPTED_POC_REFERENCE` at `83a78fccf7556c647d8cf0ae8f59a021e38e4716`（Draft，不直接合入）。
+- **PR #3 Status:** `ROLLBACK_CONTROL_BASELINE` at `d7651f95059694047d2a7e280afe761264a54058`（保持隔离）。
+- **Objective:** 实现 `runtime/message_hub/storage.py`，提供 SQLite 关系型存储、一等身份模型（含 `conversation_id` 与 `connector_id`）、原子外部发送 Claim、持久化 connector cursor、以及严格事务级 Exactly-Once `RESPONSE_READY` 保证。
+- **Scope:** 纯本地 SQLite 存储核心与单元测试；不包含网络、HTTP/SSE、OpenCLI Connector 进程调用、Live 探测或 M2-M5 范围。
+
+## Historical Completed Work Item: APS-MESSAGE-HUB-MIGRATION-001
 
 - **ID:** `APS-MESSAGE-HUB-MIGRATION-001`
 - **Name:** Message Hub Control Plane Migration Planning
-- **State:** `PLANNING_COMPLETE / BROWSER_REVIEW_PENDING`
-- **Workflow state:** `IN_PROGRESS`
-- **Authoritative Issue Tracker:** `https://github.com/carllx/agent-project-system/issues/9`
-- **Architecture Model:** Message Hub 作为 APS 通信与事件控制面中枢，OpenCLI 作为外部 Browser Adapter，Minimal Bridge 作为回滚基线。
-- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
-- **Execution Packet state:** `COMPLETED`
-- **Validation:** `scripts/check_docs.py`；`scripts/check_skill_package.py`；`scripts/test_minimal_review_bridge.py`。
-- **PR #8 Status:** `ACCEPTED_POC_REFERENCE` at `83a78fccf7556c647d8cf0ae8f59a021e38e4716`（Draft，不直接合入）。
-- **PR #3 Status:** `ROLLBACK_CONTROL_BASELINE` at `d7651f95059694047d2a7e280afe761264a54058`（保持隔离）。
-- **Objective:** 完成 Message Hub 控制面从 PoC 到正式生产模块的架构规范、模块划分、状态机定义、回滚策略及分阶段迁移规划。
-- **Scope:** 规划与架构文档编制、启动文档对齐与状态修复；不包含生产代码实现或 PR 合入。
+- **State:** `ACHIEVED`
+- **Workflow state:** `COMPLETED`
+- **Authoritative Tracker:** `https://github.com/carllx/agent-project-system/issues/9`
+- **Outcome:** Browser Review Accepted at `e0b549f9825c71936b368504b630a8be14d47deb`.
 
 ## Historical Completed Work Item: REAL-AGENT-REVIEW-LOOP-MVP-001
 
