@@ -22,7 +22,7 @@ PACKAGE_FILES = (
     "assets/evidence-packet.md",
     "assets/handoff.md",
     "assets/rr-lead-init.md",
-    "scripts/experiment_protocol.py",
+    "scripts/minimal_bridge.py",
     "scripts/opencli_transport.py",
 )
 

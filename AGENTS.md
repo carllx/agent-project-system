@@ -66,7 +66,7 @@ Single-context (`CONTEXT.md` + `docs/adr/`). See `docs/agents/domain.md`.
 
 ## 验证命令
 
-本项目当前没有构建步骤。修改后至少运行：`python scripts/check_docs.py`、`git diff --check`、`git status --short`。需要说明变更时使用 `git diff --stat` 和必要的关键 Diff，不得虚构验证结果。
+本项目当前没有构建步骤。修改后至少运行：`python scripts/check_docs.py`、`python scripts/check_skill_package.py`、`python -B -m unittest scripts/test_minimal_review_bridge.py`、`git diff --check`、`git status --short`。任何权威验证命令 exit code != 0 或 TIMED_OUT 必须立即 Terminal Stop，保留现场证据，不得继续执行后续验证或生成 GREEN Review Packet。需要说明变更时使用 `git diff --stat` 和必要的关键 Diff，不得虚构验证结果。
 
 ## 用户决策闸口
 

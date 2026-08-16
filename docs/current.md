@@ -42,15 +42,18 @@ Agent Project System
 
 ## 当前模块
 
-- `skills/research-review-lead/`：已登记的正式运行模块（RR Lead Loop + Reliable Product Transport MVP-0 + 确定性 bootstrap + manual-export fallback），VERSION `0.4.18`。
-- OpenCLI Transport Adapter：`skills/research-review-lead/scripts/opencli_transport.py` 中的 Transport 层实现，仅作为框架的适配器。
-- `runtime/completion_gate.py`：IDE-independent Completion-Gate Policy；`adapters/antigravity/stop_hook.py`：Antigravity Stop lifecycle translation。两者已通过 `ACF-AG-ADAPTER-001` Browser Final Review，尚未部署。
-- `runtime/review_loop.py`：最小 IDE-independent ACF Review Workflow bridge；`scripts/acf_review_loop.py`：其原子 JSON state driver。自动路径消费冻结 Transport 已做 identity verification 的 RR response；Manual 路径消费严格绑定且记录 `MANUAL_RELAY` provenance 的 raw RR wire。两者均不承担 Browser Transport 或 IDE lifecycle translation。
+- `skills/research-review-lead/`：已登记的正式运行模块（Minimal Browser Review Bridge），VERSION `0.4.21`。
+- `skills/research-review-lead/scripts/opencli_transport.py`：Minimal Browser Review Bridge CLI facade，提供 `review-bootstrap` 与 `review`（含 `--reconcile`）。
+- `skills/research-review-lead/scripts/minimal_bridge.py`：Minimal Browser Review Bridge 核心实现（Conversation binding、canonical request envelope/hashing、PREPARED/SEND_ATTEMPTED/RESPONSE_RECEIVED durability、fast submit 与 read-only reconcile）。
+- 旧版 `runtime/review_loop.py`、`runtime/completion_gate.py`、`scripts/acf_review_loop.py`、`adapters/antigravity/stop_hook.py` 以及旧 transport 模块已按架构审计彻底删除。
 
-## MVP-1 Mainline Integration
+## Active Frontier: Minimal Browser Review Bridge
 
-- **Integration state:** `IN_PROGRESS / DRAFT_PR_FINAL_REVIEW_PENDING`。
-- **GitHub authority:** Issue `#2`；Draft PR `#3`，base `main`，head `integration/autonomous-review-loop-main`。
+- **Active Work Item:** `APS-MINIMAL-BRIDGE-004`
+- **Architecture Model:** Antigravity `/goal` 拥有 IDE Agent 执行与重试的外循环；本项目只拥有精简的 Browser Review Bridge。
+- **Surviving Components:** `opencli_transport.py` (CLI facade) -> `minimal_bridge.py` (Core Bridge) -> OpenCLI -> Browser.
+- **Validation:** `scripts/test_minimal_review_bridge.py` (23 pure-local tests)；`python scripts/check_skill_package.py`；`python scripts/check_docs.py`。
+- **PR #3:** 处于 Draft / Blocked 状态，不执行自动 push 或 merge。
 - **Integration start:** `9e264a765f524d7e23a6333b9a0a50d9281be983`；frozen historical branch `work/real-agent-review-loop-mvp-001`。
 - **Known Good functional baseline:** `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da`；`AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`，`PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`。
 - **CORE / KEEP:** Product Browser Transport、Conversation/Delivery/Response identity、no-resend、`runtime/review_loop.py`、`scripts/acf_review_loop.py` application driver、Completion Gate、Failure Ledger、source-to-runtime parity/sync。

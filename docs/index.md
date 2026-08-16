@@ -37,4 +37,4 @@
 | `skills/research-review-lead/assets/decision-request.md` | Decision Request 可复用模板 | 触发用户决策闸口时 | Active | 2026-08-05 |
 | `skills/research-review-lead/assets/handoff.md` | Handoff 可复用模板与 exact-ref recovery locator | 对话不再可靠继续且需要接力时 | Active | 2026-08-09 |
 | `skills/research-review-lead/assets/rr-lead-init.md` | Browser RR Lead 初始化与 GitHub exact-ref bootstrap 规则 | 创建或恢复真实 Browser RR Lead 对话时 | Active | 2026-08-09 |
-| `skills/research-review-lead/scripts/opencli_transport.py` | OpenCLI 单次发送、恢复、去重和有限轮询的当前实现 | 通过 OpenCLI 发送、恢复、清理或审计 Session identity 时 | Active | 2026-08-09 |
+| `skills/research-review-lead/scripts/opencli_transport.py` | Minimal Browser Review Bridge CLI facade，提供 review-bootstrap 与 review (dispatch / read-only reconcile) | 通过 OpenCLI 进行 Browser Review 快速提交与对账时 | Active | 2026-08-16 |

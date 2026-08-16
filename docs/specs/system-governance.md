@@ -74,6 +74,16 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 与用户沟通使用白话并尽量减少打扰。只有目标方向、成本付费、账号权限、隐私数据、文件公开上传、不可逆操作、重大安全风险或必须接受降级时请求决定。所有决策请求必须提供三个白话选项和一个明确推荐。
 
+## Source file maintainability
+
+- 推荐第一方源码单文件保持精简（例如约 600 行以内）作为可维护性软性关注指标，但不作为机械硬性合并门禁。
+- 架构以 Small Interface + Deep Implementation 为指导，避免无意义的浅层分拆或机械截断。
+
+## Fail-fast validation execution
+
+- 任何权威验证命令返回非零 exit code 或 TIMED_OUT 时，必须立即 Terminal Stop。
+- 严禁忽略前置失败继续执行后续测试或命令，严禁使用忽略退出码的 shell 串联，严禁生成虚假的 GREEN Review Packet。
+
 ## Safety and information exchange
 
 - 不读取 Cookie、Token、密钥或平台账号凭据，不扫描私人文件。

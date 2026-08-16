@@ -81,25 +81,24 @@ IN_PROGRESS / ACHIEVED / BLOCKED / NEEDS_DECISION / STALLED / UNSAFE
 
 RR Lead 每轮响应还应包含 `ACCEPTANCE_STATUS`，逐条给出 Criterion、`MET / NOT_MET / UNVERIFIED`、Evidence，并包含 `FINDINGS`、`BLOCKERS`、`DEBT`、`NEXT_WORK_ORDER`、`VALIDATION` 和 `USER_DECISION_REQUIRED`。非阻塞建议只能进入 Debt，不能阻止主线完成；只有所有原验收条件都有充分证据且为 `MET`，并满足 ACF Protocol 的 Final Review Completion invariant，才允许进入 `ACHIEVED`。
 
-### ACF-0.1 compatibility bridge
+### Minimal Browser Review Bridge
 
-`runtime/review_loop.py` 是最小 IDE-independent Product Workflow bridge；它负责状态转换和从 pending Request 确定性渲染 canonical Browser Review body，但不发送消息、不建立 Conversation，也不翻译 IDE lifecycle。`scripts/acf_review_loop.py` 负责 JSON 状态的原子持久化。自动路径只在冻结 Transport 已给出 `official_response_eligible=true`、`RESPONSE_IDENTITY_VERIFIED`，且 Transport Work Item/Message ID 与当前 pending Request 精确相等时接收回复；Manual Relay 路径则保存并严格解析用户原样转交的 RR wire，以独立 provenance 进入同一 ACF Decision/Completion 逻辑。Transport 自身的 `work_item_state=ACHIEVED` 只是“已取得 identity-bound RR response”的旧标签，绝不是 Product Completion Authority。
+Antigravity `/goal` 负责 IDE Agent 的持续任务与执行外循环。本项目仅保留精简的 Browser Review Bridge（`minimal_bridge.py` 与 `opencli_transport.py`），负责连接 OpenCLI 与 Browser Review Authority：
 
-### Canonical Browser Review message path
+- **Exact Conversation ID**: 正式 Review 必须向已确认的精确 Conversation 发送，通过 `review-bootstrap` 初始化一次。
+- **Canonical Envelope & Hash**: Bridge 自行生成规范的 Review Request 消息并绑定 exact `request_id`、`artifact_id` 与 `request_hash`。
+- **At-Most-Once Write & Fast Return**: 本地持久化 `PREPARED` 与 `SEND_ATTEMPTED` 凭证；通过 native `--wait false` 快速返回 `RESPONSE_PENDING`，不阻塞等待 Browser 推理。
+- **Read-Only Reconciliation**: `--reconcile` 仅执行只读 `chatgpt detail` 检查，匹配后标记 `RESPONSE_RECEIVED` 并返回 `RESPONSE_READY`。
 
-Execution Agent 不得手工拼 Browser prompt 或 response wire contract。提交 pending Request 后，Product 必须从当前 Work Item、完整 Request snapshot、agreed Acceptance Criteria 和 exact ACF binding 生成唯一 Browser body。该 body 自动包含 strict RR response fields、每个 Criterion 的 `STATUS / EVIDENCE` 结构、exact Request ID 与 Review Kind，但只列出允许的 Decision，不能预先要求 Browser 返回某个 Decision。
-
-正式命令路径为：
+正式命令路径：
 
 ```text
-submit-review
-→ send-review --prepare-new
-   或 send-review --previous-transport-state <verified prior state>
-→ recover-review（仅在同一 Transport state 已进入 pending response 时）
-→ ingest-review
+review-bootstrap [--timeout 30]
+→ review --request-id <ID> --artifact-id <SHA256> --prompt <TEXT> --conversation <ID>
+→ review --request-id <ID> --artifact-id <SHA256> --conversation <ID> --reconcile
 ```
 
-`send-review` 从 pending Request 推导 Message ID 和 Round，生成不可覆盖的 canonical message/Transport state path，并使用冻结 Transport 默认预算；同一 Request 的本地发送 artifact 已存在时 fail closed。投递进入 `RESPONSE_PENDING` 后，Product driver 不把 pending 返回给外层 Agent 自行解释，而是自动串联同一 exact Conversation/Message 的 no-write `recover --continue-pending`。`TOTAL_RESPONSE_WAIT_SECONDS=30` 是一次 read-only poll window，不是 Review timeout；默认最多三个窗口，任一窗口提前取得完整 authoritative reply 就立即返回。三个窗口均 pending 时进入 `BLOCKED_RESPONSE_TIMEOUT / STALLED`，保留正式 Browser Review Authority，不生成本地 Decision 或 Next Work Order。之后显式 `recover-review` 仍可对同一 state 做一次 bounded late read-only check。Execution Agent 不得删除 canonical write receipt、删除或重建 Transport state、直接编辑 Loop/Transport JSON，或扩大任何 retry/recovery budget。
+Bridge 严禁 IDE 自行冒充 Browser 做 Review，严禁重复发送同一 Request，严禁在 Bridge 内部运行忙轮询循环。
 
 ### Manual Relay Review artifact path
 
