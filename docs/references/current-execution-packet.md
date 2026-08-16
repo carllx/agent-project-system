@@ -1,13 +1,13 @@
 # Current Execution Packet Pointer
 
-ACTIVE_WORK_ITEM: REAL-AGENT-REVIEW-LOOP-MVP-001
+ACTIVE_WORK_ITEM: APS-MESSAGE-HUB-MIGRATION-001
 
-ACTIVE_EXECUTION_PACKET: docs/references/real-agent-review-loop-mvp-001-acceptance-manual.md
+ACTIVE_EXECUTION_PACKET: docs/references/message-hub-migration-planning-packet.md
 
 PACKET_STATE: COMPLETED
 
-REQUIRED_PRODUCT_HEAD: ed616125fc0e7ff35464dd4dbe1b67e1f5c3d921
+REQUIRED_PRODUCT_HEAD: d7651f95059694047d2a7e280afe761264a54058
 
-ACTIVE_PACKET_SHA256: 195b94a28606f51471ae7564e24b56a5cd0bb0741bf39b10425cc282bd2ebfc4
+ACTIVE_PACKET_SHA256: ba067c6a96e3a587c5e94975636555aad3d6d9317e5c6a8de229d9fd01fd86a8
 
 `ACTIVE_PACKET_SHA256` is computed from UTF-8 text with LF newlines so it is stable across platforms. `REQUIRED_PRODUCT_HEAD` is the exact executable Product checkpoint. It must be an ancestor of the checked-out branch HEAD, and local HEAD must equal the configured remote tracking ref before execution begins.

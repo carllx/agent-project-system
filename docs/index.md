@@ -22,11 +22,13 @@
 | `docs/references/real-agent-review-loop-mvp-001-diagnostic-evidence-matrix.schema.json` | Diagnostic Batch Evidence Matrix 的机器可读结构约束 | 创建或验证 Batch Evidence Matrix JSON 时 | Active | 2026-08-11 |
 | `docs/references/windows-opencli-long-argv-001.md` | Windows OpenCLI 长命令行参数限制 Blocker 记录 | 修复 Transport blocker 时 | Debt | 2026-08-11 |
 | `docs/references/browser-transport-failure-ledger.md` | Browser Transport 已观察/推断/证明路径的防重复 Evidence Ledger | 设计或执行 Browser/OpenCLI Transport 实验前 | Active | 2026-08-12 |
+| `docs/references/message-hub-migration-planning-packet.md` | Message Hub 生产控制面迁移规划的 canonical Execution Packet | 审计或执行 APS-MESSAGE-HUB-MIGRATION-001 时 | Active | 2026-08-16 |
 | `docs/specs/system-governance.md` | 文档治理、信息分类与生命周期 | 修改治理、目录或文档类型时 | Active | 2026-08-05 |
 | `docs/specs/agent-collaboration-protocol.md` | ACF 通用 Review Trigger、Contract、Decision、Completion Authority 与 Review Artifact access path | 设计、实现或验证任何 Agent Collaboration Review 流程时 | Candidate | 2026-08-09 |
 | `docs/specs/antigravity-completion-gate-adapter.md` | Antigravity Completion-Gate Adapter 的状态映射、Contract、bounded continuation 与失败语义 | 设计、实现或验证 Antigravity execution termination gate 时 | Superseded / Historical | 2026-08-09 |
 | `docs/specs/opencli-session-discovery.md` | OpenCLI Session Discovery、Conversation identity、投递验证与 exact-ID recovery 的产品 Contract | 设计、实现或验证 Browser/OpenCLI Session identity 时 | Candidate | 2026-08-13 |
 | `docs/specs/research-review-loop.md` | Minimal Browser Review Bridge 规范、角色分工、lifecycle、canonical 消息、快速提交与对账契约 | 执行或修改 Minimal Browser Review Bridge 时 | Active | 2026-08-16 |
+| `docs/specs/message-hub-control-plane-migration.md` | Message Hub 生产控制面迁移架构规范、模块划分、状态机与过渡策略 | 设计、实现或验证 Message Hub 控制面时 | Candidate | 2026-08-16 |
 | `docs/adr/0001-general-system-with-modular-workflows.md` | 通用系统与模块化工作流的架构决定 | 质疑项目定位或模块边界时 | Accepted | 2026-08-05 |
 | `docs/adr/0002-self-contained-user-level-rr-lead-skill.md` | RR Lead 自包含用户级 Skill 的打包与部署决定 | 修改 RR Lead 包结构、安装或分发策略时 | Accepted | 2026-08-05 |
 | `docs/adr/0003-agent-collaboration-framework.md` | Agent Collaboration Framework 与 IDE/Transport 解耦的长期架构决定 | 质疑系统定位、IDE/Transport 边界或框架分层时 | Accepted | 2026-08-08 |

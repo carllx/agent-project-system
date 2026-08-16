@@ -6,15 +6,23 @@
 - **North star:** 建立一套与具体 IDE 和 Transport 解耦的 **Agent Collaboration Framework**，使 Browser Lead 与 IDE Agent 能通过可定义、可观察、可恢复、可审查、可测试的协议形成长期工作闭环。见 `docs/adr/0003-agent-collaboration-framework.md`。
 - **Repository root:** `E:\PROJECTS\agent-project-system`
 - **Remote:** `https://github.com/carllx/agent-project-system.git`
-- **Project phase:** `USABLE / MVP-1 MAINLINE INTEGRATION`；继续适用 Maintenance policy，不主动开发或实验。
-- **Active branch:** `integration/autonomous-review-loop-main`；`work/real-agent-review-loop-mvp-001` 冻结为历史 Known Good branch，不再修改。
+- **Project phase:** `CONTROL_PLANE_MIGRATION_PLANNING`；Message Hub 生产控制面迁移规划阶段。
+- **Active branch:** `planning/message-hub-control-plane-migration-001`
+- **Authoritative tracker:** `https://github.com/carllx/agent-project-system/issues/9`
+- **Active Work Item:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **MESSAGE_HUB_CONTROL_PLANE_CANDIDATE:** `YES`
+- **MESSAGE_HUB_PRODUCTION_MIGRATION_AUTHORIZED:** `NO`
+- **PR8_ROLE:** `ACCEPTED_POC_REFERENCE`
+- **PR8_ACCEPTED_HEAD:** `83a78fccf7556c647d8cf0ae8f59a021e38e4716`
+- **PR3_ROLE:** `ROLLBACK_CONTROL_BASELINE`
+- **PR3_HEAD:** `d7651f95059694047d2a7e280afe761264a54058`
+- **REAL_BROWSER_PUSH_INGRESS:** `NOT_AVAILABLE / NOT_PROVEN`
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
-- **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（上一 Work Item closeout）；它不是当前 Work Item 的初始化 commit。
-- **Work Item initialization commit:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；它不是 Phase baseline。当前 Git HEAD 由 Git/交接消息提供，本文件不自包含其所在 commit 的 SHA。
+- **Phase baseline:** `d7651f95059694047d2a7e280afe761264a54058`（PR #3 Minimal Bridge baseline）。
+- **Work Item initialization commit:** `d7651f95059694047d2a7e280afe761264a54058`
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
-- **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
 - **Source Skill VERSION:** `0.4.21`。
-- **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.21`，九个声明文件 SHA-256 parity `PASS`。实验输入曾观察旧 runtime VERSION `0.4.14`；本轮 Product workspace 的 pre-sync 只读检查发现目标路径当时不存在，因此两项按 provenance 分开记录，不互相覆盖。
+- **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.21`，九个声明文件 SHA-256 parity `PASS`。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
 - **CANONICAL_DEPLOYMENT_PATH:** `UNVERIFIED`。仓库没有安装脚本；项目历史记录了 `.codex\skills` 的本机安装结果，但不能证明它是所有平台通用的 canonical Codex 用户级 Skill路径。
@@ -28,13 +36,13 @@ Agent Project System 不是单独的 RR Lead Skill，也不是 OpenCLI Transport
 Agent Project System
 → Agent Collaboration Framework
 → Browser Lead / IDE Agent Collaboration Protocol
-→ Runtime / Orchestration
-→ Transport / IDE Adapters
+→ Message Hub Control Plane
+→ Transport / Browser Adapters (OpenCLI)
 ```
 
 - **Browser Lead：** 负责规划、架构、Review 与被授权范围内的技术判断；审查 Lab Evidence 后只把清理过的事实和 Work Order 交给 Product。
 - **Product Agent：** 负责 Product Problem、Contract、Acceptance Criteria、implementation 与 tests；可以运行在 Antigravity、Codex 或 future IDE，只读取同一 Project Contract。
-- **Lab Agent：** 只执行明确的 `LAB_EXPERIMENT_HANDOFF`，保存 raw Evidence 并返回 Reference Probe；不得直接修改 Product 或把自报 PASS 提升为产品事实。
+- **Message Hub Control Plane：** 负责持久化消息/事件状态、提交确认、分发与对账，作为通用协作中枢。
 - **用户：** 保留目标、范围、权限、风险、成本和重要产品方向的最终决定权。
 - **参考 IDE 顺序：** Antigravity 为第一参考 IDE；Codex 后续用于跨 IDE 通用性验证。
 - **OpenCLI：** 只是 Transport Adapter，不等于整个系统。
@@ -42,28 +50,30 @@ Agent Project System
 
 ## 当前模块
 
-- `skills/research-review-lead/`：已登记的正式运行模块（Minimal Browser Review Bridge），VERSION `0.4.21`。
+- `skills/research-review-lead/`：已登记的正式运行模块（Minimal Browser Review Bridge），VERSION `0.4.21`。冻结为回滚与对照基线。
 - `skills/research-review-lead/scripts/opencli_transport.py`：Minimal Browser Review Bridge CLI facade，提供 `review-bootstrap` 与 `review`（含 `--reconcile`）。
-- `skills/research-review-lead/scripts/minimal_bridge.py`：Minimal Browser Review Bridge 核心实现（Conversation binding、canonical request envelope/hashing、PREPARED/SEND_ATTEMPTED/RESPONSE_RECEIVED durability、fast submit 与 read-only reconcile）。
-- 旧版 `runtime/review_loop.py`、`runtime/completion_gate.py`、`scripts/acf_review_loop.py`、`adapters/antigravity/stop_hook.py` 以及旧 transport 模块已按架构审计彻底删除。
+- `skills/research-review-lead/scripts/minimal_bridge.py`：Minimal Browser Review Bridge 核心实现。
+- `docs/specs/message-hub-control-plane-migration.md`：Message Hub 生产控制面迁移规划规范。
 
-## Active Frontier: Minimal Browser Review Bridge
+## Active Frontier: Message Hub Control Plane Migration
 
-- **Active Work Item:** `APS-MINIMAL-BRIDGE-008`
-- **Architecture Model:** Antigravity `/goal` 拥有 IDE Agent 执行与重试的外循环；本项目只拥有精简的 Browser Review Bridge。
-- **Surviving Components:** `opencli_transport.py` (CLI facade) -> `minimal_bridge.py` (Core Bridge) -> OpenCLI -> Browser.
-- **Validation:** `scripts/test_minimal_review_bridge.py`；`scripts/test_check_skill_package.py`；`python scripts/check_skill_package.py`；`python scripts/check_docs.py`。
-- **PR #3:** 处于 Draft / Blocked 状态，不执行自动 merge。
-- **Deleted Legacy Components:** `runtime/review_loop.py`、`runtime/completion_gate.py`、`scripts/acf_review_loop.py`、`adapters/antigravity/stop_hook.py`、旧版 3986 行 transport 测试与 600 行硬门禁。
-- **HISTORICAL_ONLY:** 已完成或失败的 Acceptance/Diagnostic Packets 保留为审计 Evidence；不得继续复制整份 Packet 创建新运行实例。
-- **Merge gate:** 现有相关回归和文档检查通过后提交 PR #3 最终 Browser Review；本文件不自行授权 merge。
+- **Active Work Item:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **Authoritative Issue Tracker:** `https://github.com/carllx/agent-project-system/issues/9`
+- **Architecture Model:** Message Hub 作为 APS 通信与事件控制面中枢，OpenCLI 作为外部 Browser Adapter，Minimal Bridge 作为回滚基线。
+- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
+- **Execution Packet state:** `COMPLETED`
+- **Validation:** `scripts/check_docs.py`；`scripts/check_skill_package.py`；`scripts/test_minimal_review_bridge.py`。
+- **PR #8 Status:** `ACCEPTED_POC_REFERENCE` at `83a78fccf7556c647d8cf0ae8f59a021e38e4716`（Draft，不直接合入）。
+- **PR #3 Status:** `ROLLBACK_CONTROL_BASELINE` at `d7651f95059694047d2a7e280afe761264a54058`（保持隔离）。
 
 ## Current Work Item Closeout
 
-- **ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001`
-- **Name:** Real Agent Review Loop MVP
+- **ID:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **Name:** Message Hub Control Plane Migration Planning
 - **State:** `ACHIEVED`
 - **Workflow state:** `COMPLETED`
+- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
+- **Execution Packet state:** `COMPLETED`
 - **Review Request ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003-R2-FINAL`
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
 - **Execution Packet state:** `COMPLETED`
