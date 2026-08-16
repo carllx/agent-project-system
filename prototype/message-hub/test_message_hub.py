@@ -49,14 +49,15 @@ class TestStorage(unittest.TestCase):
             recipient="browser:lead",
             message_type="review.request",
             content="Please review doc",
-            artifact_id="art-100"
+            artifact_id="art-100",
+            metadata={"priority": "high"}
         )
         self.assertTrue(is_new)
         self.assertEqual(msg["message_id"], "msg-001")
         self.assertIsNotNone(ev)
         self.assertEqual(ev["event_type"], "REQUEST_CREATED")
 
-        # Duplicate create with same ID
+        # Duplicate create with exact same authoritative fields -> dedup success
         msg2, is_new2, ev2 = self.storage.create_message(
             message_id="msg-001",
             thread_id="th-001",
@@ -64,7 +65,8 @@ class TestStorage(unittest.TestCase):
             recipient="browser:lead",
             message_type="review.request",
             content="Please review doc",
-            artifact_id="art-100"
+            artifact_id="art-100",
+            metadata={"priority": "high"}
         )
         self.assertFalse(is_new2)
         self.assertEqual(msg2["message_id"], "msg-001")
@@ -73,6 +75,61 @@ class TestStorage(unittest.TestCase):
         # Count messages
         msgs = self.storage.get_messages("th-001")
         self.assertEqual(len(msgs), 1)
+
+    def test_conflicting_same_id_rejection(self):
+        # 1. Create original message
+        self.storage.create_message(
+            message_id="msg-conflict-1",
+            thread_id="th-conflict",
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Original content",
+            artifact_id="art-orig",
+            metadata={"meta_key": 1}
+        )
+
+        # 2. Conflict: changed content
+        with self.assertRaises(ValueError) as ctx:
+            self.storage.create_message(
+                message_id="msg-conflict-1",
+                thread_id="th-conflict",
+                sender="ide:agent",
+                recipient="browser:lead",
+                message_type="review.request",
+                content="Altered content",
+                artifact_id="art-orig",
+                metadata={"meta_key": 1}
+            )
+        self.assertIn("Conflict: message_id 'msg-conflict-1' already exists", str(ctx.exception))
+
+        # 3. Conflict: changed artifact_id
+        with self.assertRaises(ValueError) as ctx:
+            self.storage.create_message(
+                message_id="msg-conflict-1",
+                thread_id="th-conflict",
+                sender="ide:agent",
+                recipient="browser:lead",
+                message_type="review.request",
+                content="Original content",
+                artifact_id="art-different",
+                metadata={"meta_key": 1}
+            )
+        self.assertIn("Conflict", str(ctx.exception))
+
+        # 4. Conflict: changed metadata
+        with self.assertRaises(ValueError) as ctx:
+            self.storage.create_message(
+                message_id="msg-conflict-1",
+                thread_id="th-conflict",
+                sender="ide:agent",
+                recipient="browser:lead",
+                message_type="review.request",
+                content="Original content",
+                artifact_id="art-orig",
+                metadata={"meta_key": 2}
+            )
+        self.assertIn("Conflict", str(ctx.exception))
 
     def test_artifact_and_reply_binding_validation(self):
         # Create request
@@ -86,7 +143,7 @@ class TestStorage(unittest.TestCase):
             artifact_id="art-A"
         )
 
-        # Valid reply with matching artifact
+        # Valid reply with matching artifact and same thread
         resp, is_new, _ = self.storage.create_message(
             message_id="resp-1",
             thread_id="th-002",
@@ -113,6 +170,32 @@ class TestStorage(unittest.TestCase):
                 artifact_id="art-MISMATCH"
             )
         self.assertIn("Artifact mismatch", str(ctx.exception))
+
+    def test_cross_thread_reply_rejection(self):
+        # Create request in Thread A
+        self.storage.create_message(
+            message_id="req-thread-A",
+            thread_id="thread-A",
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Request in Thread A",
+            artifact_id="art-shared"
+        )
+
+        # Response attempted in Thread B pointing to Thread A request -> must fail closed
+        with self.assertRaises(ValueError) as ctx:
+            self.storage.create_message(
+                message_id="resp-thread-B",
+                thread_id="thread-B",
+                sender="browser:lead",
+                recipient="ide:agent",
+                message_type="review.response",
+                content="Attempted cross-thread reply",
+                reply_to="req-thread-A",
+                artifact_id="art-shared"
+            )
+        self.assertIn("Cross-thread reply rejected", str(ctx.exception))
 
 
 class TestEndToEndHub(unittest.TestCase):
@@ -157,14 +240,15 @@ class TestEndToEndHub(unittest.TestCase):
         sim_thread = threading.Thread(target=run_simulator)
         sim_thread.start()
 
-        # 3. IDE waits via SSE event notification (no polling)
-        event = ide.wait_for_response_event(thread_id, expected_request_id=req_id, timeout=3.0)
+        # 3. IDE waits via SSE event notification (strictly on RESPONSE_READY)
+        event = ide.wait_for_response_event(thread_id, expected_request_id=req_id, expected_artifact_id=art_id, timeout=4.0)
         sim_thread.join()
 
-        self.assertIn(event["event_type"], ("RESPONSE_CREATED", "RESPONSE_READY"))
+        self.assertEqual(event["event_type"], "RESPONSE_READY")
         self.assertEqual(event["_message"]["reply_to"], req_id)
         self.assertEqual(event["_message"]["artifact_id"], art_id)
         self.assertEqual(event["_message"]["metadata"]["decision"], "ACCEPTED")
+        self.assertIn("_event_delivery_latency_seconds", event)
 
         # 4. Check ordered event log
         events_url = f"http://127.0.0.1:{self.port}/api/threads/{thread_id}/events"
@@ -187,6 +271,56 @@ class TestEndToEndHub(unittest.TestCase):
             self.assertIn("REQUEST_CREATED", html)
             self.assertIn("RESPONSE_READY", html)
 
+    def test_sse_no_loss_handoff_under_race(self):
+        """
+        Deterministic regression test proving that events emitted exactly while
+        the SSE subscriber transitions from historical playback to live listener
+        are never missed or dropped.
+        """
+        thread_id = "thread-sse-race"
+        ide = IDEClient(hub_url=f"http://127.0.0.1:{self.port}")
+
+        # 1. Create initial historical event
+        ack1 = ide.submit_review_request(
+            thread_id=thread_id,
+            message_id="req-race-1",
+            artifact_id="art-race-1",
+            content="Historical request 1"
+        )
+        self.assertTrue(ack1["is_new"])
+
+        # 2. Connect to SSE stream
+        stream_url = f"http://127.0.0.1:{self.port}/api/threads/{thread_id}/events/stream"
+        req = urllib.request.Request(stream_url, headers={"Accept": "text/event-stream"})
+        response = urllib.request.urlopen(req, timeout=5.0)
+
+        # 3. Read first event (historical)
+        first_line = response.readline().decode("utf-8").strip()
+        while not first_line.startswith("data:"):
+            first_line = response.readline().decode("utf-8").strip()
+        first_ev = json.loads(first_line[5:].strip())
+        self.assertEqual(first_ev["event_type"], "REQUEST_CREATED")
+
+        # 4. Immediately emit a live event concurrently
+        self.server.storage.record_event(
+            thread_id=thread_id,
+            event_type="LIVE_EMITTED_EVENT",
+            payload={"marker": "no-loss-proof"}
+        )
+        # Broadcast to server listeners
+        ev_live = self.server.storage.get_events(thread_id)[-1]
+        self.server.broadcast_event(thread_id, ev_live)
+
+        # 5. Read stream to confirm live event is delivered with zero loss
+        second_line = response.readline().decode("utf-8").strip()
+        while not second_line.startswith("data:"):
+            second_line = response.readline().decode("utf-8").strip()
+        second_ev = json.loads(second_line[5:].strip())
+        self.assertEqual(second_ev["event_type"], "LIVE_EMITTED_EVENT")
+        self.assertEqual(second_ev["payload"]["marker"], "no-loss-proof")
+
+        response.close()
+
     def test_server_restart_persistence(self):
         thread_id = "thread-restart-001"
         ide = IDEClient(hub_url=f"http://127.0.0.1:{self.port}")
@@ -196,6 +330,13 @@ class TestEndToEndHub(unittest.TestCase):
             message_id="req-restart-1",
             artifact_id="art-restart-1",
             content="Restart test content"
+        )
+
+        # Record explicit event
+        self.server.storage.record_event(
+            thread_id=thread_id,
+            event_type="PRE_RESTART_EVENT",
+            payload={"durable": True}
         )
 
         # Stop server completely
@@ -208,13 +349,23 @@ class TestEndToEndHub(unittest.TestCase):
         time.sleep(0.1)
         self.__class__.server = new_server
 
-        # Verify thread and message survive
+        # 1. Verify messages survive restart
         msgs_url = f"http://127.0.0.1:{self.port}/api/threads/{thread_id}/messages"
         with urllib.request.urlopen(msgs_url) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             msgs = data["messages"]
             self.assertEqual(len(msgs), 1)
             self.assertEqual(msgs[0]["message_id"], "req-restart-1")
+
+        # 2. Verify events survive restart
+        evts_url = f"http://127.0.0.1:{self.port}/api/threads/{thread_id}/events"
+        with urllib.request.urlopen(evts_url) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            events = data["events"]
+            event_types = [e["event_type"] for e in events]
+            self.assertIn("REQUEST_CREATED", event_types)
+            self.assertIn("PRE_RESTART_EVENT", event_types)
+            self.assertEqual(len(events), 2)
 
 
 if __name__ == "__main__":

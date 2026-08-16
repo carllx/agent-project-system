@@ -182,21 +182,30 @@ class HubServer:
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
 
-                    # Send initial comment/history if query specifies after_id
                     qs = parse_qs(parsed.query)
                     after_id = int(qs.get("after_id", [0])[0])
-                    initial_events = hub.storage.get_events(thread_id, after_id=after_id)
-                    for ev in initial_events:
-                        self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode("utf-8"))
-                        self.wfile.flush()
 
+                    # ATOMIC HANDOFF: Register listener BEFORE reading historical events
+                    # to eliminate any race gap between history query and live listener registration.
                     q = hub.register_listener(thread_id)
+                    sent_event_ids = set()
+
                     try:
+                        # 1. Fetch & stream historical events
+                        initial_events = hub.storage.get_events(thread_id, after_id=after_id)
+                        for ev in initial_events:
+                            sent_event_ids.add(ev["event_id"])
+                            self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode("utf-8"))
+                            self.wfile.flush()
+
+                        # 2. Stream live events, deduplicating any event already sent during history replay
                         while True:
                             try:
                                 ev = q.get(timeout=2.0)
-                                self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode("utf-8"))
-                                self.wfile.flush()
+                                if ev.get("event_id") not in sent_event_ids:
+                                    sent_event_ids.add(ev.get("event_id"))
+                                    self.wfile.write(f"data: {json.dumps(ev)}\n\n".encode("utf-8"))
+                                    self.wfile.flush()
                             except queue.Empty:
                                 # Heartbeat ping
                                 self.wfile.write(b": ping\n\n")

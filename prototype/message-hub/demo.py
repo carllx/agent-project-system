@@ -42,21 +42,36 @@ def run_demo():
             thread_id=thread_id,
             message_id=req_id,
             artifact_id=art_id,
-            content="Please review the proposed architecture for APS Message Hub."
+            content="Please review the proposed architecture for APS Message Hub.",
+            metadata={"slice": "Phase-1"}
         )
         t_ack_elapsed = time.perf_counter() - t_submit_start
         print(f"    -> Server ACK received in {t_ack_elapsed*1000:.2f} ms (is_new={ack['is_new']}, status={ack['status']})")
 
-        print(f"\n[3] Testing Deduplication with duplicate request_id...")
+        print(f"\n[3] Testing Deduplication with exact identical request...")
         ack_dup = ide.submit_review_request(
             thread_id=thread_id,
             message_id=req_id,
             artifact_id=art_id,
-            content="Duplicate request"
+            content="Please review the proposed architecture for APS Message Hub.",
+            metadata={"slice": "Phase-1"}
         )
-        print(f"    -> Duplicate result: is_new={ack_dup['is_new']}, existing_id={ack_dup['message']['message_id']}")
+        print(f"    -> Identical duplicate result: is_new={ack_dup['is_new']}, existing_id={ack_dup['message']['message_id']}")
 
-        print(f"\n[4] Browser Simulator background loop processing...")
+        print(f"\n[4] Testing Conflicting Payload Rejection on same message_id...")
+        try:
+            ide.submit_review_request(
+                thread_id=thread_id,
+                message_id=req_id,
+                artifact_id=art_id,
+                content="Tampered content under existing message_id",
+                metadata={"slice": "Phase-1"}
+            )
+            print("    -> ERROR: Conflict was not rejected!")
+        except Exception as e:
+            print(f"    -> Conflicting payload successfully rejected closed: {e}")
+
+        print(f"\n[5] Browser Simulator background loop processing...")
         def sim_worker():
             time.sleep(0.1)
             sim_res = sim.process_pending_requests_once(
@@ -70,18 +85,19 @@ def run_demo():
         t_sim = threading.Thread(target=sim_worker)
         t_sim.start()
 
-        print(f"\n[5] IDE waiting for SSE event notification (no polling)...")
-        event = ide.wait_for_response_event(thread_id, expected_request_id=req_id, timeout=5.0)
+        print(f"\n[6] IDE waiting for SSE event notification (strictly on RESPONSE_READY)...")
+        event = ide.wait_for_response_event(thread_id, expected_request_id=req_id, expected_artifact_id=art_id, timeout=5.0)
         t_sim.join()
 
         print(f"    -> Event received via SSE: {event['event_type']}")
         print(f"    -> Response decision: {event['_message']['metadata']['decision']}")
         print(f"    -> Bound reply_to: {event['_message']['reply_to']}")
         print(f"    -> Bound artifact_id: {event['_message']['artifact_id']}")
-        print(f"    -> Total notification observation time: {event['_event_elapsed_seconds']*1000:.2f} ms")
+        print(f"    -> Event delivery latency (persisted -> IDE observed): {event.get('_event_delivery_latency_seconds', 0)*1000:.2f} ms")
+        print(f"    -> Total subscriber wait duration: {event.get('_subscriber_wait_seconds', 0)*1000:.2f} ms")
 
         # Check Timeline HTML
-        print(f"\n[6] Verifying Web Timeline HTML content...")
+        print(f"\n[7] Verifying Web Timeline HTML content...")
         html_url = f"http://127.0.0.1:{port}/threads/{thread_id}"
         with urllib.request.urlopen(html_url) as resp:
             html = resp.read().decode("utf-8")
@@ -92,7 +108,7 @@ def run_demo():
             print(f"    -> Contains RESPONSE_READY: {'RESPONSE_READY' in html}")
 
         # Restart server test
-        print(f"\n[7] Simulating Server Restart & Persistence Proof...")
+        print(f"\n[8] Simulating Server Restart & Persistence Proof...")
         server.stop()
         print("    -> Server stopped.")
 

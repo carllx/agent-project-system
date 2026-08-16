@@ -63,19 +63,20 @@ class IDEClient:
         self,
         thread_id: str,
         expected_request_id: str,
+        expected_artifact_id: Optional[str] = None,
         timeout: float = 10.0
     ) -> Dict[str, Any]:
         """
-        Subscribes to SSE stream until RESPONSE_CREATED / RESPONSE_READY event arrives
-        binding to the expected request / artifact.
+        Subscribes to SSE stream until RESPONSE_READY event arrives
+        binding to the expected request and artifact.
+        Drives continuation strictly on RESPONSE_READY.
         No busy polling / while sleep polling is used.
         """
         url = f"{self.hub_url}/api/threads/{thread_id}/events/stream"
         req = urllib.request.Request(url, headers={"Accept": "text/event-stream"})
         t0 = time.perf_counter()
-        
+
         with urllib.request.urlopen(req, timeout=timeout) as response:
-            buffer = ""
             while time.perf_counter() - t0 < timeout:
                 line = response.readline().decode("utf-8")
                 if not line:
@@ -84,16 +85,27 @@ class IDEClient:
                 if line.startswith("data:"):
                     raw_json = line[5:].strip()
                     event = json.loads(raw_json)
-                    if event.get("event_type") in ("RESPONSE_CREATED", "RESPONSE_READY"):
-                        # Check if message binds to expected_request_id
-                        msg_id = event.get("message_id")
-                        # Fetch message details or check payload
+                    # Block 4: Drive continuation ONLY from RESPONSE_READY for the expected request
+                    if event.get("event_type") == "RESPONSE_READY":
+                        event_payload = event.get("payload", {})
+                        req_in_event = event_payload.get("request_id")
+                        resp_msg_id = event.get("message_id") or event_payload.get("response_id")
+
+                        # Verify exact message lookup & strict binding
                         msgs_url = f"{self.hub_url}/api/threads/{thread_id}/messages"
                         with urllib.request.urlopen(msgs_url, timeout=2.0) as m_resp:
                             m_data = json.loads(m_resp.read().decode("utf-8"))
                             for m in m_data.get("messages", []):
-                                if m.get("message_id") == msg_id and m.get("reply_to") == expected_request_id:
+                                if (
+                                    m.get("message_id") == resp_msg_id and
+                                    m.get("reply_to") == expected_request_id and
+                                    (expected_artifact_id is None or m.get("artifact_id") == expected_artifact_id)
+                                ):
                                     event["_message"] = m
-                                    event["_event_elapsed_seconds"] = time.perf_counter() - t0
+                                    # Block 5: measure event emission -> observation time
+                                    event_created_at = event.get("created_at")
+                                    if event_created_at:
+                                        event["_event_delivery_latency_seconds"] = max(0.0, time.time() - event_created_at)
+                                    event["_subscriber_wait_seconds"] = time.perf_counter() - t0
                                     return event
-        raise TimeoutError(f"Timed out waiting for response event for request {expected_request_id}")
+        raise TimeoutError(f"Timed out waiting for RESPONSE_READY event for request {expected_request_id}")

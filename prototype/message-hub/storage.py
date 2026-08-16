@@ -125,18 +125,41 @@ class Storage:
                 metadata_json = json.dumps(metadata or {})
 
                 if existing:
-                    # Check idempotency
+                    # Check strict idempotency across authoritative fields
+                    existing_meta = json.loads(existing["metadata"]) if existing["metadata"] else {}
+                    input_meta = metadata or {}
+
+                    matches = (
+                        existing["thread_id"] == thread_id and
+                        existing["sender"] == sender and
+                        existing["recipient"] == recipient and
+                        existing["message_type"] == message_type and
+                        (existing["reply_to"] or None) == (reply_to or None) and
+                        (existing["artifact_id"] or None) == (artifact_id or None) and
+                        existing["content"] == content and
+                        existing_meta == input_meta
+                    )
+                    if not matches:
+                        raise ValueError(
+                            f"Conflict: message_id '{message_id}' already exists with conflicting authoritative payload"
+                        )
+
                     msg = dict(existing)
-                    msg["metadata"] = json.loads(msg["metadata"])
+                    msg["metadata"] = existing_meta
                     return msg, False, None
 
                 # Validate reply_to if specified
                 if reply_to:
                     parent = conn.execute(
-                        "SELECT message_id, artifact_id FROM messages WHERE message_id = ?", (reply_to,)
+                        "SELECT message_id, thread_id, artifact_id FROM messages WHERE message_id = ?", (reply_to,)
                     ).fetchone()
                     if not parent:
                         raise ValueError(f"Parent message '{reply_to}' not found")
+                    # Enforce same-thread reply binding
+                    if parent["thread_id"] != thread_id:
+                        raise ValueError(
+                            f"Cross-thread reply rejected: parent '{reply_to}' is in thread '{parent['thread_id']}', but reply is in thread '{thread_id}'"
+                        )
                     # If child specifies artifact_id, must match or inherit from parent
                     if artifact_id and parent["artifact_id"] and artifact_id != parent["artifact_id"]:
                         raise ValueError(
