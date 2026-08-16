@@ -103,26 +103,33 @@ class ReviewReceipt:
         )
 
 
+def get_canonical_receipt_dir() -> Path:
+    """Return the absolute per-user canonical directory for storing review receipts."""
+    return Path.home() / ".agent-project-system" / "browser-review-receipts"
+
+
 def _receipt_path(receipt_dir: Path, request_id: str) -> Path:
     normalized = request_id.strip()
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", normalized)
     return receipt_dir / f"{safe_name}.receipt.json"
 
 
-def load_receipt(receipt_dir: Path, request_id: str) -> ReviewReceipt | None:
+def load_receipt(receipt_dir: Path | None, request_id: str) -> ReviewReceipt | None:
     if not isinstance(request_id, str):
         return None
-    path = _receipt_path(receipt_dir, request_id)
+    store_dir = receipt_dir if receipt_dir is not None else get_canonical_receipt_dir()
+    path = _receipt_path(store_dir, request_id)
     if not path.exists():
         return None
     with path.open("r", encoding="utf-8") as stream:
         return ReviewReceipt.from_dict(json.load(stream))
 
 
-def save_receipt_atomic(receipt_dir: Path, receipt: ReviewReceipt) -> None:
-    receipt_dir.mkdir(parents=True, exist_ok=True)
-    target = _receipt_path(receipt_dir, receipt.request_id)
-    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(receipt_dir))
+def save_receipt_atomic(receipt_dir: Path | None, receipt: ReviewReceipt) -> None:
+    store_dir = receipt_dir if receipt_dir is not None else get_canonical_receipt_dir()
+    store_dir.mkdir(parents=True, exist_ok=True)
+    target = _receipt_path(store_dir, receipt.request_id)
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(store_dir))
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             json.dump(receipt.to_dict(), stream, ensure_ascii=False, indent=2)
@@ -339,7 +346,7 @@ def dispatch_review(
     request_id: str,
     artifact_id: str,
     review_prompt: str,
-    receipt_dir: Path,
+    receipt_dir: Path | None = None,
     conversation_id: str,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     opencli_runner: Callable[[list[str], int], tuple[int, str, str]] | None = None,
@@ -462,7 +469,7 @@ def reconcile_review(
     *,
     request_id: str,
     artifact_id: str,
-    receipt_dir: Path,
+    receipt_dir: Path | None = None,
     conversation_id: str | None = None,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     opencli_runner: Callable[[list[str], int], tuple[int, str, str]] | None = None,

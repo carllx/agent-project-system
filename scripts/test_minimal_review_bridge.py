@@ -504,5 +504,103 @@ class TestFastReturnSubmitSemantics(unittest.TestCase):
         self.assertEqual(receipt.send_state, STATE_SEND_ATTEMPTED)
 
 
+class TestCanonicalReceiptStoreAndCLI(unittest.TestCase):
+    def test_production_cli_has_no_receipt_dir_option(self) -> None:
+        import opencli_transport
+        p = opencli_transport.parser()
+        with self.assertRaises(SystemExit):
+            p.parse_args(["review", "--request-id", "REQ-1", "--artifact-id", "ART-1", "--conversation", "CONV-1", "--receipt-dir", "custom/dir"])
+
+    def test_canonical_production_receipt_directory_is_absolute_and_per_user(self) -> None:
+        from minimal_bridge import get_canonical_receipt_dir
+        canon_dir = get_canonical_receipt_dir()
+        self.assertTrue(canon_dir.is_absolute())
+        self.assertIn(".agent-project-system", str(canon_dir))
+        self.assertEqual(canon_dir, Path.home() / ".agent-project-system" / "browser-review-receipts")
+
+    def test_canonical_receipt_directory_is_invariant_across_cwd_changes(self) -> None:
+        from minimal_bridge import get_canonical_receipt_dir
+        orig_cwd = Path.cwd()
+        canon_before = get_canonical_receipt_dir()
+        with tempfile.TemporaryDirectory() as tmp_d:
+            os.chdir(tmp_d)
+            try:
+                canon_after = get_canonical_receipt_dir()
+                self.assertEqual(canon_before, canon_after)
+            finally:
+                os.chdir(orig_cwd)
+
+    def test_same_request_id_cannot_obtain_second_namespace_by_changing_cwd(self) -> None:
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory(prefix="aps-canonical-test-") as tmp_home:
+            mock_home = Path(tmp_home)
+            with patch("pathlib.Path.home", return_value=mock_home):
+                calls: list[list[str]] = []
+                def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+                    calls.append(args)
+                    return 0, json.dumps([{"conversationId": "conv-target", "response": ""}]), ""
+
+                orig_cwd = Path.cwd()
+                # Run in orig_cwd
+                res1 = dispatch_review(
+                    request_id="REQ-CANON-001",
+                    artifact_id="art-canon-001",
+                    review_prompt="Prompt",
+                    conversation_id="conv-target",
+                    opencli_runner=runner,
+                )
+                self.assertEqual(res1["status"], "RESPONSE_PENDING")
+                self.assertEqual(len(calls), 1)
+
+                # Change CWD and dispatch same request_id
+                with tempfile.TemporaryDirectory() as other_dir:
+                    os.chdir(other_dir)
+                    try:
+                        res2 = dispatch_review(
+                            request_id="REQ-CANON-001",
+                            artifact_id="art-canon-001",
+                            review_prompt="Prompt",
+                            conversation_id="conv-target",
+                            opencli_runner=runner,
+                        )
+                        # Reconcile called instead of second write
+                        self.assertEqual(len(calls), 2)
+                        self.assertEqual(calls[1][1], "detail")
+                    finally:
+                        os.chdir(orig_cwd)
+
+    def test_reconcile_identity_rejection_returns_structured_cli_failure(self) -> None:
+        from unittest.mock import patch
+        import io
+        import opencli_transport
+        with tempfile.TemporaryDirectory(prefix="aps-cli-rec-") as tmp_home:
+            mock_home = Path(tmp_home)
+            with patch("pathlib.Path.home", return_value=mock_home):
+                # Seed receipt in mock home
+                receipt = ReviewReceipt(
+                    request_id="REQ-CLI-001",
+                    request_hash="hash-1",
+                    artifact_id="art-cli-001",
+                    conversation_id="conv-seed-111",
+                    send_state=STATE_SEND_ATTEMPTED,
+                    created_at="2026-08-16T12:00:00Z",
+                )
+                save_receipt_atomic(None, receipt)
+
+                stderr_buf = io.StringIO()
+                with patch("sys.stderr", stderr_buf):
+                    exit_code = opencli_transport.main([
+                        "review",
+                        "--request-id", "REQ-CLI-001",
+                        "--artifact-id", "art-cli-001",
+                        "--conversation", "wrong-conv-222",
+                        "--reconcile",
+                    ])
+                self.assertEqual(exit_code, 1)
+                err_json = json.loads(stderr_buf.getvalue())
+                self.assertIn("error", err_json)
+                self.assertIn("Reconcile conversation_id mismatch", err_json["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

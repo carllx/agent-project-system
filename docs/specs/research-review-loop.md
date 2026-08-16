@@ -111,5 +111,6 @@ python skills/research-review-lead/scripts/opencli_transport.py review \
 - **Normalized Identity & At-Most-Once Write:** Request IDs are normalized at boundaries. Once a request reaches `SEND_ATTEMPTED`, subsequent dispatch calls automatically fall back to read-only reconciliation and never re-send.
 - **Strict Response Grammar:** The bridge accepts exactly one JSON object matching `DECISION_CHOICES = {"APPROVE", "REVISE", "BLOCKED"}` with non-empty `feedback` and `list[str]` `next_steps`. Responses containing multiple JSON blocks or extraneous JSON outside the fence are rejected.
 - **Exact Returned Identity:** Browser-returned `request_id` and `artifact_id` must match expected values with zero leading or trailing whitespace.
+- **Canonical Receipt Storage:** Production receipt identity is stored in one canonical per-user receipt store (`~/.agent-project-system/browser-review-receipts`) and cannot be overridden by the caller.
 - **Zero Polling Loops:** Neither dispatch nor reconcile contain internal sleep or polling loops.
 - **Bounded Command Execution:** All OpenCLI subprocess invocations enforce a strict 30-second bounded timeout.

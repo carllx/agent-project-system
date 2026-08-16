@@ -29,21 +29,22 @@ def review_bootstrap_command(args: argparse.Namespace) -> int:
 
 def review_command(args: argparse.Namespace) -> int:
     """Minimal Browser Review Bridge dispatch and reconcile."""
-    receipt_dir = Path(args.receipt_dir) if args.receipt_dir else Path(".runtime/review_receipts")
-
     if getattr(args, "reconcile", False):
         if not args.conversation:
             print(json.dumps({"error": "--conversation is required for --reconcile"}, ensure_ascii=False, indent=2), file=sys.stderr)
             return 1
-        res = reconcile_review(
-            request_id=args.request_id,
-            artifact_id=args.artifact_id,
-            receipt_dir=receipt_dir,
-            conversation_id=args.conversation,
-            timeout_seconds=args.timeout,
-        )
-        print(json.dumps(res, ensure_ascii=False, indent=2))
-        return 0 if res.get("status") in {"RESPONSE_READY", "RESPONSE_PENDING"} else 1
+        try:
+            res = reconcile_review(
+                request_id=args.request_id,
+                artifact_id=args.artifact_id,
+                conversation_id=args.conversation,
+                timeout_seconds=args.timeout,
+            )
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+            return 0 if res.get("status") in {"RESPONSE_READY", "RESPONSE_PENDING"} else 1
+        except (RuntimeError, ValueError, TimeoutError) as exc:
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+            return 1
 
     if not getattr(args, "conversation", None):
         print(json.dumps({"error": "--conversation is required for formal review. Use review-bootstrap to create one first."}, ensure_ascii=False, indent=2), file=sys.stderr)
@@ -64,7 +65,6 @@ def review_command(args: argparse.Namespace) -> int:
             request_id=args.request_id,
             artifact_id=args.artifact_id,
             review_prompt=prompt_text,
-            receipt_dir=receipt_dir,
             conversation_id=args.conversation,
             timeout_seconds=args.timeout,
         )
@@ -89,7 +89,6 @@ def parser() -> argparse.ArgumentParser:
     rev.add_argument("--prompt", help="Review task instructions")
     rev.add_argument("--prompt-file", help="File containing review task instructions")
     rev.add_argument("--conversation", required=True, help="Target established conversation ID")
-    rev.add_argument("--receipt-dir", help="Directory to store durable review receipts")
     rev.add_argument("--timeout", type=int, default=30)
     rev.add_argument("--reconcile", action="store_true", help="Perform read-only reconciliation")
     rev.set_defaults(handler=review_command)

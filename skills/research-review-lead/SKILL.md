@@ -105,4 +105,5 @@ If still in progress, returns `status: "RESPONSE_PENDING"` and yields control im
 - **Normalized Identity:** `request_id`, `artifact_id`, and `conversation_id` are normalized at the boundary. Whitespace differences cannot bypass receipt deduplication.
 - **At-Most-Once External Write:** `SEND_ATTEMPTED` is recorded atomically before external write. Re-invoking dispatch on the same `request_id` performs read-only reconciliation and never re-sends.
 - **Strict Response Parsing:** The bridge requires exactly one JSON response matching `DECISION_CHOICES = {"APPROVE", "REVISE", "BLOCKED"}` and validates `next_steps` as a list of strings.
+- **Canonical Receipt Storage:** Production receipt identity is stored in one canonical per-user receipt store and cannot be overridden by the caller.
 - **No Busy Polling Loops:** The bridge returns immediately on submit and reconcile without internal sleep or polling loops. Control is handed back to the IDE `/goal` loop.
