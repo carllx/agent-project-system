@@ -73,9 +73,9 @@ For each review step, the bridge:
    ```
 3. Computes the SHA256 `request_hash` of the rendered canonical text.
 4. Persists an atomic receipt in `PREPARED` state, updated to `SEND_ATTEMPTED` immediately before the external write.
-5. Invokes OpenCLI with native `--wait false`:
+5. Invokes OpenCLI with native submit-only `chatgpt send`:
    ```bash
-   opencli chatgpt ask --conversation <conversation_id> --wait false -f json "<CANONICAL_MESSAGE>"
+   opencli chatgpt send "<CANONICAL_MESSAGE>" --conversation <conversation_id> -f json
    ```
 6. Returns `status: "RESPONSE_PENDING"` immediately without blocking on assistant reasoning generation.
 

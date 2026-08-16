@@ -42,7 +42,7 @@ Agent Project System
 
 ## 当前阶段
 
-当前源包 VERSION `0.4.21`。已完成 Minimal Browser Review Bridge 架构精简，将外部执行与重试循环完全交由 Antigravity `/goal` 管理，本仓库仅维护轻量、确定、原子且支持 `--wait false` 快速返回与只读 Reconcile 的 Browser Review Bridge。冗余的二次 Review Loop、Completion Gate 以及巨型测试套件已移除。
+当前源包 VERSION `0.4.21`。已完成 Minimal Browser Review Bridge 架构精简，将外部执行与重试循环完全交由 Antigravity `/goal` 管理，本仓库仅维护轻量、确定、原子且支持 native `chatgpt send` 快速提交与只读 Reconcile 的 Browser Review Bridge。冗余的二次 Review Loop、Completion Gate 以及巨型测试套件已移除。
 
 ## 阅读入口
 

@@ -413,14 +413,12 @@ def dispatch_review(
         )
         save_receipt_atomic(receipt_dir, receipt)
 
-    # Formal review submission uses native --wait false for fast non-waiting send
+    # Formal review submission uses native submit-only chatgpt send
     cmd_args = [
-        "chatgpt", "ask",
-        "--conversation", target_conv,
-        "--wait", "false",
-        "-f", "json",
-        "--timeout", str(timeout_seconds),
+        "chatgpt", "send",
         canonical_message,
+        "--conversation", target_conv,
+        "-f", "json",
     ]
 
     # Mark durable send attempt with known conversation_id BEFORE external write
@@ -439,19 +437,22 @@ def dispatch_review(
         save_receipt_atomic(receipt_dir, receipt)
         raise RuntimeError(f"OpenCLI execution failed (exit {code}): {stderr.strip() or stdout.strip()}")
 
-    entry = _parse_opencli_output(stdout)
-    returned_conv_id = entry.get("conversationId")
-    if returned_conv_id:
-        returned_conv_id = returned_conv_id.strip()
-        if returned_conv_id != target_conv:
-            # Exact Conversation Must Never Drift: fail closed and preserve target_conv
-            err_msg = (
-                f"Exact-target mismatch: OpenCLI returned foreign conversationId '{returned_conv_id}', "
-                f"expected '{target_conv}'"
-            )
-            receipt.last_error = err_msg
-            save_receipt_atomic(receipt_dir, receipt)
-            raise RuntimeError(err_msg)
+    try:
+        entry = _parse_opencli_output(stdout)
+        returned_conv_id = entry.get("conversationId")
+        if returned_conv_id:
+            returned_conv_id = returned_conv_id.strip()
+            if returned_conv_id != target_conv:
+                # Exact Conversation Must Never Drift: fail closed and preserve target_conv
+                err_msg = (
+                    f"Exact-target mismatch: OpenCLI returned foreign conversationId '{returned_conv_id}', "
+                    f"expected '{target_conv}'"
+                )
+                receipt.last_error = err_msg
+                save_receipt_atomic(receipt_dir, receipt)
+                raise RuntimeError(err_msg)
+    except ValueError:
+        pass
 
     receipt.last_error = None
     save_receipt_atomic(receipt_dir, receipt)

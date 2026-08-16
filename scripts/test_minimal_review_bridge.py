@@ -87,10 +87,10 @@ class TestCanonicalEnvelopeAndHashing(unittest.TestCase):
         dispatched_prompts: list[str] = []
 
         def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            dispatched_prompts.append(args[-1])
+            dispatched_prompts.append(args[2])
             stdout = json.dumps([{
-                "conversationId": "conv-test",
-                "response": "",
+                "Status": "Success",
+                "InjectedText": args[2],
             }])
             return 0, stdout, ""
 
@@ -469,14 +469,14 @@ class TestFastReturnSubmitSemantics(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_formal_submit_uses_native_wait_false(self) -> None:
+    def test_formal_submit_uses_native_chatgpt_send(self) -> None:
         dispatched_cmd: list[str] = []
 
         def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
             dispatched_cmd.extend(args)
             stdout = json.dumps([{
-                "conversationId": "conv-target-001",
-                "response": "",
+                "Status": "Success",
+                "InjectedText": "Prompt instructions",
             }])
             return 0, stdout, ""
 
@@ -493,10 +493,16 @@ class TestFastReturnSubmitSemantics(unittest.TestCase):
         self.assertEqual(res["request_id"], "REQ-SUBMIT-001")
         self.assertTrue(res["write_attempted"])
 
-        # Check command args include --wait false
-        self.assertIn("--wait", dispatched_cmd)
-        wait_idx = dispatched_cmd.index("--wait")
-        self.assertEqual(dispatched_cmd[wait_idx + 1], "false")
+        # Check command args use native chatgpt send
+        self.assertEqual(dispatched_cmd[0], "chatgpt")
+        self.assertEqual(dispatched_cmd[1], "send")
+        self.assertNotIn("ask", dispatched_cmd)
+        self.assertNotIn("--wait", dispatched_cmd)
+
+        # Check exact conversation is passed
+        self.assertIn("--conversation", dispatched_cmd)
+        conv_idx = dispatched_cmd.index("--conversation")
+        self.assertEqual(dispatched_cmd[conv_idx + 1], "conv-target-001")
 
         # Check receipt was updated to SEND_ATTEMPTED
         receipt = load_receipt(self.temp_dir, "REQ-SUBMIT-001")

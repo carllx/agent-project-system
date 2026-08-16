@@ -48,7 +48,7 @@ Returns JSON:
 
 ### 2. Fast Submit Review Request
 
-Render canonical envelope, bind `request_id` and `artifact_id`, persist `SEND_ATTEMPTED` receipt, and submit via native `--wait false`:
+Render canonical envelope, bind `request_id` and `artifact_id`, persist `SEND_ATTEMPTED` receipt, and submit via native OpenCLI `chatgpt send`:
 
 ```powershell
 python skills/research-review-lead/scripts/opencli_transport.py review `
