@@ -381,30 +381,42 @@ class OpenCLIBrowserConnector:
             raise RuntimeError(f"OpenCLI read failed (code {returncode}): {stderr or stdout}")
 
         # Extract text and provenance from OpenCLI output
-        raw_text = ""
-        provenance_conv_id = ""
         try:
             parsed_out = json.loads(stdout.strip())
-            if isinstance(parsed_out, list) and len(parsed_out) > 0:
-                # OpenCLI detail returns list of messages or entries
-                # Find last assistant text
-                for entry in reversed(parsed_out):
-                    if isinstance(entry, dict):
-                        role = entry.get("Role") or entry.get("role") or ""
-                        if role.lower() in ("assistant", "chatgpt") or not role:
-                            raw_text = entry.get("Text") or entry.get("text") or entry.get("response") or ""
-                            if raw_text:
-                                break
-                provenance_conv_id = bound_conv_id
-            elif isinstance(parsed_out, dict):
-                raw_text = parsed_out.get("response") or parsed_out.get("Text") or parsed_out.get("text") or stdout
-                provenance_conv_id = parsed_out.get("conversationId") or bound_conv_id
-            else:
-                raw_text = stdout
-                provenance_conv_id = bound_conv_id
-        except Exception:
-            raw_text = stdout
-            provenance_conv_id = bound_conv_id
+        except Exception as exc:
+            raise ValueError(f"Malformed OpenCLI detail JSON response: {exc}") from exc
+
+        raw_text = ""
+        provenance_conv_id: Optional[str] = None
+
+        if isinstance(parsed_out, list):
+            # OpenCLI detail returns list of messages or entries
+            # If the list entries contain explicit conversation ID, extract it
+            for entry in reversed(parsed_out):
+                if isinstance(entry, dict):
+                    if not provenance_conv_id:
+                        provenance_conv_id = entry.get("conversationId") or entry.get("conversation_id")
+                    role = entry.get("Role") or entry.get("role") or ""
+                    if role.lower() in ("assistant", "chatgpt") or not role:
+                        candidate_text = entry.get("Text") or entry.get("text") or entry.get("response") or ""
+                        if candidate_text:
+                            raw_text = candidate_text
+                            break
+        elif isinstance(parsed_out, dict):
+            provenance_conv_id = parsed_out.get("conversationId") or parsed_out.get("conversation_id")
+            raw_text = parsed_out.get("response") or parsed_out.get("Text") or parsed_out.get("text") or ""
+        else:
+            raise ValueError(f"Unexpected OpenCLI detail JSON structure (type {type(parsed_out).__name__})")
+
+        if not raw_text:
+            raise ValueError("No assistant response text found in OpenCLI detail output")
+
+        # Provenance Equality Verification:
+        # If the structured response exposes an explicit conversation ID, it MUST match bound_conv_id exactly.
+        if provenance_conv_id and provenance_conv_id != bound_conv_id:
+            raise ValueError(
+                f"Conversation provenance mismatch: expected bound '{bound_conv_id}', but OpenCLI output reported '{provenance_conv_id}'"
+            )
 
         # 4. Strictly parse verdict from trusted browser text
         parsed_verdict = parse_strict_browser_response(

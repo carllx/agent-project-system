@@ -719,6 +719,63 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             conn_bad_dec.reconcile_browser_response(thread_id, req_id_bad_dec)
         self.assertIn("Invalid decision 'INVALID_VERDICT'", str(ctx.exception))
 
+        # H. Explicit conversation provenance mismatch -> rejected, zero response/event created
+        req_id_wrong_conv = "req-wrong-conv"
+        self.storage.create_message(
+            message_id=req_id_wrong_conv,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_wrong_conv(cmd, timeout):
+            good_verdict = f'```json\n{{"request_id": "{req_id_wrong_conv}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok", "next_steps": []}}\n```'
+            # Returns explicit conflicting conversationId
+            out = json.dumps([{"Role": "assistant", "Text": good_verdict, "conversationId": "conv-EXPLICITLY-WRONG"}])
+            return 0, out, ""
+        conn_wrong_conv = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_wrong_conv)
+        with self.assertRaises(ValueError) as ctx:
+            conn_wrong_conv.reconcile_browser_response(thread_id, req_id_wrong_conv)
+        self.assertIn("Conversation provenance mismatch", str(ctx.exception))
+
+        # Verify zero review.response message and zero RESPONSE_READY event created
+        events_wrong_conv = self.storage.get_events(thread_id)
+        ready_events_wrong = [e for e in events_wrong_conv if e.get("event_type") == "RESPONSE_READY" and e.get("message_id") == f"resp-{req_id_wrong_conv}"]
+        self.assertEqual(len(ready_events_wrong), 0)
+        msgs_wrong = [m for m in self.storage.get_messages(thread_id) if m.get("message_id") == f"resp-{req_id_wrong_conv}"]
+        self.assertEqual(len(msgs_wrong), 0)
+
+        # I. Malformed OpenCLI detail JSON envelope -> rejected, zero response/event created
+        req_id_malformed = "req-malformed"
+        self.storage.create_message(
+            message_id=req_id_malformed,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_malformed(cmd, timeout):
+            # Output is unparseable text containing a valid-looking APPROVE JSON inside
+            malformed_out = f'Error output or corrupted stream with ```json\n{{"request_id": "{req_id_malformed}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```'
+            return 0, malformed_out, ""
+        conn_malformed = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_malformed)
+        with self.assertRaises(ValueError) as ctx:
+            conn_malformed.reconcile_browser_response(thread_id, req_id_malformed)
+        self.assertIn("Malformed OpenCLI detail JSON response", str(ctx.exception))
+
+        # Verify zero review.response message and zero RESPONSE_READY event created
+        events_malformed = self.storage.get_events(thread_id)
+        ready_events_malformed = [e for e in events_malformed if e.get("event_type") == "RESPONSE_READY" and e.get("message_id") == f"resp-{req_id_malformed}"]
+        self.assertEqual(len(ready_events_malformed), 0)
+        msgs_malformed = [m for m in self.storage.get_messages(thread_id) if m.get("message_id") == f"resp-{req_id_malformed}"]
+        self.assertEqual(len(msgs_malformed), 0)
+
     def test_independent_sse_connector_continuation(self):
         """
         Prove that an independent SSE-driven connector runner processes requests asynchronously
