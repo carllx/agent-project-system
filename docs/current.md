@@ -19,7 +19,7 @@
 - **REAL_BROWSER_PUSH_INGRESS:** `NOT_AVAILABLE / NOT_PROVEN`
 - **Main baseline:** `7a7536701bab5855713f00dfc85a6d90e648a229`（`docs: close Antigravity completion gate work item`）。
 - **Phase baseline:** `d7651f95059694047d2a7e280afe761264a54058`（PR #3 Minimal Bridge baseline）。
-- **Work Item initialization commit:** `d7651f95059694047d2a7e280afe761264a54058`
+- **Work Item initialization authority:** `https://github.com/carllx/agent-project-system/issues/9`
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Source Skill VERSION:** `0.4.21`。
 - **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.21`，九个声明文件 SHA-256 parity `PASS`。
@@ -30,19 +30,19 @@
 
 ## 系统目标
 
-Agent Project System 不是单独的 RR Lead Skill，也不是 OpenCLI Transport，而是一套与具体 IDE 和 Transport 解耦的 Agent Collaboration Framework：
+Agent Project System 建立了一套与具体 IDE 和 Transport 解耦的 Agent Collaboration Framework（ADR-0003）：
 
 ```text
 Agent Project System
-→ Agent Collaboration Framework
+→ Agent Collaboration Framework (ADR-0003)
 → Browser Lead / IDE Agent Collaboration Protocol
-→ Message Hub Control Plane
-→ Transport / Browser Adapters (OpenCLI)
+→ Runtime / Orchestration (Message Hub 作为候选通信/事件控制面)
+→ Transport / IDE Adapters (OpenCLI 作为 Browser Adapter)
 ```
 
 - **Browser Lead：** 负责规划、架构、Review 与被授权范围内的技术判断；审查 Lab Evidence 后只把清理过的事实和 Work Order 交给 Product。
 - **Product Agent：** 负责 Product Problem、Contract、Acceptance Criteria、implementation 与 tests；可以运行在 Antigravity、Codex 或 future IDE，只读取同一 Project Contract。
-- **Message Hub Control Plane：** 负责持久化消息/事件状态、提交确认、分发与对账，作为通用协作中枢。
+- **Message Hub (候选)：** 作为 Runtime / Orchestration 通信与事件控制面候选实现，负责持久化消息/事件状态、提交确认、分发与对账。
 - **用户：** 保留目标、范围、权限、风险、成本和重要产品方向的最终决定权。
 - **参考 IDE 顺序：** Antigravity 为第一参考 IDE；Codex 后续用于跨 IDE 通用性验证。
 - **OpenCLI：** 只是 Transport Adapter，不等于整个系统。

@@ -33,8 +33,8 @@ Production modules will reside under the accepted **Runtime / Orchestration** la
 ```text
 runtime/message_hub/
 ├── __init__.py
-├── storage.py              # SQLite Relational Durability & Atomic Claims
-├── server.py               # HTTP Gateway & Global/Connector SSE Feed
+├── storage.py              # SQLite Relational Durability, Atomic Claims, Cursor Persistence
+├── server.py               # HTTP Gateway & Filtered Connector SSE Feeds
 ├── client.py               # Lightweight IDE Client SDK
 └── connectors/
     ├── __init__.py
@@ -45,31 +45,32 @@ runtime/message_hub/
 
 1. **`runtime/message_hub/storage.py` (Durable Relational Store)**
    - Manages SQLite schema lifecycle, transactional isolation, and ACID durability.
-   - Enforces same-thread reply hierarchy and first-class conversation identity.
-   - Implements atomic send claims and transactionally verified response creation.
+   - Enforces first-class `conversation_id` and first-class `connector_id` columns on messages.
+   - Implements atomic send claims (`send_claims`), durable connector cursors (`connector_cursors`), and transactionally verified response creation.
 
 2. **`runtime/message_hub/server.py` (HTTP & SSE Gateway)**
    - Exposes fast durable message submit endpoint returning immediate ACK.
-   - Exposes global and connector-filtered SSE feeds with durable cursor (`after_id`) support.
+   - Exposes connector-targeted SSE feeds (`/api/connectors/<connector_id>/events/stream?after_id=N`) filtered by matching `connector_id`.
    - Serves secure, HTML-escaped local audit/timeline view.
 
 3. **`runtime/message_hub/client.py` (IDE Client SDK)**
    - Python interface for IDE agents to submit review requests, receive instant durable ACKs, and await `RESPONSE_READY` without blocking execution.
 
 4. **`runtime/message_hub/connectors/opencli.py` (Browser Adapter Connector)**
-   - Long-lived background consumer processing `REQUEST_CREATED` events across threads.
-   - Validates durable conversation binding from request before external action.
+   - Long-lived background consumer processing `REQUEST_CREATED` events matching its `connector_id`.
+   - Reads target `conversation_id` directly from authoritative request row.
+   - Manages durable cursor advancement in `connector_cursors` strictly after durable handling.
    - Executes atomic SQLite send claim before calling `opencli chatgpt send`.
    - Maps timeouts to `EXTERNAL_SEND_UNKNOWN` with strict zero-resend invariant.
-   - Reconciles browser responses via trusted read-only `opencli chatgpt detail` and strictly parses verdicts.
+   - Reconciles browser responses via trusted read-only `opencli chatgpt detail` with exact provenance equality verification.
 
 ---
 
-## 3. Authoritative Data Model & First-Class Identity
+## 3. Authoritative Data Model & First-Class Identities
 
 ### First-Class Schema (SQLite)
 
-**Explicit Exclusion:** `Task` is **NOT** part of the initial production data model. It is omitted until a concrete multi-agent requirement emerges.
+**Explicit Invariant:** `Task` is **NOT** part of the initial production data model. It is omitted until a concrete multi-agent requirement emerges.
 
 ```sql
 CREATE TABLE IF NOT EXISTS threads (
@@ -82,14 +83,15 @@ CREATE TABLE IF NOT EXISTS threads (
 CREATE TABLE IF NOT EXISTS messages (
     message_id TEXT PRIMARY KEY,
     thread_id TEXT NOT NULL,
-    conversation_id TEXT NOT NULL,       -- FIRST-CLASS AUTHORITATIVE BINDING
+    conversation_id TEXT NOT NULL,       -- FIRST-CLASS: Exact Browser Conversation UUID
+    connector_id TEXT NOT NULL,          -- FIRST-CLASS: Target Transport/Browser Adapter ID
     sender TEXT NOT NULL,
     recipient TEXT NOT NULL,
     message_type TEXT NOT NULL,
     reply_to TEXT,
     artifact_id TEXT,
     content TEXT NOT NULL,
-    metadata TEXT NOT NULL DEFAULT '{}', -- Non-authoritative extensible metadata
+    metadata TEXT NOT NULL DEFAULT '{}', -- Non-authoritative extensible metadata only
     status TEXT NOT NULL,
     created_at REAL NOT NULL,
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
@@ -99,8 +101,9 @@ CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread_id TEXT NOT NULL,
     message_id TEXT,
+    connector_id TEXT,                  -- Target connector ID for stream filtering
     event_type TEXT NOT NULL,
-    payload TEXT NOT NULL,               -- JSON payload containing event context
+    payload TEXT NOT NULL,              -- JSON payload containing event context
     created_at REAL NOT NULL,
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
 );
@@ -113,41 +116,60 @@ CREATE TABLE IF NOT EXISTS send_claims (
     FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
 );
 
+CREATE TABLE IF NOT EXISTS connector_cursors (
+    connector_id TEXT PRIMARY KEY,
+    last_processed_event_id INTEGER NOT NULL,
+    updated_at REAL NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
 CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
-CREATE INDEX IF NOT EXISTS idx_events_thread ON events(thread_id);
+CREATE INDEX IF NOT EXISTS idx_events_connector ON events(connector_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events(event_id);
 ```
 
+### Identity Distinction
+- `connector_id`: Authoritative identifier for the transport/browser adapter (e.g., `connector:opencli_chatgpt`).
+- `conversation_id`: Authoritative UUID for the exact ChatGPT Browser session (e.g., `6a81c528-6004-83ea-af2a-9e5fdbd34c02`).
+
 ---
 
-## 4. Connector Dispatch Topology & Event Resume Contract
+## 4. Connector Dispatch Topology, Cursor Persistence & Resume Contract
 
-### Long-Lived Connector Consumption Model
+### Connector-Specific Event Stream & Targeted Routing
 
 ```text
-+--------------------------------------------------------------------------+
-|                  Hub Server Global / Connector Event Feed                |
-|           GET /api/connectors/<connector_id>/events/stream?after_id=N    |
-+--------------------------------------------------------------------------+
-                                     │
-      1. History Replay (events > N) │ 2. Live Handoff
-                                     ▼
-+--------------------------------------------------------------------------+
-|                        OpenCLI Connector Consumer                        |
-|  - Tracks persistent cursor: last_processed_event_id                     |
-|  - Filters for event_type == "REQUEST_CREATED"                           |
-|  - Reads authoritative `conversation_id` from message row                |
-|  - Performs Atomic SQLite Claim: INSERT OR IGNORE INTO send_claims       |
-|    * Acquired (1 worker) -> Proceeds to External Send                    |
-|    * Conflict / Duplicate -> Emits SKIPPED_ALREADY_ATTEMPTED & drops     |
-+--------------------------------------------------------------------------+
++-------------------------------------------------------------------------------+
+|                      Hub Server Connector-Specific Stream                     |
+|           GET /api/connectors/<connector_id>/events/stream?after_id=N         |
++-------------------------------------------------------------------------------+
+                                        │
+         Filter: events.connector_id == <connector_id> AND event_id > N
+                                        │
+                                        ▼
++-------------------------------------------------------------------------------+
+|                       OpenCLI Connector Consumer Worker                       |
+|  1. Replay history events > N -> Transition to live SSE queue                 |
+|  2. Load request row -> Extract target `conversation_id`                      |
+|  3. Atomic Send Claim: INSERT OR IGNORE INTO send_claims (request_id, ...)    |
+|     ├── Already claimed -> Log SKIPPED_ALREADY_ATTEMPTED & advance cursor     |
+|     └── Acquired -> Execute external write -> Record outcome & advance cursor |
++-------------------------------------------------------------------------------+
 ```
 
-### Event Resume & Cursor Contract
-1. **Reconnection with Cursor:** Clients subscribe with `?after_id=<last_event_id>`.
-2. **Replay -> Live Transition:** Server queries durable SQLite `events WHERE event_id > :after_id ORDER BY event_id ASC`, streams existing events, and then transitions seamlessly to live listener queues without dropping events.
-3. **Idempotent Delivery Absorption:** If a disconnect occurs during dispatch, replay of `REQUEST_CREATED` is safely absorbed by the SQLite atomic claim (`send_claims` primary key uniqueness) preventing duplicate external execution.
+### Durable Cursor Advancement & Crash Recovery Semantics
+
+1. **Replay Optimization Only:** `connector_cursors.last_processed_event_id` is an event replay/checkpoint optimization; it is **NOT** the at-most-once safety authority.
+2. **Safety Authority:** The `send_claims` table and message/event transactional constraints provide the inviolable at-most-once external-send safety guarantee.
+3. **Cursor Advancement Order:**
+   ```text
+   Event received from SSE
+            ↓
+   Process or reject event to a durable outcome (DB claim acquired / skipped / completed / failed)
+            ↓
+   Update connector_cursors (SET last_processed_event_id = event_id, updated_at = now())
+   ```
+4. **Crash Invariant:** If a crash occurs before the cursor is updated, the event will replay upon restart. The replay is safely absorbed by SQLite primary key uniqueness (`send_claims.request_id`), preventing any duplicate external send. **The cursor is NEVER advanced before reaching a durable outcome.**
 
 ---
 
@@ -156,10 +178,10 @@ CREATE INDEX IF NOT EXISTS idx_events_id ON events(event_id);
 ### Delivery Lifecycle & Invariants
 
 ```text
-review.request created
+review.request created (with first-class connector_id & conversation_id)
          │
          ▼
-[REQUEST_CREATED] (Durable in DB & emitted via SSE)
+[REQUEST_CREATED] (Durable in DB & emitted to /api/connectors/<connector_id>/events/stream)
          │
          ▼
 Validate durable request.conversation_id == target_browser_conversation_id
@@ -195,10 +217,9 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 1. **Single SQLite Transaction:**
    ```sql
    BEGIN IMMEDIATE;
-   -- 1. Check if response message already exists
    SELECT message_id FROM messages WHERE reply_to = :request_id AND message_type = 'review.response';
-   -- 2. If exists -> ROLLBACK and return CACHED_RESPONSE_READY
-   -- 3. If absent -> INSERT message AND INSERT event('RESPONSE_READY'); COMMIT;
+   -- If exists -> ROLLBACK and return CACHED_RESPONSE_READY
+   -- If absent -> INSERT message AND INSERT event('RESPONSE_READY'); COMMIT;
    ```
 2. **Guaranteed Outcome:** Exactly one authoritative `RESPONSE_READY` event is created per `request_id`.
 
@@ -210,7 +231,7 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 
 - **IDE -> Hub:** Fast durable submit ACK.
   - **Invariant:** Durable Hub ACK does not depend on Browser reasoning generation or external send completion.
-  - **Evidence:** PoC observed ~20-30ms local submit latency. (No SLA is established).
+  - **Evidence:** PoC observed ~20-30ms local submit latency. No production SLA is established.
 - **Hub -> Connector:** Event-driven async continuation via Hub SSE feed (`REQUEST_CREATED`).
 - **Browser -> Hub:** **Explicit Reconciliation Trigger**.
   - **Limitation:** `REAL_BROWSER_PUSH_INGRESS = NOT_AVAILABLE / NOT_PROVEN`. OpenCLI 1.8.6 has no push notifications or inbound webhooks.
@@ -219,19 +240,28 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 
 ---
 
-## 7. Minimal Bridge Coexistence & Honest Rollback Contract
+## 7. Minimal Bridge Coexistence & Strict At-Most-Once Rollback Contract
 
 ### Coexistence Architecture
 - Minimal Bridge (`skills/research-review-lead/`) remains frozen at PR #3 baseline (`d7651f95059694047d2a7e280afe761264a54058`).
 - Message Hub operates in parallel during migration verification.
+- Canonical Minimal Bridge receipt storage is:
+  ```text
+  ~/.agent-project-system/browser-review-receipts/
+  ```
 
-### Honest Rollback Strategy
-- **Distinct Stores:** Minimal Bridge disk receipts (`.agent-project-system/receipts/`) and Message Hub SQLite (`hub.db`) are independent stores. **No automatic two-way state synchronization is claimed.**
-- **Rollback Protocol:**
-  1. Set routing configuration back to Minimal Bridge (`opencli_transport.py`).
-  2. Route all NEW review requests to Minimal Bridge.
-  3. In-flight Message Hub requests are drained/reconciled in Message Hub before cutback, or re-issued under fresh request IDs on Minimal Bridge.
-  4. Message Hub SQLite database is preserved as immutable audit evidence.
+### Strict At-Most-Once Rollback Protocol
+- **Distinct Stores:** Minimal Bridge disk receipts (`~/.agent-project-system/browser-review-receipts/`) and Message Hub SQLite (`hub.db`) are independent stores. **No automatic two-way state synchronization is claimed.**
+- **At-Most-Once Safety Rule During Rollback:**
+  - A request may be recreated on Minimal Bridge **ONLY IF** it is proven that the Message Hub request **NEVER** acquired an external-send claim (`send_claims`).
+  - If a `send_claims` row exists or `EXTERNAL_SEND_ATTEMPTED` was recorded: **NO RESEND VIA MINIMAL BRIDGE IS PERMITTED** (regardless of whether the state was `COMPLETED`, `UNKNOWN`, `FAILED`, or process crashed). Such requests must remain Hub-owned for reconciliation, drained, or explicitly abandoned with audit notes.
+- **Rollback Procedure:**
+  1. Stop routing NEW review requests to Message Hub.
+  2. Classify in-flight Message Hub requests against the `send_claims` boundary.
+  3. Unclaimed requests may be re-issued under fresh IDs on Minimal Bridge if required.
+  4. Claimed or attempted requests remain Hub-owned for reconciliation or drain.
+  5. Route all NEW requests to Minimal Bridge.
+  6. Retain Message Hub SQLite database as immutable audit evidence.
 
 ---
 
@@ -243,31 +273,36 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 
 ---
 
-## 9. Phased Implementation Plan (M1 - M5)
+## 9. Phased Implementation Plan with Explicit Browser Gates (M1 - M5)
+
+No phase completion self-authorizes the next phase. Each phase requires explicit independent Browser Review acceptance before the next phase may begin.
 
 ### Phase M1: Durable Core & Relational Schema
-- **Purpose:** Establish production SQLite schema, connection management, and atomic send/response transactional invariants.
-- **Scope:** `runtime/message_hub/storage.py`, first-class `conversation_id`, atomic `try_claim_external_send`, transactional `create_response_and_ready_event`.
+- **Purpose:** Establish production SQLite schema, connection management, first-class identities, durable cursor table, and atomic send/response transactional invariants.
+- **Scope:** `runtime/message_hub/storage.py`, first-class `conversation_id` and `connector_id`, atomic `try_claim_external_send`, transactional `create_response_and_ready_event`, `connector_cursors`.
 - **Non-Goals:** HTTP/SSE networking, OpenCLI connector subprocess calls.
 - **Dependencies:** None.
-- **Acceptance Criteria:** 100% passing unit tests covering schema creation, deduplication, atomic claim contention (competing threads/processes), and concurrent response creation atomicity.
+- **Acceptance Criteria:** 100% passing unit tests covering schema creation, deduplication, atomic claim contention (competing threads/processes), cursor persistence, and concurrent response creation atomicity.
 - **Rollback:** Revert module files.
+- **Browser Gate:** **M1 Browser ACCEPT** required before Phase M2 may begin.
 
-### Phase M2: HTTP Gateway & Global/Connector SSE Feed
-- **Purpose:** Implement HTTP submit API with durable ACK and SSE stream with cursor-based replay.
-- **Scope:** `runtime/message_hub/server.py`, `runtime/message_hub/client.py`, `POST /api/threads/<id>/messages`, `GET /api/connectors/<id>/events/stream?after_id=N`.
+### Phase M2: HTTP Gateway & Filtered Connector SSE Feed
+- **Purpose:** Implement HTTP submit API with durable ACK and connector-filtered SSE stream with cursor-based replay.
+- **Scope:** `runtime/message_hub/server.py`, `runtime/message_hub/client.py`, `POST /api/threads/<id>/messages`, `GET /api/connectors/<connector_id>/events/stream?after_id=N`.
 - **Non-Goals:** OpenCLI external subprocess execution.
 - **Dependencies:** M1.
-- **Acceptance Criteria:** Replay handoff tests, cursor reconnection tests, client submit ACK latency validation under simulated delay.
+- **Acceptance Criteria:** Replay handoff tests, cursor reconnection tests, connector-id filtering tests, client submit ACK latency validation under simulated delay.
 - **Rollback:** Revert M2 files.
+- **Browser Gate:** **M2 Browser ACCEPT** required before Phase M3 may begin.
 
 ### Phase M3: OpenCLI Outbound Connector & Atomic Delivery
-- **Purpose:** Implement independent background connector worker with durable conversation binding and fail-honest delivery.
-- **Scope:** `runtime/message_hub/connectors/opencli.py`, SSE consumer worker, pre-send binding validation, timeout -> `EXTERNAL_SEND_UNKNOWN`, zero-resend enforcement.
+- **Purpose:** Implement independent background connector worker with durable conversation binding, durable cursor advancement, and fail-honest delivery.
+- **Scope:** `runtime/message_hub/connectors/opencli.py`, SSE consumer worker, pre-send binding validation, post-handling cursor updates, timeout -> `EXTERNAL_SEND_UNKNOWN`, zero-resend invariant.
 - **Non-Goals:** Response reconciliation.
 - **Dependencies:** M1, M2.
-- **Acceptance Criteria:** Deterministic tests proving pre-send wrong-conversation rejection, runner calls == 1 on contention, timeout conversion to UNKNOWN, restart no-resend.
+- **Acceptance Criteria:** Deterministic tests proving pre-send wrong-conversation rejection, runner calls == 1 on contention, timeout conversion to UNKNOWN, restart no-resend, cursor crash recovery.
 - **Rollback:** Revert M3 files.
+- **Browser Gate:** **M3 Browser ACCEPT** required before Phase M4 may begin.
 
 ### Phase M4: Trusted Browser Reconciliation & Authority
 - **Purpose:** Implement connector-owned trusted browser reading with strict provenance equality and verdict parsing.
@@ -276,6 +311,7 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 - **Dependencies:** M1, M2, M3.
 - **Acceptance Criteria:** Tests proving malformed read fail-closed, mismatched conversation provenance fail-closed, invalid decision rejection, valid verdict -> exactly one `RESPONSE_READY`.
 - **Rollback:** Revert M4 files.
+- **Browser Gate:** **M4 Browser ACCEPT** required before Phase M5 may begin.
 
 ### Phase M5: Secure Observability & Coexistence Integration
 - **Purpose:** Implement safe HTML-escaped timeline and end-to-end integration validation alongside Minimal Bridge baseline.
@@ -284,13 +320,14 @@ To prevent race conditions where concurrent reconciliation calls emit duplicate 
 - **Dependencies:** M1, M2, M3, M4.
 - **Acceptance Criteria:** Full deterministic suite passing, zero HTML injection vulnerabilities in timeline, side-by-side run parity.
 - **Rollback:** Revert M5 files.
+- **Browser Gate:** **M5 Browser ACCEPT** required before Final Cutover Evaluation may begin.
 
 ---
 
-## 10. Final Cutover Gate
+## 10. Final Production Cutover Gate
 
 Cutover to Message Hub as default control plane requires:
-1. Formal completion and acceptance of Phases M1 through M5.
+1. Formal completion and independent Browser Review acceptance of Phases M1 through M5.
 2. 100% green validation across all repository test suites (`check_docs.py`, `check_skill_package.py`, `test_minimal_review_bridge.py`, and Message Hub test suite).
 3. Bounded live A/B comparison run demonstrating functional parity against PR #3 baseline.
 4. Independent Browser Review `APPROVE` on final cutover PR.
