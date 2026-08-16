@@ -149,7 +149,7 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
             message_id=req_id_b,
             artifact_id=art_id_b,
             content=prompt_b,
-            metadata={"experiment": "Path-B-Event-Driven"}
+            metadata={"experiment": "Path-B-Event-Driven", "conversation_id": conversation_id}
         )
         t_ack_ms = (time.perf_counter() - t0_submit) * 1000
         print(f"    H1. IDE submit -> Durable Hub ACK: {t_ack_ms:.2f} ms (is_new={ack['is_new']}, status={ack['status']})")

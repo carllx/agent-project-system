@@ -386,7 +386,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
         art_id = "art-conn-1"
         conv_id = "conv-12345"
 
-        # 1. Create request in storage
+        # 1. Create request in storage with durable conversation_id
         self.storage.create_message(
             message_id=req_id,
             thread_id=thread_id,
@@ -395,6 +395,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             message_type="review.request",
             content="Please review module",
             artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
         )
 
         calls = []
@@ -433,6 +434,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             message_type="review.request",
             content="Please review module",
             artifact_id="art-2",
+            metadata={"conversation_id": conv_id},
         )
 
         calls = []
@@ -469,6 +471,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             message_type="review.request",
             content="Please review module",
             artifact_id="art-3",
+            metadata={"conversation_id": conv_id},
         )
 
         calls = []
@@ -509,6 +512,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             message_type="review.request",
             content="Concurrent test message",
             artifact_id="art-conc",
+            metadata={"conversation_id": conv_id},
         )
 
         runner_call_count = 0
@@ -542,19 +546,60 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
         self.assertIn("EXTERNAL_SEND_COMPLETED", statuses)
         self.assertIn("SKIPPED_ALREADY_ATTEMPTED", statuses)
 
-    def test_browser_review_authority_parsing(self):
+    def test_durable_request_conversation_binding_and_rejections(self):
         """
-        Tests proving that review authority is strictly parsed from Browser response text:
-        - arbitrary text or caller approval without valid JSON is rejected
-        - mismatched request_id / artifact_id is rejected
-        - invalid decision choice is rejected
-        - valid exact response creates authoritative RESPONSE_READY
+        Prove:
+        A. durable request missing conversation binding => rejected before claim
+        B. worker/runtime conversation mismatch => rejected before claim
         """
         connector = OpenCLIBrowserConnector(storage=self.storage)
-        thread_id = "th-authority-1"
-        req_id = "req-auth-1"
-        art_id = "art-auth-1"
-        conv_id = "conv-auth-1"
+        thread_id = "th-conv-bind-1"
+        req_id = "req-conv-bind-1"
+
+        # 1. Missing binding in metadata
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request without conversation_id",
+            artifact_id="art-1",
+        )
+        with self.assertRaises(ValueError) as ctx:
+            connector.process_review_request(thread_id, req_id, "conv-runtime")
+        self.assertIn("missing required durable conversation_id binding", str(ctx.exception))
+
+        # 2. Mismatched conversation binding
+        req_id2 = "req-conv-bind-2"
+        self.storage.create_message(
+            message_id=req_id2,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request with mismatched conversation_id",
+            artifact_id="art-2",
+            metadata={"conversation_id": "conv-EXACT-BOUND"},
+        )
+        with self.assertRaises(ValueError) as ctx:
+            connector.process_review_request(thread_id, req_id2, "conv-WRONG-RUNTIME")
+        self.assertIn("Conversation binding mismatch", str(ctx.exception))
+
+    def test_trusted_read_only_browser_reconciliation(self):
+        """
+        Prove trusted read-only browser response acquisition and reconciliation:
+        C. fake trusted reader reports correct conversation + valid Browser verdict => RESPONSE_READY
+        D. fake trusted reader reports error => rejected
+        E. Browser verdict wrong request => rejected
+        F. Browser verdict wrong artifact => rejected
+        G. invalid decision => rejected
+        I. duplicate reconciliation is idempotent
+        """
+        thread_id = "th-reconcile-1"
+        req_id = "req-rec-1"
+        art_id = "art-rec-1"
+        conv_id = "conv-rec-1"
 
         self.storage.create_message(
             message_id=req_id,
@@ -564,68 +609,115 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
             message_type="review.request",
             content="Review request",
             artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
         )
 
-        # 1. Arbitrary non-JSON text -> rejected
-        with self.assertRaises(ValueError) as ctx:
-            connector.ingest_browser_review_response(
-                thread_id=thread_id,
-                request_id=req_id,
-                expected_artifact_id=art_id,
-                expected_conversation_id=conv_id,
-                browser_raw_text="Looks good to me, I approve.",
-                provenance_conversation_id=conv_id,
-            )
-        self.assertIn("No valid JSON review verdict", str(ctx.exception))
+        valid_verdict_json = f"""```json
+{{
+  "request_id": "{req_id}",
+  "artifact_id": "{art_id}",
+  "decision": "APPROVE",
+  "feedback": "Trusted browser reconciliation verified.",
+  "next_steps": []
+}}
+```"""
 
-        # 2. Conversation provenance mismatch -> rejected
-        with self.assertRaises(ValueError) as ctx:
-            connector.ingest_browser_review_response(
-                thread_id=thread_id,
-                request_id=req_id,
-                expected_artifact_id=art_id,
-                expected_conversation_id=conv_id,
-                browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```',
-                provenance_conversation_id="conv-WRONG",
-            )
-        self.assertIn("Conversation provenance mismatch", str(ctx.exception))
+        # C. Valid trusted acquisition -> RESPONSE_READY
+        def fake_reader_valid(cmd, timeout):
+            self.assertIn("detail", cmd)
+            self.assertIn(conv_id, cmd)
+            out = json.dumps([{"Role": "assistant", "Text": valid_verdict_json}])
+            return 0, out, ""
 
-        # 3. Wrong request_id in verdict -> rejected
-        with self.assertRaises(ValueError) as ctx:
-            connector.ingest_browser_review_response(
-                thread_id=thread_id,
-                request_id=req_id,
-                expected_artifact_id=art_id,
-                expected_conversation_id=conv_id,
-                browser_raw_text=f'```json\n{{"request_id": "req-WRONG", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```',
-                provenance_conversation_id=conv_id,
-            )
-        self.assertIn("request_id mismatch", str(ctx.exception))
+        connector = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_valid)
+        res = connector.reconcile_browser_response(thread_id, req_id)
 
-        # 4. Invalid decision choice -> rejected
-        with self.assertRaises(ValueError) as ctx:
-            connector.ingest_browser_review_response(
-                thread_id=thread_id,
-                request_id=req_id,
-                expected_artifact_id=art_id,
-                expected_conversation_id=conv_id,
-                browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "ACCEPTED", "feedback": "ok"}}\n```',
-                provenance_conversation_id=conv_id,
-            )
-        self.assertIn("Invalid decision 'ACCEPTED'", str(ctx.exception))
-
-        # 5. Valid exact verdict -> accepted & emitted
-        res = connector.ingest_browser_review_response(
-            thread_id=thread_id,
-            request_id=req_id,
-            expected_artifact_id=art_id,
-            expected_conversation_id=conv_id,
-            browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "Strict validation passed.", "next_steps": []}}\n```',
-            provenance_conversation_id=conv_id,
-        )
+        self.assertEqual(res["status"], "RESPONSE_RECEIVED")
         self.assertEqual(res["verdict"]["decision"], "APPROVE")
         self.assertEqual(res["event"]["event_type"], "RESPONSE_READY")
-        self.assertEqual(res["event"]["payload"]["decision"], "APPROVE")
+
+        # I. Duplicate reconciliation is idempotent -> CACHED_RESPONSE_READY
+        res_dup = connector.reconcile_browser_response(thread_id, req_id)
+        self.assertEqual(res_dup["status"], "CACHED_RESPONSE_READY")
+
+        # D. OpenCLI read failure -> exception
+        req_id_fail = "req-rec-fail"
+        self.storage.create_message(
+            message_id=req_id_fail,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request fail",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_fail(cmd, timeout):
+            return 1, "", "Network error reading conversation"
+        conn_fail = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_fail)
+        with self.assertRaises(RuntimeError) as ctx:
+            conn_fail.reconcile_browser_response(thread_id, req_id_fail)
+        self.assertIn("OpenCLI read failed", str(ctx.exception))
+
+        # E. Wrong request_id in browser output -> rejected
+        req_id_wrong_req = "req-wrong-req"
+        self.storage.create_message(
+            message_id=req_id_wrong_req,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_wrong_req(cmd, timeout):
+            bad_json = f'```json\n{{"request_id": "req-UNEXPECTED", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```'
+            return 0, json.dumps([{"Role": "assistant", "Text": bad_json}]), ""
+        conn_wrong_req = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_wrong_req)
+        with self.assertRaises(ValueError) as ctx:
+            conn_wrong_req.reconcile_browser_response(thread_id, req_id_wrong_req)
+        self.assertIn("request_id mismatch", str(ctx.exception))
+
+        # F. Wrong artifact_id in browser output -> rejected
+        req_id_wrong_art = "req-wrong-art"
+        self.storage.create_message(
+            message_id=req_id_wrong_art,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_wrong_art(cmd, timeout):
+            bad_json = f'```json\n{{"request_id": "{req_id_wrong_art}", "artifact_id": "art-UNEXPECTED", "decision": "APPROVE", "feedback": "ok"}}\n```'
+            return 0, json.dumps([{"Role": "assistant", "Text": bad_json}]), ""
+        conn_wrong_art = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_wrong_art)
+        with self.assertRaises(ValueError) as ctx:
+            conn_wrong_art.reconcile_browser_response(thread_id, req_id_wrong_art)
+        self.assertIn("artifact_id mismatch", str(ctx.exception))
+
+        # G. Invalid decision in browser output -> rejected
+        req_id_bad_dec = "req-bad-dec"
+        self.storage.create_message(
+            message_id=req_id_bad_dec,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+            metadata={"conversation_id": conv_id},
+        )
+        def fake_reader_bad_dec(cmd, timeout):
+            bad_json = f'```json\n{{"request_id": "{req_id_bad_dec}", "artifact_id": "{art_id}", "decision": "INVALID_VERDICT", "feedback": "ok"}}\n```'
+            return 0, json.dumps([{"Role": "assistant", "Text": bad_json}]), ""
+        conn_bad_dec = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_reader_bad_dec)
+        with self.assertRaises(ValueError) as ctx:
+            conn_bad_dec.reconcile_browser_response(thread_id, req_id_bad_dec)
+        self.assertIn("Invalid decision 'INVALID_VERDICT'", str(ctx.exception))
 
     def test_independent_sse_connector_continuation(self):
         """
@@ -678,6 +770,7 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
                 message_id=req_id,
                 artifact_id=art_id,
                 content="Asynchronous event test",
+                metadata={"conversation_id": conv_id},
             )
             ack_returned_at = time.time()
 

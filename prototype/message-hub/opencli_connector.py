@@ -169,11 +169,12 @@ class OpenCLIBrowserConnector:
         self,
         thread_id: str,
         request_id: str,
-        conversation_id: str,
+        expected_conversation_id: str,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Atomically claims and processes one specific review request durably with at most one external send attempt.
+        Validates request's durable conversation_id before acquiring claim or invoking runner.
         """
         cmd_timeout = timeout or self.default_timeout
 
@@ -191,9 +192,21 @@ class OpenCLIBrowserConnector:
         if target_msg["message_type"] != "review.request":
             raise ValueError(f"Message '{request_id}' is not a review.request (type: {target_msg['message_type']})")
 
+        # 1. DURABLE REQUEST CONVERSATION BINDING CHECK:
+        # Request must durably own its conversation_id in metadata
+        req_meta = target_msg.get("metadata") or {}
+        req_conv_id = req_meta.get("conversation_id")
+        if not req_conv_id:
+            raise ValueError(f"Request '{request_id}' is missing required durable conversation_id binding in metadata")
+
+        if req_conv_id != expected_conversation_id:
+            raise ValueError(
+                f"Conversation binding mismatch: request '{request_id}' is bound to '{req_conv_id}', but runtime context is '{expected_conversation_id}'"
+            )
+
         artifact_id = target_msg.get("artifact_id")
 
-        # 1. ATOMIC SQLite CLAIM: exactly one worker acquires claim for request_id
+        # 2. ATOMIC SQLite CLAIM: exactly one worker acquires claim for request_id
         acquired = self.storage.try_claim_external_send(
             thread_id=thread_id,
             request_id=request_id,
@@ -206,7 +219,7 @@ class OpenCLIBrowserConnector:
                 "message": "External send claim already held for this request. Refusing to resend.",
             }
 
-        # 2. Record CONNECTOR_ACCEPTED
+        # 3. Record CONNECTOR_ACCEPTED
         self.storage.record_event(
             thread_id=thread_id,
             event_type="CONNECTOR_ACCEPTED",
@@ -215,11 +228,11 @@ class OpenCLIBrowserConnector:
                 "connector": self.connector_id,
                 "request_id": request_id,
                 "artifact_id": artifact_id,
-                "conversation_id": conversation_id,
+                "conversation_id": req_conv_id,
             },
         )
 
-        # 3. Durably record EXTERNAL_SEND_ATTEMPTED BEFORE invoking OpenCLI
+        # 4. Durably record EXTERNAL_SEND_ATTEMPTED BEFORE invoking OpenCLI
         t_attempt = time.time()
         self.storage.record_event(
             thread_id=thread_id,
@@ -229,12 +242,12 @@ class OpenCLIBrowserConnector:
                 "connector": self.connector_id,
                 "request_id": request_id,
                 "artifact_id": artifact_id,
-                "conversation_id": conversation_id,
+                "conversation_id": req_conv_id,
                 "attempted_at": t_attempt,
             },
         )
 
-        # 4. Invoke OpenCLI send (submit-only)
+        # 5. Invoke OpenCLI send (submit-only)
         prompt_content = target_msg["content"]
         cmd = [
             "opencli",
@@ -242,7 +255,7 @@ class OpenCLIBrowserConnector:
             "send",
             prompt_content,
             "--conversation",
-            conversation_id,
+            req_conv_id,
             "-f",
             "json",
         ]
@@ -260,7 +273,7 @@ class OpenCLIBrowserConnector:
                 payload={
                     "connector": self.connector_id,
                     "request_id": request_id,
-                    "conversation_id": conversation_id,
+                    "conversation_id": req_conv_id,
                     "reason": "TimeoutExpired",
                     "elapsed_seconds": elapsed,
                     "stderr": stderr,
@@ -281,7 +294,7 @@ class OpenCLIBrowserConnector:
                 payload={
                     "connector": self.connector_id,
                     "request_id": request_id,
-                    "conversation_id": conversation_id,
+                    "conversation_id": req_conv_id,
                     "returncode": returncode,
                     "elapsed_seconds": elapsed,
                     "stderr": stderr,
@@ -303,7 +316,7 @@ class OpenCLIBrowserConnector:
             payload={
                 "connector": self.connector_id,
                 "request_id": request_id,
-                "conversation_id": conversation_id,
+                "conversation_id": req_conv_id,
                 "elapsed_seconds": elapsed,
             },
         )
@@ -314,30 +327,90 @@ class OpenCLIBrowserConnector:
             "stdout": stdout,
         }
 
-    def ingest_browser_review_response(
+    def reconcile_browser_response(
         self,
         thread_id: str,
         request_id: str,
-        expected_artifact_id: str,
-        expected_conversation_id: str,
-        browser_raw_text: str,
-        provenance_conversation_id: str,
+        timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Durably ingests an authoritative Browser Review response.
-        Enforces conversation provenance and strict verdict parsing (APPROVE | REVISE | BLOCKED).
-        Caller-supplied approval is rejected.
+        Trusted read-only Browser response acquisition and reconciliation:
+        1. Loads authoritative request identity and durable conversation binding.
+        2. Checks if response already exists (idempotency).
+        3. Invokes trusted read-only OpenCLI operation for exact conversation.
+        4. Validates conversation provenance and strict Browser verdict (APPROVE | REVISE | BLOCKED).
+        5. Emits authoritative RESPONSE_READY.
         """
-        if provenance_conversation_id != expected_conversation_id:
-            raise ValueError(
-                f"Conversation provenance mismatch: expected '{expected_conversation_id}', got '{provenance_conversation_id}'"
-            )
+        cmd_timeout = timeout or self.default_timeout
 
-        # Parse verdict strictly from browser text
+        # Check existing messages in thread for idempotency
+        messages = self.storage.get_messages(thread_id)
+        target_req = None
+        for m in messages:
+            if m["message_id"] == request_id:
+                target_req = m
+            if m.get("reply_to") == request_id and m.get("message_type") == "review.response":
+                return {
+                    "status": "CACHED_RESPONSE_READY",
+                    "request_id": request_id,
+                    "message": m,
+                }
+
+        if not target_req:
+            raise ValueError(f"Request message '{request_id}' not found in thread '{thread_id}'")
+
+        req_meta = target_req.get("metadata") or {}
+        bound_conv_id = req_meta.get("conversation_id")
+        if not bound_conv_id:
+            raise ValueError(f"Request '{request_id}' has no durable conversation_id binding")
+
+        artifact_id = target_req.get("artifact_id")
+
+        # 3. Read from browser using OpenCLI read-only detail command
+        read_cmd = [
+            "opencli",
+            "chatgpt",
+            "detail",
+            bound_conv_id,
+            "-f",
+            "json",
+        ]
+
+        returncode, stdout, stderr = self.opencli_runner(read_cmd, cmd_timeout)
+        if returncode != 0:
+            raise RuntimeError(f"OpenCLI read failed (code {returncode}): {stderr or stdout}")
+
+        # Extract text and provenance from OpenCLI output
+        raw_text = ""
+        provenance_conv_id = ""
+        try:
+            parsed_out = json.loads(stdout.strip())
+            if isinstance(parsed_out, list) and len(parsed_out) > 0:
+                # OpenCLI detail returns list of messages or entries
+                # Find last assistant text
+                for entry in reversed(parsed_out):
+                    if isinstance(entry, dict):
+                        role = entry.get("Role") or entry.get("role") or ""
+                        if role.lower() in ("assistant", "chatgpt") or not role:
+                            raw_text = entry.get("Text") or entry.get("text") or entry.get("response") or ""
+                            if raw_text:
+                                break
+                provenance_conv_id = bound_conv_id
+            elif isinstance(parsed_out, dict):
+                raw_text = parsed_out.get("response") or parsed_out.get("Text") or parsed_out.get("text") or stdout
+                provenance_conv_id = parsed_out.get("conversationId") or bound_conv_id
+            else:
+                raw_text = stdout
+                provenance_conv_id = bound_conv_id
+        except Exception:
+            raw_text = stdout
+            provenance_conv_id = bound_conv_id
+
+        # 4. Strictly parse verdict from trusted browser text
         parsed_verdict = parse_strict_browser_response(
-            raw_text=browser_raw_text,
+            raw_text=raw_text,
             expected_request_id=request_id,
-            expected_artifact_id=expected_artifact_id,
+            expected_artifact_id=artifact_id,
         )
 
         decision = parsed_verdict["decision"]
@@ -346,8 +419,8 @@ class OpenCLIBrowserConnector:
             "decision": decision,
             "feedback": parsed_verdict["feedback"],
             "next_steps": parsed_verdict["next_steps"],
-            "reviewed_artifact": expected_artifact_id,
-            "conversation_id": expected_conversation_id,
+            "reviewed_artifact": artifact_id,
+            "conversation_id": bound_conv_id,
         }
 
         msg, is_new, ev = self.storage.create_message(
@@ -357,8 +430,8 @@ class OpenCLIBrowserConnector:
             recipient="ide:agent",
             message_type="review.response",
             reply_to=request_id,
-            artifact_id=expected_artifact_id,
-            content=browser_raw_text,
+            artifact_id=artifact_id,
+            content=raw_text,
             metadata=resp_payload,
             status="COMPLETED",
         )
@@ -370,12 +443,17 @@ class OpenCLIBrowserConnector:
             payload={
                 "response_id": resp_msg_id,
                 "request_id": request_id,
-                "artifact_id": expected_artifact_id,
+                "artifact_id": artifact_id,
                 "decision": decision,
-                "conversation_id": expected_conversation_id,
+                "conversation_id": bound_conv_id,
             },
         )
-        return {"message": msg, "event": ready_ev, "verdict": parsed_verdict}
+        return {
+            "status": "RESPONSE_RECEIVED",
+            "message": msg,
+            "event": ready_ev,
+            "verdict": parsed_verdict,
+        }
 
 
 def run_sse_connector_worker(
@@ -410,6 +488,6 @@ def run_sse_connector_worker(
                         connector.process_review_request(
                             thread_id=thread_id,
                             request_id=req_id,
-                            conversation_id=conversation_id,
+                            expected_conversation_id=conversation_id,
                         )
                         processed_count += 1
