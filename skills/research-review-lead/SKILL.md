@@ -69,9 +69,9 @@ Returns immediately:
 }
 ```
 
-### 3. Read-Only Reconcile
+### 3. Read-Only Reconcile (One-Shot Check)
 
-Periodically check message history via read-only reconciliation:
+Each reconcile invocation performs exactly one read-only check:
 
 ```powershell
 python skills/research-review-lead/scripts/opencli_transport.py review `
@@ -97,7 +97,7 @@ If response is ready:
 }
 ```
 
-If still in progress, returns `status: "RESPONSE_PENDING"`.
+If still in progress, returns `status: "RESPONSE_PENDING"` and yields control immediately. The current IDE turn must not loop, sleep, manage background tasks, or poll. A later natural `/goal` continuation may perform another explicit reconcile when appropriate.
 
 ## Safety Invariants
 

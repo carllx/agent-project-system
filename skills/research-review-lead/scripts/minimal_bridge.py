@@ -147,20 +147,27 @@ def parse_strict_response(
 
     exp_req = expected_request_id.strip()
     exp_art = expected_artifact_id.strip()
-
     text = raw_text.strip()
-    blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if len(blocks) == 1:
-        candidate_json = blocks[0]
-    elif len(blocks) > 1:
-        raise ValueError(f"Ambiguous response: found {len(blocks)} fenced JSON blocks")
+
+    # Find all fenced JSON blocks
+    fenced_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+
+    # Check for bare JSON objects outside fenced blocks
+    text_without_fences = re.sub(r"```(?:json)?\s*\{.*?\}\s*```", "", text, flags=re.DOTALL)
+    bare_objects_outside_fences = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text_without_fences, re.DOTALL)
+
+    if len(fenced_blocks) == 1:
+        if len(bare_objects_outside_fences) > 0:
+            raise ValueError("Ambiguous response: found fenced JSON block and additional bare JSON object outside fence")
+        candidate_json = fenced_blocks[0]
+    elif len(fenced_blocks) > 1:
+        raise ValueError(f"Ambiguous response: found {len(fenced_blocks)} fenced JSON blocks")
     else:
-        # Check for single bare JSON object without fences
-        bare_matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
-        if len(bare_matches) == 1:
-            candidate_json = bare_matches[0]
-        elif len(bare_matches) > 1:
-            raise ValueError(f"Ambiguous response: found {len(bare_matches)} bare JSON objects")
+        # 0 fenced blocks: check bare objects
+        if len(bare_objects_outside_fences) == 1:
+            candidate_json = bare_objects_outside_fences[0]
+        elif len(bare_objects_outside_fences) > 1:
+            raise ValueError(f"Ambiguous response: found {len(bare_objects_outside_fences)} bare JSON objects")
         else:
             raise ValueError("No JSON object found in response")
 
@@ -173,15 +180,15 @@ def parse_strict_response(
         raise ValueError("Response JSON must be a single JSON object")
 
     req_id = parsed.get("request_id")
-    if not isinstance(req_id, str) or req_id.strip() != exp_req:
+    if not isinstance(req_id, str) or req_id != exp_req:
         raise ValueError(
-            f"request_id mismatch: expected '{exp_req}', got '{req_id}'"
+            f"request_id mismatch: expected exact '{exp_req}', got '{req_id}'"
         )
 
     art_id = parsed.get("artifact_id")
-    if not isinstance(art_id, str) or art_id.strip() != exp_art:
+    if not isinstance(art_id, str) or art_id != exp_art:
         raise ValueError(
-            f"artifact_id mismatch: expected '{exp_art}', got '{art_id}'"
+            f"artifact_id mismatch: expected exact '{exp_art}', got '{art_id}'"
         )
 
     decision = parsed.get("decision")

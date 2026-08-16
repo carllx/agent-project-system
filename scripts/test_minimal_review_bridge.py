@@ -411,7 +411,54 @@ class TestStrictResponseParser(unittest.TestCase):
             "}\n"
             "```"
         )
-        with self.assertRaisesRegex(ValueError, "feedback must be a non-empty string"):
+    def test_parse_rejects_fenced_json_plus_bare_json_outside(self) -> None:
+        raw = (
+            "```json\n"
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "APPROVE", "feedback": "ok", "next_steps": []}\n'
+            "```\n"
+            '{"extra": "object"}'
+        )
+        with self.assertRaisesRegex(ValueError, "Ambiguous response: found fenced JSON block and additional bare JSON object outside fence"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_bare_json_plus_fenced_json(self) -> None:
+        raw = (
+            '{"extra": "object"}\n'
+            "```json\n"
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "APPROVE", "feedback": "ok", "next_steps": []}\n'
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, "Ambiguous response: found fenced JSON block and additional bare JSON object outside fence"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_padded_returned_request_id(self) -> None:
+        raw = (
+            "```json\n"
+            "{\n"
+            f'  "request_id": "  {self.req_id}  ",\n'
+            f'  "artifact_id": "{self.art_id}",\n'
+            '  "decision": "APPROVE",\n'
+            '  "feedback": "LGTM",\n'
+            '  "next_steps": []\n'
+            "}\n"
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, f"request_id mismatch: expected exact '{self.req_id}'"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_padded_returned_artifact_id(self) -> None:
+        raw = (
+            "```json\n"
+            "{\n"
+            f'  "request_id": "{self.req_id}",\n'
+            f'  "artifact_id": "  {self.art_id}  ",\n'
+            '  "decision": "APPROVE",\n'
+            '  "feedback": "LGTM",\n'
+            '  "next_steps": []\n'
+            "}\n"
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, f"artifact_id mismatch: expected exact '{self.art_id}'"):
             parse_strict_response(raw, self.req_id, self.art_id)
 
 

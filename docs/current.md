@@ -13,11 +13,11 @@
 - **Work Item initialization commit:** `92a9661434683afd5bd8d71adaa56530040b7a19`（`docs: start real agent review loop MVP`）；它不是 Phase baseline。当前 Git HEAD 由 Git/交接消息提供，本文件不自包含其所在 commit 的 SHA。
 - **Product Contract baseline:** `d73314ad44e72ea78b8729b593a1b797362c46af`。
 - **Handoff checkpoint:** 由交接消息提供 exact `HANDOFF_COMMIT_SHA`；本文件不能自包含其所在 commit 的 SHA。
-- **Source Skill VERSION:** `0.4.18`。
-- **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.18`，九个声明文件 SHA-256 parity `PASS`。实验输入曾观察旧 runtime VERSION `0.4.14`；本轮 Product workspace 的 pre-sync 只读检查发现目标路径当时不存在，因此两项按 provenance 分开记录，不互相覆盖。
+- **Source Skill VERSION:** `0.4.21`。
+- **PROJECT_ANTIGRAVITY_RUNTIME_COPY:** `.agents\skills\research-review-lead`；由 `scripts/sync_skill_runtime.py` 从 source 单向部署，当前 VERSION `0.4.21`，九个声明文件 SHA-256 parity `PASS`。实验输入曾观察旧 runtime VERSION `0.4.14`；本轮 Product workspace 的 pre-sync 只读检查发现目标路径当时不存在，因此两项按 provenance 分开记录，不互相覆盖。
 - **OBSERVED_LOCAL_INSTALL_PATH:** `C:\Users\carll\.codex\skills\research-review-lead`；目录存在，VERSION `0.4.15`，九个文件与源包逐文件 SHA-256 一致。
 - **HISTORICAL_DESIGN_TARGET:** `$HOME/.agents/skills/research-review-lead`（ADR-0002）；本机当前不存在。
-- **CANONICAL_DEPLOYMENT_PATH:** `UNVERIFIED`。仓库没有安装脚本；项目历史记录了 `.codex\skills` 的本机安装结果，但不能证明它是所有平台通用的 canonical Codex 用户级 Skill 路径。
+- **CANONICAL_DEPLOYMENT_PATH:** `UNVERIFIED`。仓库没有安装脚本；项目历史记录了 `.codex\skills` 的本机安装结果，但不能证明它是所有平台通用的 canonical Codex 用户级 Skill路径。
 - **MAT_PROCESS_AUTHORITY:** 见 `docs/specs/system-governance.md#engineering-skills-and-process-authority`。
 
 ## 系统目标
@@ -49,7 +49,7 @@ Agent Project System
 
 ## Active Frontier: Minimal Browser Review Bridge
 
-- **Active Work Item:** `APS-MINIMAL-BRIDGE-007`
+- **Active Work Item:** `APS-MINIMAL-BRIDGE-008`
 - **Architecture Model:** Antigravity `/goal` 拥有 IDE Agent 执行与重试的外循环；本项目只拥有精简的 Browser Review Bridge。
 - **Surviving Components:** `opencli_transport.py` (CLI facade) -> `minimal_bridge.py` (Core Bridge) -> OpenCLI -> Browser.
 - **Validation:** `scripts/test_minimal_review_bridge.py`；`scripts/test_check_skill_package.py`；`python scripts/check_skill_package.py`；`python scripts/check_docs.py`。
