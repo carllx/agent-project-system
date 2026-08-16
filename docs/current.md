@@ -55,9 +55,12 @@ Agent Project System
 - `skills/research-review-lead/scripts/minimal_bridge.py`：Minimal Browser Review Bridge 核心实现。
 - `docs/specs/message-hub-control-plane-migration.md`：Message Hub 生产控制面迁移规划规范。
 
-## Active Frontier: Message Hub Control Plane Migration
+## Active Work Item: Message Hub Control Plane Migration Planning
 
-- **Active Work Item:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **ID:** `APS-MESSAGE-HUB-MIGRATION-001`
+- **Name:** Message Hub Control Plane Migration Planning
+- **State:** `PLANNING_COMPLETE / BROWSER_REVIEW_PENDING`
+- **Workflow state:** `IN_PROGRESS`
 - **Authoritative Issue Tracker:** `https://github.com/carllx/agent-project-system/issues/9`
 - **Architecture Model:** Message Hub 作为 APS 通信与事件控制面中枢，OpenCLI 作为外部 Browser Adapter，Minimal Bridge 作为回滚基线。
 - **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
@@ -65,17 +68,17 @@ Agent Project System
 - **Validation:** `scripts/check_docs.py`；`scripts/check_skill_package.py`；`scripts/test_minimal_review_bridge.py`。
 - **PR #8 Status:** `ACCEPTED_POC_REFERENCE` at `83a78fccf7556c647d8cf0ae8f59a021e38e4716`（Draft，不直接合入）。
 - **PR #3 Status:** `ROLLBACK_CONTROL_BASELINE` at `d7651f95059694047d2a7e280afe761264a54058`（保持隔离）。
+- **Objective:** 完成 Message Hub 控制面从 PoC 到正式生产模块的架构规范、模块划分、状态机定义、回滚策略及分阶段迁移规划。
+- **Scope:** 规划与架构文档编制、启动文档对齐与状态修复；不包含生产代码实现或 PR 合入。
 
-## Current Work Item Closeout
+## Historical Completed Work Item: REAL-AGENT-REVIEW-LOOP-MVP-001
 
-- **ID:** `APS-MESSAGE-HUB-MIGRATION-001`
-- **Name:** Message Hub Control Plane Migration Planning
+- **ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001`
+- **Name:** Real Agent Review Loop MVP
 - **State:** `ACHIEVED`
 - **Workflow state:** `COMPLETED`
-- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
-- **Execution Packet state:** `COMPLETED`
 - **Review Request ID:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003-R2-FINAL`
-- **ACTIVE_EXECUTION_PACKET_POINTER:** `docs/references/current-execution-packet.md`
+- **Historical Execution Packet:** `docs/references/real-agent-review-loop-mvp-001-acceptance-manual.md`
 - **Execution Packet state:** `COMPLETED`
 - **Active Acceptance Run:** `REAL-AGENT-REVIEW-LOOP-MVP-001-ACCEPTANCE-MANUAL-003` (COMPLETED)
 - **Phase baseline:** `74b210fac65e1eb7681ff40f53c35714c7569681`（`OPENCLI-SESSION-DISCOVERY-001` closeout）。
