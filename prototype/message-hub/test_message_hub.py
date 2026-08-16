@@ -492,6 +492,206 @@ class TestOpenCLIBrowserConnector(unittest.TestCase):
         self.assertEqual(res_retry["status"], "SKIPPED_ALREADY_ATTEMPTED")
         self.assertEqual(len(calls), 1)
 
+    def test_atomic_send_claim_concurrency(self):
+        """
+        Prove that when two competing workers execute simultaneously against the same DB & request,
+        exactly ONE acquires the claim and invokes OpenCLI runner (RUNNER_CALLS == 1).
+        """
+        thread_id = "th-conn-concurrent"
+        req_id = "req-conn-concurrent"
+        conv_id = "conv-concurrent"
+
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Concurrent test message",
+            artifact_id="art-conc",
+        )
+
+        runner_call_count = 0
+        call_lock = threading.Lock()
+
+        def concurrent_runner(cmd, timeout):
+            nonlocal runner_call_count
+            with call_lock:
+                runner_call_count += 1
+            time.sleep(0.05)
+            return 0, '{"Status": "Success"}', ""
+
+        conn1 = OpenCLIBrowserConnector(storage=Storage(self.db_path), connector_id="worker-1", opencli_runner=concurrent_runner)
+        conn2 = OpenCLIBrowserConnector(storage=Storage(self.db_path), connector_id="worker-2", opencli_runner=concurrent_runner)
+
+        results = []
+        def worker_target(connector):
+            r = connector.process_review_request(thread_id, req_id, conv_id)
+            results.append(r)
+
+        t1 = threading.Thread(target=worker_target, args=(conn1,))
+        t2 = threading.Thread(target=worker_target, args=(conn2,))
+
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        self.assertEqual(runner_call_count, 1)
+        statuses = {r["status"] for r in results}
+        self.assertIn("EXTERNAL_SEND_COMPLETED", statuses)
+        self.assertIn("SKIPPED_ALREADY_ATTEMPTED", statuses)
+
+    def test_browser_review_authority_parsing(self):
+        """
+        Tests proving that review authority is strictly parsed from Browser response text:
+        - arbitrary text or caller approval without valid JSON is rejected
+        - mismatched request_id / artifact_id is rejected
+        - invalid decision choice is rejected
+        - valid exact response creates authoritative RESPONSE_READY
+        """
+        connector = OpenCLIBrowserConnector(storage=self.storage)
+        thread_id = "th-authority-1"
+        req_id = "req-auth-1"
+        art_id = "art-auth-1"
+        conv_id = "conv-auth-1"
+
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Review request",
+            artifact_id=art_id,
+        )
+
+        # 1. Arbitrary non-JSON text -> rejected
+        with self.assertRaises(ValueError) as ctx:
+            connector.ingest_browser_review_response(
+                thread_id=thread_id,
+                request_id=req_id,
+                expected_artifact_id=art_id,
+                expected_conversation_id=conv_id,
+                browser_raw_text="Looks good to me, I approve.",
+                provenance_conversation_id=conv_id,
+            )
+        self.assertIn("No valid JSON review verdict", str(ctx.exception))
+
+        # 2. Conversation provenance mismatch -> rejected
+        with self.assertRaises(ValueError) as ctx:
+            connector.ingest_browser_review_response(
+                thread_id=thread_id,
+                request_id=req_id,
+                expected_artifact_id=art_id,
+                expected_conversation_id=conv_id,
+                browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```',
+                provenance_conversation_id="conv-WRONG",
+            )
+        self.assertIn("Conversation provenance mismatch", str(ctx.exception))
+
+        # 3. Wrong request_id in verdict -> rejected
+        with self.assertRaises(ValueError) as ctx:
+            connector.ingest_browser_review_response(
+                thread_id=thread_id,
+                request_id=req_id,
+                expected_artifact_id=art_id,
+                expected_conversation_id=conv_id,
+                browser_raw_text=f'```json\n{{"request_id": "req-WRONG", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "ok"}}\n```',
+                provenance_conversation_id=conv_id,
+            )
+        self.assertIn("request_id mismatch", str(ctx.exception))
+
+        # 4. Invalid decision choice -> rejected
+        with self.assertRaises(ValueError) as ctx:
+            connector.ingest_browser_review_response(
+                thread_id=thread_id,
+                request_id=req_id,
+                expected_artifact_id=art_id,
+                expected_conversation_id=conv_id,
+                browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "ACCEPTED", "feedback": "ok"}}\n```',
+                provenance_conversation_id=conv_id,
+            )
+        self.assertIn("Invalid decision 'ACCEPTED'", str(ctx.exception))
+
+        # 5. Valid exact verdict -> accepted & emitted
+        res = connector.ingest_browser_review_response(
+            thread_id=thread_id,
+            request_id=req_id,
+            expected_artifact_id=art_id,
+            expected_conversation_id=conv_id,
+            browser_raw_text=f'```json\n{{"request_id": "{req_id}", "artifact_id": "{art_id}", "decision": "APPROVE", "feedback": "Strict validation passed.", "next_steps": []}}\n```',
+            provenance_conversation_id=conv_id,
+        )
+        self.assertEqual(res["verdict"]["decision"], "APPROVE")
+        self.assertEqual(res["event"]["event_type"], "RESPONSE_READY")
+        self.assertEqual(res["event"]["payload"]["decision"], "APPROVE")
+
+    def test_independent_sse_connector_continuation(self):
+        """
+        Prove that an independent SSE-driven connector runner processes requests asynchronously
+        such that the IDE submit ACK returns BEFORE the fake OpenCLI runner completes.
+        """
+        from opencli_connector import run_sse_connector_worker
+        port = 8991
+        server = HubServer(host="127.0.0.1", port=port, db_path=self.db_path)
+        server.start()
+        time.sleep(0.1)
+
+        try:
+            thread_id = "th-sse-async"
+            req_id = "req-sse-async"
+            art_id = "art-sse-async"
+            conv_id = "conv-sse-async"
+
+            ack_returned_at = 0.0
+            send_finished_at = 0.0
+
+            def slow_runner(cmd, timeout):
+                nonlocal send_finished_at
+                time.sleep(0.3)  # Deliberate slow execution
+                send_finished_at = time.time()
+                return 0, '{"Status": "Success"}', ""
+
+            connector = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=slow_runner)
+
+            # Start independent SSE connector worker in background
+            worker_thread = threading.Thread(
+                target=run_sse_connector_worker,
+                kwargs={
+                    "hub_url": f"http://127.0.0.1:{port}",
+                    "thread_id": thread_id,
+                    "conversation_id": conv_id,
+                    "storage": self.storage,
+                    "connector": connector,
+                    "max_events": 1,
+                },
+                daemon=True,
+            )
+            worker_thread.start()
+            time.sleep(0.1)  # Allow SSE stream connection to establish
+
+            # IDE submits request
+            ide = IDEClient(hub_url=f"http://127.0.0.1:{port}")
+            ack = ide.submit_review_request(
+                thread_id=thread_id,
+                message_id=req_id,
+                artifact_id=art_id,
+                content="Asynchronous event test",
+            )
+            ack_returned_at = time.time()
+
+            self.assertEqual(ack["status"], "ACK")
+            self.assertTrue(ack["is_new"])
+
+            # Wait for worker to finish slow runner
+            worker_thread.join(timeout=3.0)
+
+            self.assertGreater(send_finished_at, 0.0)
+            self.assertLess(ack_returned_at, send_finished_at)  # ACK returned before send finished
+        finally:
+            server.stop()
+
 
 if __name__ == "__main__":
     unittest.main()

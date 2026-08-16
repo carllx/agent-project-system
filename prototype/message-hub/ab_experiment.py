@@ -45,7 +45,7 @@ sys.path.insert(0, str(SKILL_DIR))
 from storage import Storage
 from server import HubServer
 from client_ide import IDEClient
-from opencli_connector import OpenCLIBrowserConnector
+from opencli_connector import OpenCLIBrowserConnector, run_sse_connector_worker
 from minimal_bridge import dispatch_review, load_receipt, get_canonical_receipt_dir
 
 
@@ -98,9 +98,9 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
     }
 
     # -------------------------------------------------------------
-    # PATH B: APS Message Hub + Real OpenCLI Browser Connector
+    # PATH B: APS Message Hub + Independent Event-Driven OpenCLI Connector
     # -------------------------------------------------------------
-    print("\n>>> [PATH B] Running APS Message Hub + Real OpenCLI Connector...")
+    print("\n>>> [PATH B] Running APS Message Hub + Independent Event-Driven OpenCLI Connector...")
     tmp_dir = tempfile.mkdtemp()
     db_path = os.path.join(tmp_dir, "ab_hub.db")
     port = 8995
@@ -113,9 +113,9 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
         storage = Storage(db_path)
         connector = OpenCLIBrowserConnector(storage=storage)
 
-        thread_id = f"th-ab-{int(time.time())}"
-        req_id_b = f"APS-AB-HUB-{int(time.time())}"
-        art_id_b = f"art-ab-hub-{int(time.time())}"
+        thread_id = f"th-ab-final-{int(time.time())}"
+        req_id_b = f"APS-AB-HUB-FINAL-{int(time.time())}"
+        art_id_b = f"art-ab-hub-final-{int(time.time())}"
         prompt_b = f"""Please review the following Message Hub vertical slice payload:
 Artifact ID: {art_id_b}
 Request ID: {req_id_b}
@@ -124,6 +124,24 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
 {{"request_id": "{req_id_b}", "artifact_id": "{art_id_b}", "decision": "APPROVE", "feedback": "Message Hub control plane verified.", "next_steps": []}}
 ```"""
 
+        # Start independent event-driven connector worker
+        stop_worker = threading.Event()
+        worker_thread = threading.Thread(
+            target=run_sse_connector_worker,
+            kwargs={
+                "hub_url": f"http://127.0.0.1:{port}",
+                "thread_id": thread_id,
+                "conversation_id": conversation_id,
+                "storage": storage,
+                "connector": connector,
+                "stop_event": stop_worker,
+                "max_events": 1,
+            },
+            daemon=True
+        )
+        worker_thread.start()
+        time.sleep(0.1)  # SSE stream established
+
         # H1. IDE submits review request -> immediate durable ACK
         t0_submit = time.perf_counter()
         ack = ide.submit_review_request(
@@ -131,23 +149,15 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
             message_id=req_id_b,
             artifact_id=art_id_b,
             content=prompt_b,
-            metadata={"experiment": "Path-B"}
+            metadata={"experiment": "Path-B-Event-Driven"}
         )
         t_ack_ms = (time.perf_counter() - t0_submit) * 1000
         print(f"    H1. IDE submit -> Durable Hub ACK: {t_ack_ms:.2f} ms (is_new={ack['is_new']}, status={ack['status']})")
         print(f"    H6. IDE main loop unblocked immediately: YES (blocked only {t_ack_ms:.2f} ms vs baseline {t_elapsed_a*1000:.2f} ms)")
 
-        # H2 / H3. Connector processes review request asynchronously
-        print("    [Connector] Initiating background durable external send...")
-        t0_conn = time.perf_counter()
-        conn_res = connector.process_review_request(
-            thread_id=thread_id,
-            request_id=req_id_b,
-            conversation_id=conversation_id,
-            timeout=30.0
-        )
-        t_conn_ms = (time.perf_counter() - t0_conn) * 1000
-        print(f"    H3. Connector send execution duration: {t_conn_ms:.2f} ms (status={conn_res['status']})")
+        # Wait for independent worker to process from SSE stream
+        print("    [Worker] Independent SSE worker processing from REQUEST_CREATED event...")
+        worker_thread.join(timeout=35.0)
 
         # H7. Verify No-Resend safety invariant
         dup_res = connector.process_review_request(
@@ -167,8 +177,7 @@ Instruction: Confirm receipt with APPROVE / REVISE / BLOCKED.
             "artifact_id": art_id_b,
             "conversation_id": conversation_id,
             "ide_ack_ms": t_ack_ms,
-            "connector_send_ms": t_conn_ms,
-            "connector_status": conn_res["status"],
+            "event_driven_worker": True,
             "no_resend_status": dup_res["status"],
             "event_sequence": event_types
         }

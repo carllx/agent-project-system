@@ -3,22 +3,98 @@ APS Message Hub - Real OpenCLI Browser Connector (Phase 2).
 
 Responsibilities:
 1. Consume durable review.request from Message Hub for a given thread.
-2. Durably record CONNECTOR_ACCEPTED.
-3. Record EXTERNAL_SEND_ATTEMPTED before invoking OpenCLI.
-4. Enforce strict no-resend: once EXTERNAL_SEND_ATTEMPTED is recorded for a request_id,
-   never re-invoke external send across retries, crashes, or process restarts.
-5. Invocations timeout -> EXTERNAL_SEND_UNKNOWN (failure-honest, never retry).
-6. Ingest single read-only reconciliation if requested, keeping real push ingress classification honest.
+2. Atomically acquire external-send claim in SQLite before invoking OpenCLI.
+3. Enforce strict no-resend: exactly one worker acquires claim; all others return SKIPPED_ALREADY_ATTEMPTED.
+4. Invocations timeout -> EXTERNAL_SEND_UNKNOWN (failure-honest, never retry).
+5. Ingest browser responses strictly parsing Browser review decision (APPROVE | REVISE | BLOCKED)
+   and validating exact request_id, artifact_id, and conversation provenance. Caller-supplied approval is rejected.
+6. Provide event-driven SSE connector runner for decoupled continuation.
 """
 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
+import urllib.request
 from typing import Any, Callable, Dict, Optional
 
 from storage import Storage
+
+LEGAL_DECISIONS = {"APPROVE", "REVISE", "BLOCKED"}
+
+
+def parse_strict_browser_response(
+    raw_text: str,
+    expected_request_id: str,
+    expected_artifact_id: str,
+) -> Dict[str, Any]:
+    """
+    Parses and strictly verifies Browser Review Lead response JSON.
+    Rejects malformed JSON, mismatched request_id / artifact_id, and invalid decisions.
+    """
+    if not isinstance(raw_text, str) or not raw_text.strip():
+        raise ValueError("Browser response is empty or not text")
+
+    exp_req = expected_request_id.strip()
+    exp_art = expected_artifact_id.strip()
+    text = raw_text.strip()
+
+    # Match fenced JSON blocks
+    fenced_blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    text_without_fences = re.sub(r"```(?:json)?\s*\{.*?\}\s*```", "", text, flags=re.DOTALL)
+    bare_objects = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text_without_fences, re.DOTALL)
+
+    if len(fenced_blocks) == 1:
+        if len(bare_objects) > 0:
+            raise ValueError("Ambiguous response: found fenced JSON block and bare JSON object")
+        candidate_json = fenced_blocks[0]
+    elif len(fenced_blocks) > 1:
+        raise ValueError(f"Ambiguous response: found {len(fenced_blocks)} fenced JSON blocks")
+    else:
+        if len(bare_objects) == 1:
+            candidate_json = bare_objects[0]
+        elif len(bare_objects) > 1:
+            raise ValueError(f"Ambiguous response: found {len(bare_objects)} bare JSON objects")
+        else:
+            raise ValueError("No valid JSON review verdict found in Browser response text")
+
+    try:
+        parsed = json.loads(candidate_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Malformed JSON in browser response: {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("Browser response JSON must be a single JSON object")
+
+    req_id = parsed.get("request_id")
+    if not isinstance(req_id, str) or req_id != exp_req:
+        raise ValueError(f"request_id mismatch: expected '{exp_req}', got '{req_id}'")
+
+    art_id = parsed.get("artifact_id")
+    if not isinstance(art_id, str) or art_id != exp_art:
+        raise ValueError(f"artifact_id mismatch: expected '{exp_art}', got '{art_id}'")
+
+    decision = parsed.get("decision")
+    if decision not in LEGAL_DECISIONS:
+        raise ValueError(f"Invalid decision '{decision}'. Must be one of {sorted(LEGAL_DECISIONS)}")
+
+    feedback = parsed.get("feedback")
+    if not isinstance(feedback, str) or not feedback.strip():
+        raise ValueError("feedback must be a non-empty string in browser response")
+
+    next_steps = parsed.get("next_steps") or []
+    if not isinstance(next_steps, list):
+        raise ValueError("next_steps must be a list of strings")
+
+    return {
+        "request_id": exp_req,
+        "artifact_id": exp_art,
+        "decision": decision,
+        "feedback": feedback.strip(),
+        "next_steps": [str(s).strip() for s in next_steps],
+    }
 
 
 class OpenCLIBrowserConnector:
@@ -63,7 +139,6 @@ class OpenCLIBrowserConnector:
     def _default_opencli_runner(cls, cmd: list[str], timeout: float) -> tuple[int, str, str]:
         try:
             base_cmd = cls._resolve_opencli_command()
-            # cmd passed in is like ["chatgpt", "send", ...] or ["opencli", "chatgpt", ...]
             if cmd and cmd[0] == "opencli":
                 full_cmd = [*base_cmd, *cmd[1:]]
             else:
@@ -90,14 +165,6 @@ class OpenCLIBrowserConnector:
         except Exception as exc:
             return 1, "", str(exc)
 
-    def is_send_attempted(self, thread_id: str, request_id: str) -> bool:
-        """Check if EXTERNAL_SEND_ATTEMPTED has already been recorded in durable events."""
-        events = self.storage.get_events(thread_id)
-        for ev in events:
-            if ev.get("message_id") == request_id and ev.get("event_type") == "EXTERNAL_SEND_ATTEMPTED":
-                return True
-        return False
-
     def process_review_request(
         self,
         thread_id: str,
@@ -106,7 +173,7 @@ class OpenCLIBrowserConnector:
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Processes one specific review request durably with at most one external send attempt.
+        Atomically claims and processes one specific review request durably with at most one external send attempt.
         """
         cmd_timeout = timeout or self.default_timeout
 
@@ -126,12 +193,17 @@ class OpenCLIBrowserConnector:
 
         artifact_id = target_msg.get("artifact_id")
 
-        # 1. Check if already attempted -> NO-RESEND invariant
-        if self.is_send_attempted(thread_id, request_id):
+        # 1. ATOMIC SQLite CLAIM: exactly one worker acquires claim for request_id
+        acquired = self.storage.try_claim_external_send(
+            thread_id=thread_id,
+            request_id=request_id,
+            claimed_by=self.connector_id,
+        )
+        if not acquired:
             return {
                 "status": "SKIPPED_ALREADY_ATTEMPTED",
                 "request_id": request_id,
-                "message": "External send was already attempted for this request. Refusing to resend.",
+                "message": "External send claim already held for this request. Refusing to resend.",
             }
 
         # 2. Record CONNECTOR_ACCEPTED
@@ -147,7 +219,7 @@ class OpenCLIBrowserConnector:
             },
         )
 
-        # 3. CRITICAL: Durably record EXTERNAL_SEND_ATTEMPTED BEFORE invoking OpenCLI
+        # 3. Durably record EXTERNAL_SEND_ATTEMPTED BEFORE invoking OpenCLI
         t_attempt = time.time()
         self.storage.record_event(
             thread_id=thread_id,
@@ -163,7 +235,6 @@ class OpenCLIBrowserConnector:
         )
 
         # 4. Invoke OpenCLI send (submit-only)
-        # Format exact prompt payload
         prompt_content = target_msg["content"]
         cmd = [
             "opencli",
@@ -243,23 +314,42 @@ class OpenCLIBrowserConnector:
             "stdout": stdout,
         }
 
-    def ingest_response_from_browser_text(
+    def ingest_browser_review_response(
         self,
         thread_id: str,
         request_id: str,
-        artifact_id: str,
-        response_text: str,
-        decision: str = "ACCEPTED",
+        expected_artifact_id: str,
+        expected_conversation_id: str,
+        browser_raw_text: str,
+        provenance_conversation_id: str,
     ) -> Dict[str, Any]:
         """
-        Durably ingest a browser review response, validating exact request & artifact binding,
-        creating review.response message and emitting RESPONSE_READY.
+        Durably ingests an authoritative Browser Review response.
+        Enforces conversation provenance and strict verdict parsing (APPROVE | REVISE | BLOCKED).
+        Caller-supplied approval is rejected.
         """
+        if provenance_conversation_id != expected_conversation_id:
+            raise ValueError(
+                f"Conversation provenance mismatch: expected '{expected_conversation_id}', got '{provenance_conversation_id}'"
+            )
+
+        # Parse verdict strictly from browser text
+        parsed_verdict = parse_strict_browser_response(
+            raw_text=browser_raw_text,
+            expected_request_id=request_id,
+            expected_artifact_id=expected_artifact_id,
+        )
+
+        decision = parsed_verdict["decision"]
         resp_msg_id = f"resp-{request_id}"
         resp_payload = {
             "decision": decision,
-            "reviewed_artifact": artifact_id,
+            "feedback": parsed_verdict["feedback"],
+            "next_steps": parsed_verdict["next_steps"],
+            "reviewed_artifact": expected_artifact_id,
+            "conversation_id": expected_conversation_id,
         }
+
         msg, is_new, ev = self.storage.create_message(
             message_id=resp_msg_id,
             thread_id=thread_id,
@@ -267,8 +357,8 @@ class OpenCLIBrowserConnector:
             recipient="ide:agent",
             message_type="review.response",
             reply_to=request_id,
-            artifact_id=artifact_id,
-            content=response_text,
+            artifact_id=expected_artifact_id,
+            content=browser_raw_text,
             metadata=resp_payload,
             status="COMPLETED",
         )
@@ -280,8 +370,46 @@ class OpenCLIBrowserConnector:
             payload={
                 "response_id": resp_msg_id,
                 "request_id": request_id,
-                "artifact_id": artifact_id,
+                "artifact_id": expected_artifact_id,
                 "decision": decision,
+                "conversation_id": expected_conversation_id,
             },
         )
-        return {"message": msg, "event": ready_ev}
+        return {"message": msg, "event": ready_ev, "verdict": parsed_verdict}
+
+
+def run_sse_connector_worker(
+    hub_url: str,
+    thread_id: str,
+    conversation_id: str,
+    storage: Storage,
+    connector: OpenCLIBrowserConnector,
+    stop_event: Optional[Any] = None,
+    max_events: int = 1,
+):
+    """
+    Subscribes to Hub SSE stream and event-drivenly triggers connector processing
+    upon receiving REQUEST_CREATED. Never uses while-sleep database polling.
+    """
+    stream_url = f"{hub_url.rstrip('/')}/api/threads/{thread_id}/events/stream"
+    req = urllib.request.Request(stream_url, headers={"Accept": "text/event-stream"})
+
+    processed_count = 0
+    with urllib.request.urlopen(req, timeout=15.0) as resp:
+        while processed_count < max_events and (stop_event is None or not stop_event.is_set()):
+            line = resp.readline().decode("utf-8")
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith("data:"):
+                raw_json = line[5:].strip()
+                event = json.loads(raw_json)
+                if event.get("event_type") == "REQUEST_CREATED":
+                    req_id = event.get("message_id")
+                    if req_id:
+                        connector.process_review_request(
+                            thread_id=thread_id,
+                            request_id=req_id,
+                            conversation_id=conversation_id,
+                        )
+                        processed_count += 1

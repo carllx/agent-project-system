@@ -75,8 +75,37 @@ class Storage:
                         )
                     """)
 
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS send_claims (
+                            request_id TEXT PRIMARY KEY,
+                            thread_id TEXT NOT NULL,
+                            claimed_by TEXT NOT NULL,
+                            claimed_at REAL NOT NULL,
+                            FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
+                        )
+                    """)
+
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id)")
                     conn.execute("CREATE INDEX IF NOT EXISTS idx_events_thread ON events(thread_id)")
+            finally:
+                conn.close()
+
+    def try_claim_external_send(self, thread_id: str, request_id: str, claimed_by: str) -> bool:
+        """
+        Atomically attempts to acquire the external-send claim for request_id in SQLite.
+        Returns True if acquired (first and only claimant), False if already claimed.
+        """
+        with self._lock:
+            self.ensure_thread(thread_id)
+            conn = self._get_connection()
+            try:
+                now = time.time()
+                with conn:
+                    cursor = conn.execute("""
+                        INSERT OR IGNORE INTO send_claims (request_id, thread_id, claimed_by, claimed_at)
+                        VALUES (?, ?, ?, ?)
+                    """, (request_id, thread_id, claimed_by, now))
+                    return cursor.rowcount == 1
             finally:
                 conn.close()
 
