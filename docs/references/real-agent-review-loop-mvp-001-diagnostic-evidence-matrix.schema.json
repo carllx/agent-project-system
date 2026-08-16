@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-project-system://REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001/evidence-matrix",
+  "title": "Diagnostic Batch Evidence Matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "BATCH_ID",
+    "WORK_ITEM_ID",
+    "WHAT_WAS_UNKNOWN_BEFORE",
+    "HYPOTHESES",
+    "EXPERIMENTS",
+    "BUDGET",
+    "FINAL_SYNTHESIS"
+  ],
+  "properties": {
+    "BATCH_ID": {"const": "REAL-AGENT-REVIEW-LOOP-MVP-001-DIAG-BATCH-001"},
+    "WORK_ITEM_ID": {"const": "REAL-AGENT-REVIEW-LOOP-MVP-001"},
+    "WHAT_WAS_UNKNOWN_BEFORE": {"type": "string", "minLength": 1},
+    "HYPOTHESES": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["HYPOTHESIS_ID", "STATEMENT", "STATUS", "EVIDENCE_PATHS"],
+        "properties": {
+          "HYPOTHESIS_ID": {"type": "string", "pattern": "^H[1-9][0-9]*$"},
+          "STATEMENT": {"type": "string", "minLength": 1},
+          "STATUS": {"enum": ["ACTIVE", "DISPROVEN", "INCONCLUSIVE", "BLOCKED"]},
+          "EVIDENCE_PATHS": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        }
+      }
+    },
+    "EXPERIMENTS": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "HYPOTHESIS_ID",
+          "EXPERIMENT_ID",
+          "QUESTION",
+          "PRECONDITIONS",
+          "CONTROL_VARIABLES",
+          "PROCEDURE",
+          "RAW_EVIDENCE_PATHS",
+          "RESULT",
+          "WHAT_RESULT_MEANS",
+          "ALTERNATIVE_EXPLANATIONS",
+          "CONFIDENCE",
+          "CONTAMINATION_STATUS",
+          "NEXT_BEST_EXPERIMENT"
+        ],
+        "properties": {
+          "HYPOTHESIS_ID": {"type": "string", "minLength": 1},
+          "EXPERIMENT_ID": {"type": "string", "minLength": 1},
+          "QUESTION": {"type": "string", "minLength": 1},
+          "PRECONDITIONS": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "CONTROL_VARIABLES": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "PROCEDURE": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "RAW_EVIDENCE_PATHS": {"type": "array", "items": {"type": "string", "minLength": 1}},
+          "RESULT": {"enum": ["PASS", "FAIL", "INCONCLUSIVE", "BLOCKED"]},
+          "WHAT_RESULT_MEANS": {"type": "string", "minLength": 1},
+          "ALTERNATIVE_EXPLANATIONS": {"type": "array", "items": {"type": "string"}},
+          "CONFIDENCE": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+          "CONTAMINATION_STATUS": {"enum": ["CLEAN", "CONTAMINATED", "UNKNOWN"]},
+          "NEXT_BEST_EXPERIMENT": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "BUDGET": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "MAX_HYPOTHESES",
+        "MAX_RUNTIME_PROBES",
+        "MAX_BROWSER_WRITES",
+        "MAX_SHARED_RUNTIME_WRITES",
+        "MAX_SUBAGENTS",
+        "MAX_BATCH_ROUNDS",
+        "MAX_WALLCLOCK_MINUTES",
+        "USED_RUNTIME_PROBES",
+        "USED_BROWSER_WRITES",
+        "USED_SHARED_RUNTIME_WRITES",
+        "USED_SUBAGENTS",
+        "USED_BATCH_ROUNDS",
+        "USED_WALLCLOCK_MINUTES"
+      ],
+      "properties": {
+        "MAX_HYPOTHESES": {"const": 10},
+        "MAX_RUNTIME_PROBES": {"const": 3},
+        "MAX_BROWSER_WRITES": {"const": 2},
+        "MAX_SHARED_RUNTIME_WRITES": {"const": 4},
+        "MAX_SUBAGENTS": {"const": 5},
+        "MAX_BATCH_ROUNDS": {"const": 3},
+        "MAX_WALLCLOCK_MINUTES": {"const": 60},
+        "USED_RUNTIME_PROBES": {"type": "integer", "minimum": 0, "maximum": 3},
+        "USED_BROWSER_WRITES": {"type": "integer", "minimum": 0, "maximum": 2},
+        "USED_SHARED_RUNTIME_WRITES": {"type": "integer", "minimum": 0, "maximum": 4},
+        "USED_SUBAGENTS": {"type": "integer", "minimum": 0, "maximum": 5},
+        "USED_BATCH_ROUNDS": {"type": "integer", "minimum": 0, "maximum": 3},
+        "USED_WALLCLOCK_MINUTES": {"type": "number", "minimum": 0, "maximum": 60}
+      }
+    },
+    "FINAL_SYNTHESIS": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "BATCH_RESULT",
+        "WHAT_IS_NOW_PROVEN",
+        "WHAT_IS_DISPROVEN",
+        "WHAT_REMAINS_INCONCLUSIVE",
+        "NEW_PROBLEMS_DISCOVERED",
+        "BEST_CURRENT_ROOT_CAUSE",
+        "ROOT_CAUSE_CONFIDENCE",
+        "PRODUCT_CHANGE_REQUIRED",
+        "NEXT_HIGHEST_VALUE_ACTION",
+        "CONTAMINATION_STATUS",
+        "PROTOCOL_VIOLATIONS"
+      ],
+      "properties": {
+        "BATCH_RESULT": {"enum": ["PASS", "FAIL", "INCONCLUSIVE", "BLOCKED"]},
+        "WHAT_IS_NOW_PROVEN": {"type": "array", "items": {"type": "string"}},
+        "WHAT_IS_DISPROVEN": {"type": "array", "items": {"type": "string"}},
+        "WHAT_REMAINS_INCONCLUSIVE": {"type": "array", "items": {"type": "string"}},
+        "NEW_PROBLEMS_DISCOVERED": {"type": "array", "items": {"type": "string"}},
+        "BEST_CURRENT_ROOT_CAUSE": {"type": "string", "minLength": 1},
+        "ROOT_CAUSE_CONFIDENCE": {"enum": ["NONE", "LOW", "MEDIUM", "HIGH"]},
+        "PRODUCT_CHANGE_REQUIRED": {"enum": ["YES", "NO", "INCONCLUSIVE"]},
+        "NEXT_HIGHEST_VALUE_ACTION": {"type": "string", "minLength": 1},
+        "CONTAMINATION_STATUS": {"enum": ["CLEAN", "CONTAMINATED", "UNKNOWN"]},
+        "PROTOCOL_VIOLATIONS": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

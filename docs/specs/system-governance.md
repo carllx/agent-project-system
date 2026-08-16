@@ -23,9 +23,9 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 长期 Markdown 只允许以下类型：
 
-- `AGENTS.md`、`README.md` 和可选的根目录 `CLAUDE.md`
+- `AGENTS.md`、`README.md`、`CONTEXT.md` 和可选的根目录 `CLAUDE.md`
 - `docs/index.md`、`docs/current.md`
-- `docs/specs/*.md`、`docs/adr/*.md`、`docs/references/*.md`
+- `docs/specs/*.md`、`docs/adr/*.md`、`docs/references/*.md`、`docs/agents/*.md`
 - `skills/*/SKILL.md`、`skills/*/assets/*.md`
 
 未登记的 Markdown 不属于项目知识系统。不得创建 `old`、`final`、`v2`、`backup`、日期 Handoff、Session Summary 或 Next Steps 文件来保存历史。
@@ -47,6 +47,16 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 运行模块和随包模板资产是允许进入仓库的产品文件，但必须登记并保持边界清楚。工具适配文件只能作为薄适配层，引用现有权威文档；不得复制整套规则或成为新的事实源。第一版不预建未经批准的模块。
 
+## Engineering skills and process authority
+
+本仓库 Engineering Skills（如 setup-matt-pocock-skills、domain-modeling、triage 等）基准配置对齐：
+
+- **MAT_REPO:** `https://github.com/mattpocock/skills`
+- **MAT_REF:** `8b78b531ab965735c5dc74f6f7a219e1e37326df`
+- **TARGET_SKILL:** `skills/engineering/setup-matt-pocock-skills/SKILL.md`
+
+`docs/agents/` 存放针对 Engineering Skills 的配置适配文档（如 `issue-tracker.md`、`domain.md`、`triage-labels.md`），`CONTEXT.md` 存放全局领域语言词汇表与系统边界定义。
+
 ## Skill source and deployment model
 
 四个位置必须分开：
@@ -58,9 +68,21 @@ Agent Project System 的北极星是建立一套与具体 IDE 和 Transport 解�
 
 源 Skill 包必须携带运行所需的模板和资源，不得依赖源仓库的 `docs/`、根目录资产或固定绝对路径。目标项目无需克隆 Source Repository，也不要求采用 Agent Project System 的目录结构。安装和更新必须从源包进行并验证完整性，不得静默覆盖安装位置中的未知修改。项目级同名 Skill 与用户级 Skill 不得无意并存；发现同名来源时必须显式处理版本和选择，不能假设静默覆盖。
 
+本仓库的 Antigravity 项目级 runtime copy 只允许通过 `scripts/sync_skill_runtime.py` 从 `skills/research-review-lead/` 单向更新到显式目标。工具只覆盖源包声明的九个文件，遇到未知目标文件即停止，并在写入后验证 VERSION 与每个声明文件的 SHA-256；`.agents/` 是本地部署产物，不是 Product source 或 Git 事实源。
+
 ## User communication and decision gates
 
 与用户沟通使用白话并尽量减少打扰。只有目标方向、成本付费、账号权限、隐私数据、文件公开上传、不可逆操作、重大安全风险或必须接受降级时请求决定。所有决策请求必须提供三个白话选项和一个明确推荐。
+
+## Source file maintainability
+
+- 推荐第一方源码单文件保持精简（例如约 600 行以内）作为可维护性软性关注指标，但不作为机械硬性合并门禁。
+- 架构以 Small Interface + Deep Implementation 为指导，避免无意义的浅层分拆或机械截断。
+
+## Fail-fast validation execution
+
+- 任何权威验证命令返回非零 exit code 或 TIMED_OUT 时，必须立即 Terminal Stop。
+- 严禁忽略前置失败继续执行后续测试或命令，严禁使用忽略退出码的 shell 串联，严禁生成虚假的 GREEN Review Packet。
 
 ## Safety and information exchange
 

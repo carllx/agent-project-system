@@ -13,6 +13,11 @@ Fill the Common Core and only the extension for the role handing off.
 
 ## COMMON CORE
 
+- **REPOSITORY:** [owner/name or remote URL when Git is used]
+- **HANDOFF_COMMIT_SHA:** [exact immutable ref for recovery, or Not applicable]
+- **START_HERE:** [repository entry point, normally README.md]
+- **CURRENT_STATE_FILE:** [authoritative current-state path]
+- **TARGET_ROLE:** [Browser Lead / Product Agent / Lab Agent / other]
 - **Work Item:** [identifier and name; must match WORK_ITEM_ID]
 - **Conversation ID:** [if available]
 - **Handoff reason:** [why continuity is no longer reliable]
@@ -42,7 +47,7 @@ Fill the Common Core and only the extension for the role handing off.
 
 ### Authority entry points to read
 
-- [target-project guidance, state, user request, or other minimum context]
+- [minimum paths only; do not copy their project facts into this template]
 
 ## IDE AGENT EXTENSION
 

@@ -11,7 +11,6 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "scripts" / "check_skill_package.py"
@@ -19,146 +18,97 @@ SPEC = importlib.util.spec_from_file_location("check_skill_package", CHECKER)
 assert SPEC and SPEC.loader
 CHECKER_MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER_MODULE)
+SYNC_SCRIPT = ROOT / "scripts" / "sync_skill_runtime.py"
+SYNC_SPEC = importlib.util.spec_from_file_location("sync_skill_runtime", SYNC_SCRIPT)
+assert SYNC_SPEC and SYNC_SPEC.loader
+SYNC_MODULE = importlib.util.module_from_spec(SYNC_SPEC)
+SYNC_SPEC.loader.exec_module(SYNC_MODULE)
 
 
 class PackageCheckerExecutionTests(unittest.TestCase):
-    def run_fake_test_file(
-        self, source: str, *, timeout_seconds: float = 5
-    ) -> tuple[int, list[str]]:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "fake_transport_tests.py"
-            path.write_text(source, encoding="utf-8")
-            return CHECKER_MODULE.run_transport_tests(
-                path, timeout_seconds=timeout_seconds
-            )
-
-    def test_names_in_a_tuple_do_not_count_as_tests(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "SCENARIOS = ('test_delivery', 'test_recovery', 'test_deduplication')\n"
-        )
-        self.assertEqual(count, 0)
-        self.assertEqual(
-            errors, ["transport test execution discovered zero test functions"]
-        )
-
-    def test_zero_test_functions_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file("VALUE = 1\n")
-        self.assertEqual(count, 0)
-        self.assertEqual(
-            errors, ["transport test execution discovered zero test functions"]
-        )
-
-    def test_forged_pass_without_execution_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "def test_never_executed():\n"
-            "    raise AssertionError('must fail if called')\n"
-            "\n"
-            "if __name__ == '__main__':\n"
-            "    print('PASS: test_never_executed')\n"
-        )
-        self.assertEqual(count, 1)
-        self.assertTrue(any("exit code 1" in error for error in errors))
-
-    def test_real_test_exception_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "def test_failure():\n"
-            "    raise RuntimeError('real failure')\n"
-        )
-        self.assertEqual(count, 1)
-        self.assertTrue(any("exit code 1" in error for error in errors))
-
-    def test_timeout_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "import time\n"
-            "def test_too_slow():\n"
-            "    time.sleep(1)\n",
-            timeout_seconds=0.05,
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(
-            errors, ["transport test execution timed out after 0.05 seconds"]
-        )
-
-    def test_multiple_tests_are_each_called_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "fake_transport_tests.py"
-            calls = Path(directory) / "calls.txt"
+    def make_runtime_package(self, root: Path, version: str) -> Path:
+        package = root / "research-review-lead"
+        for relative in SYNC_MODULE.PACKAGE_FILES:
+            path = package / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
-                "from pathlib import Path\n"
-                f"CALLS = Path({str(calls)!r})\n"
-                "def record(name):\n"
-                "    with CALLS.open('a', encoding='utf-8') as stream:\n"
-                "        stream.write(name + '\\n')\n"
-                "def test_one():\n"
-                "    record('test_one')\n"
-                "def test_two():\n"
-                "    record('test_two')\n",
+                f"{version}\n" if relative == "VERSION" else f"{relative}:{version}\n",
                 encoding="utf-8",
             )
-            count, errors = CHECKER_MODULE.run_transport_tests(path)
-            self.assertEqual(count, 2)
-            self.assertEqual(errors, [])
+        return package
+
+    def test_runtime_sync_updates_version_and_all_declared_hashes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-sync-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.21")
+            target = self.make_runtime_package(root / "target", "0.4.14")
+
+            report = SYNC_MODULE.sync_runtime(source, target)
+
+            self.assertEqual(report["runtime_version_before"], "0.4.14")
+            self.assertEqual(report["runtime_version_after"], "0.4.21")
+            self.assertTrue(report["hash_parity"])
             self.assertEqual(
-                calls.read_text(encoding="utf-8").splitlines(),
-                ["test_one", "test_two"],
+                SYNC_MODULE.declared_snapshot(source),
+                SYNC_MODULE.declared_snapshot(target),
             )
 
-    def test_async_test_is_explicitly_rejected(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "async def test_async_case():\n"
-            "    return None\n"
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(
-            errors, ["unsupported async transport tests: test_async_case"]
-        )
+    def test_runtime_sync_refuses_unknown_target_files(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-sync-extra-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.21")
+            target = self.make_runtime_package(root / "target", "0.4.14")
+            (target / "unknown.txt").write_text("do not overwrite\n", encoding="utf-8")
 
-    def test_import_failure_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "raise RuntimeError('import failed')\n"
-            "def test_never_imported():\n"
-            "    return None\n"
-        )
-        self.assertEqual(count, 1)
-        self.assertTrue(any("exit code 1" in error for error in errors))
+            with self.assertRaisesRegex(ValueError, "unknown files"):
+                SYNC_MODULE.sync_runtime(source, target)
 
-    def test_missing_runner_result_cannot_pass(self) -> None:
-        count, errors = self.run_fake_test_file(
-            "import os\n"
-            "def test_exits_before_result():\n"
-            "    os._exit(0)\n"
-        )
-        self.assertEqual(count, 1)
-        self.assertEqual(
-            errors, ["transport test runner produced no completion result"]
-        )
+            self.assertEqual((target / "VERSION").read_text(encoding="utf-8"), "0.4.14\n")
 
-    def test_main_success_output_is_preserved(self) -> None:
-        expected_version = (ROOT / "skills" / "research-review-lead" / "VERSION").read_text(
+    def test_runtime_check_only_rejects_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-check-test-") as directory:
+            root = Path(directory)
+            source = self.make_runtime_package(root / "source", "0.4.21")
+            target = self.make_runtime_package(root / "target", "0.4.21")
+            (target / "SKILL.md").write_text("stale\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "hash_mismatches=SKILL.md"):
+                SYNC_MODULE.sync_runtime(source, target, check_only=True)
+
+    def test_rr_lead_init_enforces_fenced_machine_response_contract(self) -> None:
+        rr_init = (
+            ROOT / "skills" / "research-review-lead" / "assets" / "rr-lead-init.md"
+        ).read_text(encoding="utf-8")
+        for marker in CHECKER_MODULE.REQUIRED_RR_INIT_MARKERS:
+            self.assertIn(marker, rr_init)
+
+    def test_skill_markers_present(self) -> None:
+        skill_text = (ROOT / "skills" / "research-review-lead" / "SKILL.md").read_text(
             encoding="utf-8"
-        ).strip()
-        stdout = io.StringIO()
-        with mock.patch.object(
-            CHECKER_MODULE, "run_transport_tests", return_value=(101, [])
-        ), contextlib.redirect_stdout(stdout):
-            exit_code = CHECKER_MODULE.main()
-
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(
-            stdout.getvalue(),
-            "Skill package checks passed: skills/research-review-lead\n"
-            "Entry: one valid SKILL.md with matching name and description.\n"
-            f"Version: {expected_version} (simple SemVer).\n"
-            "Assets: five required files, each with one authoritative copy.\n"
-            "Transport structure: wrapper and experiment protocol module syntax and "
-            "required package markers validated.\n"
-            "Transport tests: executed 101 discovered pure-local tests; the controlled "
-            "runner called every test exactly once without exceptions.\n"
-            "Loop contract: roles, Goal Contract, delivery state, conversation identity, "
-            "and HITL markers exist.\n"
-            "Portability: referenced resources exist; no forbidden runtime dependencies "
-            "found.\n",
         )
+        for marker in CHECKER_MODULE.REQUIRED_SKILL_MARKERS:
+            self.assertIn(
+                marker,
+                skill_text,
+                f"SKILL.md missing required marker: {marker}",
+            )
+
+    def test_repository_hygiene_ignores_agents_runtime_deployment_copy(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="runtime-hygiene-test-") as directory:
+            root = Path(directory)
+            package = root / "skills" / "research-review-lead"
+            runtime = root / ".agents" / "skills" / "research-review-lead"
+            for asset in CHECKER_MODULE.REQUIRED_ASSETS:
+                for destination in (package / "assets" / asset, runtime / "assets" / asset):
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_text("fixture\n", encoding="utf-8")
+
+            with mock.patch.multiple(CHECKER_MODULE, ROOT=root, PACKAGE=package):
+                errors = CHECKER_MODULE.check_repository_hygiene()
+
+            self.assertFalse(
+                any("expected one authoritative" in error for error in errors), errors
+            )
 
     def test_main_failure_exit_code_is_preserved(self) -> None:
         stdout = io.StringIO()
@@ -166,8 +116,6 @@ class PackageCheckerExecutionTests(unittest.TestCase):
             CHECKER_MODULE,
             "check_package_layout",
             return_value=["synthetic package failure"],
-        ), mock.patch.object(
-            CHECKER_MODULE, "run_transport_tests", return_value=(101, [])
         ), contextlib.redirect_stdout(stdout):
             exit_code = CHECKER_MODULE.main()
 
@@ -190,10 +138,8 @@ class PackageCheckerExecutionTests(unittest.TestCase):
                 "ENTRY": package / "SKILL.md",
                 "VERSION": package / "VERSION",
                 "TRANSPORT_SCRIPT": package / "scripts" / "opencli_transport.py",
-                "EXPERIMENT_PROTOCOL_SCRIPT": (
-                    package / "scripts" / "experiment_protocol.py"
-                ),
-                "TRANSPORT_TEST": root / "scripts" / "test_opencli_transport.py",
+                "MINIMAL_BRIDGE_SCRIPT": package / "scripts" / "minimal_bridge.py",
+                "MINIMAL_BRIDGE_TEST": root / "scripts" / "test_minimal_review_bridge.py",
             }
             stdout = io.StringIO()
             with mock.patch.multiple(
@@ -210,11 +156,9 @@ class PackageCheckerExecutionTests(unittest.TestCase):
             "unexpected package file: unexpected.txt",
             "required entry does not exist: SKILL.md",
             "required VERSION file does not exist",
-            "required transport wrapper does not exist: scripts/opencli_transport.py",
-            "required experiment protocol module does not exist: "
-            "scripts/experiment_protocol.py",
-            "required pure-local transport test does not exist: "
-            "scripts/test_opencli_transport.py",
+            "required script does not exist: skills/research-review-lead/scripts/opencli_transport.py",
+            "required script does not exist: skills/research-review-lead/scripts/minimal_bridge.py",
+            "required minimal bridge test does not exist: scripts/test_minimal_review_bridge.py",
             *(
                 f"required asset does not exist: assets/{name}"
                 for name in sorted(CHECKER_MODULE.REQUIRED_ASSETS)
@@ -233,28 +177,6 @@ class PackageCheckerExecutionTests(unittest.TestCase):
             stdout.getvalue().splitlines(),
             ["Skill package checks failed:", *(f"- {error}" for error in expected_errors)],
         )
-
-    def test_transport_runner_is_invoked_once(self) -> None:
-        stdout = io.StringIO()
-        with mock.patch.object(
-            CHECKER_MODULE, "run_transport_tests", return_value=(101, [])
-        ) as runner, contextlib.redirect_stdout(stdout):
-            exit_code = CHECKER_MODULE.main()
-
-        self.assertEqual(exit_code, 0)
-        runner.assert_called_once_with(CHECKER_MODULE.TRANSPORT_TEST)
-
-    def test_transport_failure_reaches_main_exit_code(self) -> None:
-        stdout = io.StringIO()
-        failure = "transport test execution failed with exit code 1: sentinel"
-        with mock.patch.object(
-            CHECKER_MODULE, "run_transport_tests", return_value=(101, [failure])
-        ) as runner, contextlib.redirect_stdout(stdout):
-            exit_code = CHECKER_MODULE.main()
-
-        self.assertEqual(exit_code, 1)
-        runner.assert_called_once_with(CHECKER_MODULE.TRANSPORT_TEST)
-        self.assertIn(f"- {failure}\n", stdout.getvalue())
 
 
 if __name__ == "__main__":
