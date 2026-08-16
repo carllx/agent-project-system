@@ -91,10 +91,10 @@ class ReviewReceipt:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ReviewReceipt:
         return cls(
-            request_id=data["request_id"],
-            request_hash=data["request_hash"],
-            artifact_id=data["artifact_id"],
-            conversation_id=data["conversation_id"],
+            request_id=data["request_id"].strip(),
+            request_hash=data["request_hash"].strip(),
+            artifact_id=data["artifact_id"].strip(),
+            conversation_id=data["conversation_id"].strip(),
             send_state=data["send_state"],
             created_at=data["created_at"],
             send_attempted_at=data.get("send_attempted_at"),
@@ -104,11 +104,14 @@ class ReviewReceipt:
 
 
 def _receipt_path(receipt_dir: Path, request_id: str) -> Path:
-    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", request_id)
+    normalized = request_id.strip()
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", normalized)
     return receipt_dir / f"{safe_name}.receipt.json"
 
 
 def load_receipt(receipt_dir: Path, request_id: str) -> ReviewReceipt | None:
+    if not isinstance(request_id, str):
+        return None
     path = _receipt_path(receipt_dir, request_id)
     if not path.exists():
         return None
@@ -142,13 +145,22 @@ def parse_strict_response(
     if not isinstance(raw_text, str) or not raw_text.strip():
         raise ValueError("raw_text is empty or not a string")
 
-    codeblock_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_text, re.DOTALL)
-    if codeblock_match:
-        candidate_json = codeblock_match.group(1)
+    exp_req = expected_request_id.strip()
+    exp_art = expected_artifact_id.strip()
+
+    text = raw_text.strip()
+    blocks = re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if len(blocks) == 1:
+        candidate_json = blocks[0]
+    elif len(blocks) > 1:
+        raise ValueError(f"Ambiguous response: found {len(blocks)} fenced JSON blocks")
     else:
-        candidate_match = re.search(r"(\{.*\})", raw_text, re.DOTALL)
-        if candidate_match:
-            candidate_json = candidate_match.group(1)
+        # Check for single bare JSON object without fences
+        bare_matches = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", text, re.DOTALL)
+        if len(bare_matches) == 1:
+            candidate_json = bare_matches[0]
+        elif len(bare_matches) > 1:
+            raise ValueError(f"Ambiguous response: found {len(bare_matches)} bare JSON objects")
         else:
             raise ValueError("No JSON object found in response")
 
@@ -161,15 +173,15 @@ def parse_strict_response(
         raise ValueError("Response JSON must be a single JSON object")
 
     req_id = parsed.get("request_id")
-    if req_id != expected_request_id:
+    if not isinstance(req_id, str) or req_id.strip() != exp_req:
         raise ValueError(
-            f"request_id mismatch: expected '{expected_request_id}', got '{req_id}'"
+            f"request_id mismatch: expected '{exp_req}', got '{req_id}'"
         )
 
     art_id = parsed.get("artifact_id")
-    if art_id != expected_artifact_id:
+    if not isinstance(art_id, str) or art_id.strip() != exp_art:
         raise ValueError(
-            f"artifact_id mismatch: expected '{expected_artifact_id}', got '{art_id}'"
+            f"artifact_id mismatch: expected '{exp_art}', got '{art_id}'"
         )
 
     decision = parsed.get("decision")
@@ -182,16 +194,21 @@ def parse_strict_response(
     if not isinstance(feedback, str) or not feedback.strip():
         raise ValueError("feedback must be a non-empty string")
 
-    next_steps = parsed.get("next_steps", [])
+    next_steps = parsed.get("next_steps")
+    if next_steps is None:
+        next_steps = []
     if not isinstance(next_steps, list):
-        raise ValueError("next_steps must be a list")
+        raise ValueError("next_steps must be a list of strings")
+    for idx, step in enumerate(next_steps):
+        if not isinstance(step, str):
+            raise ValueError(f"next_steps[{idx}] must be a string, got {type(step).__name__}")
 
     return {
-        "request_id": req_id,
-        "artifact_id": art_id,
+        "request_id": exp_req,
+        "artifact_id": exp_art,
         "decision": decision,
         "feedback": feedback.strip(),
-        "next_steps": [str(step) for step in next_steps],
+        "next_steps": [s.strip() for s in next_steps],
     }
 
 
@@ -305,7 +322,7 @@ def bootstrap_conversation(
 
     return {
         "status": "CONVERSATION_ESTABLISHED",
-        "conversation_id": conv_id,
+        "conversation_id": conv_id.strip(),
         "conversation_url": entry.get("conversationUrl"),
     }
 
@@ -321,32 +338,36 @@ def dispatch_review(
     opencli_runner: Callable[[list[str], int], tuple[int, str, str]] | None = None,
 ) -> dict[str, Any]:
     """Execute formal review submission using native fast non-waiting write."""
-    if not request_id or not request_id.strip():
+    if not isinstance(request_id, str) or not request_id.strip():
         raise ValueError("request_id is required")
-    if not artifact_id or not artifact_id.strip():
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
         raise ValueError("artifact_id is required")
-    if not review_prompt or not review_prompt.strip():
+    if not isinstance(review_prompt, str) or not review_prompt.strip():
         raise ValueError("review_prompt is required")
-    if not conversation_id or not conversation_id.strip():
+    if not isinstance(conversation_id, str) or not conversation_id.strip():
         raise ValueError("conversation_id is required for formal review. Establish conversation via bootstrap first.")
 
+    norm_req = request_id.strip()
+    norm_art = artifact_id.strip()
+    norm_prompt = review_prompt.strip()
     target_conv = conversation_id.strip()
-    canonical_message = render_canonical_review_request(request_id, artifact_id, review_prompt)
+
+    canonical_message = render_canonical_review_request(norm_req, norm_art, norm_prompt)
     request_hash = compute_request_hash(canonical_message)
-    receipt = load_receipt(receipt_dir, request_id)
+    receipt = load_receipt(receipt_dir, norm_req)
 
     if receipt is not None:
         if receipt.request_hash != request_hash:
             raise ValueError(
-                f"Existing receipt for request_id '{request_id}' has different canonical request_hash"
+                f"Existing receipt for request_id '{norm_req}' has different canonical request_hash"
             )
-        if receipt.artifact_id != artifact_id.strip():
+        if receipt.artifact_id != norm_art:
             raise ValueError(
-                f"Existing receipt for request_id '{request_id}' has different artifact_id"
+                f"Existing receipt for request_id '{norm_req}' has different artifact_id"
             )
         if receipt.conversation_id != target_conv:
             raise ValueError(
-                f"Existing receipt for request_id '{request_id}' has different conversation_id"
+                f"Existing receipt for request_id '{norm_req}' has different conversation_id"
             )
 
         if receipt.send_state == STATE_RESPONSE_RECEIVED:
@@ -358,8 +379,8 @@ def dispatch_review(
         if receipt.send_state == STATE_SEND_ATTEMPTED:
             # Exactly-once rule: do NOT send again. Check read-only reconciliation.
             reconcile_res = reconcile_review(
-                request_id=request_id.strip(),
-                artifact_id=artifact_id.strip(),
+                request_id=norm_req,
+                artifact_id=norm_art,
                 receipt_dir=receipt_dir,
                 conversation_id=receipt.conversation_id,
                 timeout_seconds=timeout_seconds,
@@ -369,9 +390,9 @@ def dispatch_review(
     else:
         # Pre-seed PREPARED with durable conversation_id
         receipt = ReviewReceipt(
-            request_id=request_id.strip(),
+            request_id=norm_req,
             request_hash=request_hash,
-            artifact_id=artifact_id.strip(),
+            artifact_id=norm_art,
             conversation_id=target_conv,
             send_state=STATE_PREPARED,
             created_at=_utc_iso(),
@@ -405,15 +426,26 @@ def dispatch_review(
         raise RuntimeError(f"OpenCLI execution failed (exit {code}): {stderr.strip() or stdout.strip()}")
 
     entry = _parse_opencli_output(stdout)
-    active_conv_id = entry.get("conversationId") or target_conv
-    receipt.conversation_id = active_conv_id
+    returned_conv_id = entry.get("conversationId")
+    if returned_conv_id:
+        returned_conv_id = returned_conv_id.strip()
+        if returned_conv_id != target_conv:
+            # Exact Conversation Must Never Drift: fail closed and preserve target_conv
+            err_msg = (
+                f"Exact-target mismatch: OpenCLI returned foreign conversationId '{returned_conv_id}', "
+                f"expected '{target_conv}'"
+            )
+            receipt.last_error = err_msg
+            save_receipt_atomic(receipt_dir, receipt)
+            raise RuntimeError(err_msg)
+
     receipt.last_error = None
     save_receipt_atomic(receipt_dir, receipt)
 
     return {
         "status": "RESPONSE_PENDING",
-        "request_id": request_id.strip(),
-        "conversation_id": active_conv_id,
+        "request_id": norm_req,
+        "conversation_id": target_conv,
         "write_attempted": True,
         "receipt": receipt.to_dict(),
     }
@@ -424,17 +456,35 @@ def reconcile_review(
     request_id: str,
     artifact_id: str,
     receipt_dir: Path,
-    conversation_id: str,
+    conversation_id: str | None = None,
     timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     opencli_runner: Callable[[list[str], int], tuple[int, str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Strictly read-only reconciliation against existing conversation."""
-    receipt = load_receipt(receipt_dir, request_id)
+    """Strictly read-only reconciliation using durable receipt identity."""
+    if not isinstance(request_id, str) or not request_id.strip():
+        raise ValueError("request_id is required for reconcile")
+    if not isinstance(artifact_id, str) or not artifact_id.strip():
+        raise ValueError("artifact_id is required for reconcile")
+
+    norm_req = request_id.strip()
+    norm_art = artifact_id.strip()
+    norm_conv = conversation_id.strip() if conversation_id else None
+
+    receipt = load_receipt(receipt_dir, norm_req)
     if receipt is None:
-        raise ValueError(f"No receipt found for request_id '{request_id}'")
+        raise ValueError(f"No receipt found for request_id '{norm_req}'")
+
+    if receipt.request_id != norm_req:
+        raise ValueError(f"Receipt request_id mismatch: stored '{receipt.request_id}', query '{norm_req}'")
+    if receipt.artifact_id != norm_art:
+        raise ValueError(f"Reconcile artifact_id mismatch: receipt has '{receipt.artifact_id}', query has '{norm_art}'")
+    if norm_conv and receipt.conversation_id != norm_conv:
+        raise ValueError(f"Reconcile conversation_id mismatch: receipt has '{receipt.conversation_id}', query has '{norm_conv}'")
+
+    target_conv = receipt.conversation_id
 
     code, stdout, stderr = execute_opencli_command(
-        ["chatgpt", "detail", conversation_id, "-f", "json"],
+        ["chatgpt", "detail", target_conv, "-f", "json"],
         timeout_seconds=timeout_seconds,
         runner=opencli_runner,
     )
@@ -473,17 +523,17 @@ def reconcile_review(
         try:
             parsed = parse_strict_response(
                 raw_text=text,
-                expected_request_id=request_id,
-                expected_artifact_id=artifact_id,
+                expected_request_id=norm_req,
+                expected_artifact_id=norm_art,
             )
-            receipt.conversation_id = conversation_id
+            receipt.conversation_id = target_conv
             receipt.send_state = STATE_RESPONSE_RECEIVED
             receipt.response_received_at = _utc_iso()
             receipt.last_error = None
             save_receipt_atomic(receipt_dir, receipt)
             return {
                 "status": "RESPONSE_READY",
-                "conversation_id": conversation_id,
+                "conversation_id": target_conv,
                 "response": parsed,
                 "receipt": receipt.to_dict(),
             }
@@ -492,6 +542,6 @@ def reconcile_review(
 
     return {
         "status": "RESPONSE_PENDING",
-        "conversation_id": conversation_id,
+        "conversation_id": target_conv,
         "receipt": receipt.to_dict(),
     }

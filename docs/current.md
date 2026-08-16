@@ -49,20 +49,13 @@ Agent Project System
 
 ## Active Frontier: Minimal Browser Review Bridge
 
-- **Active Work Item:** `APS-MINIMAL-BRIDGE-004`
+- **Active Work Item:** `APS-MINIMAL-BRIDGE-007`
 - **Architecture Model:** Antigravity `/goal` 拥有 IDE Agent 执行与重试的外循环；本项目只拥有精简的 Browser Review Bridge。
 - **Surviving Components:** `opencli_transport.py` (CLI facade) -> `minimal_bridge.py` (Core Bridge) -> OpenCLI -> Browser.
-- **Validation:** `scripts/test_minimal_review_bridge.py` (23 pure-local tests)；`python scripts/check_skill_package.py`；`python scripts/check_docs.py`。
-- **PR #3:** 处于 Draft / Blocked 状态，不执行自动 push 或 merge。
-- **Integration start:** `9e264a765f524d7e23a6333b9a0a50d9281be983`；frozen historical branch `work/real-agent-review-loop-mvp-001`。
-- **Known Good functional baseline:** `cfee67dbf016d6b1c94d78f3f77ebc0eb6cd53da`；`AUTONOMOUS_ANTIGRAVITY_BROWSER_LOOP_VALIDATED=YES`，`PRODUCT_AUTONOMOUS_LOOP_READY_FOR_USE=YES`。
-- **CORE / KEEP:** Product Browser Transport、Conversation/Delivery/Response identity、no-resend、`runtime/review_loop.py`、`scripts/acf_review_loop.py` application driver、Completion Gate、Failure Ledger、source-to-runtime parity/sync。
-- **OPTIONAL:** Manual Relay 只作 fallback；Antigravity Stop Hook 只作 bounded lifecycle insurance，默认关闭，二者均不得成为 autonomous Browser collaboration 的核心前置条件。
-- **DEBT / NON-BLOCKING:** strict RR wire grammar 双实现、Review round derivation 多处实现、atomic write helper 重复、Browser response contract 镜像。本轮不重构。
+- **Validation:** `scripts/test_minimal_review_bridge.py`；`scripts/test_check_skill_package.py`；`python scripts/check_skill_package.py`；`python scripts/check_docs.py`。
+- **PR #3:** 处于 Draft / Blocked 状态，不执行自动 merge。
+- **Deleted Legacy Components:** `runtime/review_loop.py`、`runtime/completion_gate.py`、`scripts/acf_review_loop.py`、`adapters/antigravity/stop_hook.py`、旧版 3986 行 transport 测试与 600 行硬门禁。
 - **HISTORICAL_ONLY:** 已完成或失败的 Acceptance/Diagnostic Packets 保留为审计 Evidence；不得继续复制整份 Packet 创建新运行实例。
-- **Responsibility audit:** `/goal` 是外部 Antigravity execution entrypoint；`acf_review_loop.py` 不实现 `/goal` continuation，只负责持久化 ACF state、调用 Runtime 和受限 Product Transport，因此本轮不简化代码。
-- **MVP-1 blocker repair:** Issue `#4` 已验收关闭，其三个 30 秒 exact-ID no-write response windows 未再修改。Issue `#5` 的下一轮 persisted exact delivery/target 通过 prior-state + 最多三次同-ID read-only detail marker 进行发送前验证；只对 transient read failure 重试，成功立即停止，recent history 与 active tab 不反向否决 known target，耗尽时 write count 保持零并安全 `BLOCKED`，Manual Relay 不自动触发。等待 PR `#3` Browser Final Review。
-- **Execution boundary:** 不创建新的 Execution Packet；`docs/references/current-execution-packet.md` 继续只指向已 `COMPLETED` 的历史 Manual Acceptance，不得再次执行。
 - **Merge gate:** 现有相关回归和文档检查通过后提交 PR #3 最终 Browser Review；本文件不自行授权 merge。
 
 ## Current Work Item Closeout

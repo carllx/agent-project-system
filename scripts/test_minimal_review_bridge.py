@@ -40,7 +40,7 @@ class TestCanonicalEnvelopeAndHashing(unittest.TestCase):
         self.art_id = "sha256-art-999"
         self.task = "Verify synthetic artifact correctness."
 
-    def test_a_b_c_d_canonical_rendered_request_structure(self) -> None:
+    def test_canonical_rendered_request_structure(self) -> None:
         rendered = render_canonical_review_request(self.req_id, self.art_id, self.task)
 
         # exact request_id
@@ -59,19 +59,19 @@ class TestCanonicalEnvelopeAndHashing(unittest.TestCase):
         self.assertIn("APPROVE | REVISE | BLOCKED", rendered)
         self.assertIn("RULES:", rendered)
 
-    def test_e_request_hash_hashes_exact_rendered_message(self) -> None:
+    def test_request_hash_hashes_exact_rendered_message(self) -> None:
         rendered = render_canonical_review_request(self.req_id, self.art_id, self.task)
         h = compute_request_hash(rendered)
         expected = hashlib.sha256(rendered.encode("utf-8")).hexdigest()
         self.assertEqual(h, expected)
 
-    def test_f_deterministic_rendering(self) -> None:
+    def test_deterministic_rendering(self) -> None:
         r1 = render_canonical_review_request(self.req_id, self.art_id, self.task)
         r2 = render_canonical_review_request(f"  {self.req_id}  ", f"{self.art_id}\n", f"\n{self.task}\n")
         self.assertEqual(r1, r2)
         self.assertEqual(compute_request_hash(r1), compute_request_hash(r2))
 
-    def test_g_changed_inputs_change_canonical_hash(self) -> None:
+    def test_changed_inputs_change_canonical_hash(self) -> None:
         base = compute_request_hash(render_canonical_review_request(self.req_id, self.art_id, self.task))
 
         h_req = compute_request_hash(render_canonical_review_request("REQ-DIFF", self.art_id, self.task))
@@ -83,7 +83,7 @@ class TestCanonicalEnvelopeAndHashing(unittest.TestCase):
         h_task = compute_request_hash(render_canonical_review_request(self.req_id, self.art_id, "Different task"))
         self.assertNotEqual(base, h_task)
 
-    def test_h_caller_cannot_override_schema_through_separate_parameter(self) -> None:
+    def test_caller_cannot_override_schema_through_separate_parameter(self) -> None:
         dispatched_prompts: list[str] = []
 
         def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
@@ -99,397 +99,362 @@ class TestCanonicalEnvelopeAndHashing(unittest.TestCase):
             res = dispatch_review(
                 request_id=self.req_id,
                 artifact_id=self.art_id,
-                review_prompt="Do this verification.",
+                review_prompt=self.task,
                 receipt_dir=temp_dir,
                 conversation_id="conv-test",
                 opencli_runner=runner,
             )
             self.assertEqual(res["status"], "RESPONSE_PENDING")
             self.assertEqual(len(dispatched_prompts), 1)
-            self.assertIn("BROWSER_REVIEW_REQUEST", dispatched_prompts[0])
-            self.assertIn("REQUIRED_RESPONSE_FORMAT:", dispatched_prompts[0])
-            self.assertIn("REQUEST_ID: REQ-CANONICAL-001", dispatched_prompts[0])
+            # Prompts must match the canonical envelope exactly
+            self.assertEqual(dispatched_prompts[0], render_canonical_review_request(self.req_id, self.art_id, self.task))
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def test_i_bootstrap_uses_fixed_inert_payload(self) -> None:
-        dispatched_prompts: list[str] = []
+
+class TestFirstConversationSafety(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-bridge-first-conv-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_bootstrap_uses_inert_prompt_and_creates_conversation(self) -> None:
+        executed_cmds: list[list[str]] = []
 
         def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            dispatched_prompts.append(args[-1])
+            executed_cmds.append(args)
             stdout = json.dumps([{
-                "conversationId": "conv-fixed-boot",
-                "response": "Ready.",
+                "conversationId": "conv-uuid-12345",
+                "conversationUrl": "https://chatgpt.com/c/conv-uuid-12345",
+                "response": "Understood. Standing by for formal review requests.",
             }])
             return 0, stdout, ""
 
         res = bootstrap_conversation(opencli_runner=runner)
         self.assertEqual(res["status"], "CONVERSATION_ESTABLISHED")
-        self.assertEqual(len(dispatched_prompts), 1)
-        self.assertEqual(dispatched_prompts[0], INERT_BOOTSTRAP_PROMPT)
+        self.assertEqual(res["conversation_id"], "conv-uuid-12345")
+        self.assertEqual(len(executed_cmds), 1)
+        self.assertIn("--new", executed_cmds[0])
+        self.assertIn(INERT_BOOTSTRAP_PROMPT, executed_cmds[0])
 
+    def test_dispatch_review_requires_explicit_conversation_id(self) -> None:
+        with self.assertRaisesRegex(ValueError, "conversation_id is required"):
+            dispatch_review(
+                request_id="REQ-001",
+                artifact_id="art-001",
+                review_prompt="prompt",
+                receipt_dir=self.temp_dir,
+                conversation_id="",
+            )
 
-class TestFastReturnTransportSemantics(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-fast-return-test-"))
-        self.receipt_dir = self.temp_dir / "receipts"
-        self.req_id = "REQ-FAST-001"
-        self.art_id = "sha256-art-fast-001"
-        self.prompt = "Please verify fast submission."
-        self.known_conv = "conv-fast-12345"
-
-    def tearDown(self) -> None:
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
-
-    def test_a_formal_submit_includes_wait_false(self) -> None:
-        dispatched_args: list[list[str]] = []
-
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            dispatched_args.append(args)
-            stdout = json.dumps([{
-                "conversationId": self.known_conv,
-                "response": "",
-            }])
-            return 0, stdout, ""
-
-        dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        self.assertEqual(len(dispatched_args), 1)
-        cmd = dispatched_args[0]
-        self.assertIn("--wait", cmd)
-        idx = cmd.index("--wait")
-        self.assertEqual(cmd[idx + 1], "false")
-
-    def test_b_c_formal_submit_does_not_wait_for_browser_and_returns_response_pending(self) -> None:
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            # Mock opencli ask --wait false immediate return (empty response field)
-            stdout = json.dumps([{
-                "conversationId": self.known_conv,
-                "response": "",
-            }])
-            return 0, stdout, ""
-
-        res = dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        self.assertEqual(res["status"], "RESPONSE_PENDING")
-        self.assertEqual(res["request_id"], self.req_id)
-        self.assertEqual(res["conversation_id"], self.known_conv)
-        self.assertTrue(res["write_attempted"])
-
-    def test_d_send_attempted_remains_durable_after_submit(self) -> None:
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            return 0, json.dumps([{"conversationId": self.known_conv}]), ""
-
-        dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        rcp = load_receipt(self.receipt_dir, self.req_id)
-        self.assertIsNotNone(rcp)
-        assert rcp is not None
-        self.assertEqual(rcp.send_state, STATE_SEND_ATTEMPTED)
-        self.assertEqual(rcp.conversation_id, self.known_conv)
-        self.assertIsNotNone(rcp.send_attempted_at)
-        self.assertIsNone(rcp.response_received_at)
-
-    def test_e_duplicate_invocation_cannot_send_again(self) -> None:
-        call_count = 0
-        detail_count = 0
+    def test_whitespace_normalized_request_id_writes_once(self) -> None:
+        calls: list[list[str]] = []
 
         def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            nonlocal call_count, detail_count
-            if "ask" in args:
-                call_count += 1
-            if "detail" in args:
-                detail_count += 1
-            return 0, json.dumps([{"conversationId": self.known_conv}]), ""
+            calls.append(args)
+            return 0, json.dumps([{"conversationId": "conv-fixed", "response": ""}]), ""
 
-        # First call: sends write
+        # First call with whitespace
         res1 = dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
+            request_id="  REQ-NORM-001  ",
+            artifact_id="  art-norm-001  ",
+            review_prompt="prompt",
+            receipt_dir=self.temp_dir,
+            conversation_id="  conv-fixed  ",
             opencli_runner=runner,
         )
         self.assertEqual(res1["status"], "RESPONSE_PENDING")
-        self.assertEqual(call_count, 1)
-        self.assertEqual(detail_count, 0)
+        self.assertEqual(len(calls), 1)
 
-        # Second call: performs read-only detail check, does NOT call ask
+        # Second call with stripped ID - should NOT do external write (exact-once)
         res2 = dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
+            request_id="REQ-NORM-001",
+            artifact_id="art-norm-001",
+            review_prompt="prompt",
+            receipt_dir=self.temp_dir,
+            conversation_id="conv-fixed",
             opencli_runner=runner,
         )
-        self.assertEqual(res2["status"], "RESPONSE_PENDING")
-        self.assertEqual(call_count, 1)  # Zero additional ask calls!
-        self.assertEqual(detail_count, 1)  # Read-only reconciliation triggered
-
-    def test_f_reconcile_is_strictly_read_only(self) -> None:
-        executed_commands: list[list[str]] = []
-
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            executed_commands.append(args)
-            return 0, "[]", ""
-
-        rcp = ReviewReceipt(
-            request_id=self.req_id,
-            request_hash="hash-123",
-            artifact_id=self.art_id,
-            conversation_id=self.known_conv,
-            send_state=STATE_SEND_ATTEMPTED,
-            created_at="2026-08-16T08:00:00Z",
-        )
-        save_receipt_atomic(self.receipt_dir, rcp)
-
-        reconcile_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        self.assertEqual(len(executed_commands), 1)
-        self.assertIn("detail", executed_commands[0])
-        self.assertNotIn("ask", executed_commands[0])
-
-    def test_g_reconcile_without_response_returns_response_pending(self) -> None:
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            # Detail returns only the user's message, no assistant response yet
-            messages = [{"Role": "user", "Text": "Please review"}]
-            return 0, json.dumps(messages), ""
-
-        rcp = ReviewReceipt(
-            request_id=self.req_id,
-            request_hash="hash-123",
-            artifact_id=self.art_id,
-            conversation_id=self.known_conv,
-            send_state=STATE_SEND_ATTEMPTED,
-            created_at="2026-08-16T08:00:00Z",
-        )
-        save_receipt_atomic(self.receipt_dir, rcp)
-
-        res = reconcile_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        self.assertEqual(res["status"], "RESPONSE_PENDING")
-        rcp_after = load_receipt(self.receipt_dir, self.req_id)
-        assert rcp_after is not None
-        self.assertEqual(rcp_after.send_state, STATE_SEND_ATTEMPTED)
-
-    def test_h_reconcile_with_matching_response_reaches_response_received(self) -> None:
-        resp_payload = {
-            "request_id": self.req_id,
-            "artifact_id": self.art_id,
-            "decision": "APPROVE",
-            "feedback": "All good",
-            "next_steps": [],
-        }
-
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            messages = [
-                {"Role": "user", "Text": "Please review"},
-                {"Role": "assistant", "Text": f"```json\n{json.dumps(resp_payload)}\n```"},
-            ]
-            return 0, json.dumps(messages), ""
-
-        rcp = ReviewReceipt(
-            request_id=self.req_id,
-            request_hash="hash-123",
-            artifact_id=self.art_id,
-            conversation_id=self.known_conv,
-            send_state=STATE_SEND_ATTEMPTED,
-            created_at="2026-08-16T08:00:00Z",
-        )
-        save_receipt_atomic(self.receipt_dir, rcp)
-
-        res = reconcile_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        self.assertEqual(res["status"], "RESPONSE_READY")
-        self.assertEqual(res["response"]["decision"], "APPROVE")
-        rcp_after = load_receipt(self.receipt_dir, self.req_id)
-        assert rcp_after is not None
-        self.assertEqual(rcp_after.send_state, STATE_RESPONSE_RECEIVED)
-        self.assertIsNotNone(rcp_after.response_received_at)
-
-    def test_i_bounded_default_timeout_is_not_120s(self) -> None:
-        self.assertEqual(DEFAULT_COMMAND_TIMEOUT_SECONDS, 30)
-
-    def test_j_no_internal_busy_poll_loop(self) -> None:
-        call_count = 0
-
-        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
-            nonlocal call_count
-            call_count += 1
-            return 0, json.dumps([{"conversationId": self.known_conv}]), ""
-
-        res = dispatch_review(
-            request_id=self.req_id,
-            artifact_id=self.art_id,
-            review_prompt=self.prompt,
-            receipt_dir=self.receipt_dir,
-            conversation_id=self.known_conv,
-            opencli_runner=runner,
-        )
-
-        # Must execute exactly once and return immediately without looping
-        self.assertEqual(res["status"], "RESPONSE_PENDING")
-        self.assertEqual(call_count, 1)
+        # Reconcile called instead of new write
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1][1], "detail")  # Detail reconcile, not ask
 
 
-class TestMinimalResponseParsing(unittest.TestCase):
+class TestExactConversationInvariants(unittest.TestCase):
     def setUp(self) -> None:
-        self.req_id = "REQ-TEST-001"
-        self.art_id = "sha256-art-001"
-
-    def test_valid_strict_response_fenced_json(self) -> None:
-        raw = f"""Here is my review:
-```json
-{{
-  "request_id": "{self.req_id}",
-  "artifact_id": "{self.art_id}",
-  "decision": "APPROVE",
-  "feedback": "All changes verified successfully.",
-  "next_steps": []
-}}
-```
-"""
-        parsed = parse_strict_response(raw, self.req_id, self.art_id)
-        self.assertEqual(parsed["request_id"], self.req_id)
-        self.assertEqual(parsed["artifact_id"], self.art_id)
-        self.assertEqual(parsed["decision"], "APPROVE")
-        self.assertEqual(parsed["feedback"], "All changes verified successfully.")
-        self.assertEqual(parsed["next_steps"], [])
-
-    def test_valid_strict_response_revise_and_blocked(self) -> None:
-        raw_revise = json.dumps({
-            "request_id": self.req_id,
-            "artifact_id": self.art_id,
-            "decision": "REVISE",
-            "feedback": "Need fix in module X",
-            "next_steps": ["Fix module X", "Add test"],
-        })
-        parsed_rev = parse_strict_response(raw_revise, self.req_id, self.art_id)
-        self.assertEqual(parsed_rev["decision"], "REVISE")
-        self.assertEqual(len(parsed_rev["next_steps"]), 2)
-
-        raw_blocked = json.dumps({
-            "request_id": self.req_id,
-            "artifact_id": self.art_id,
-            "decision": "BLOCKED",
-            "feedback": "Security policy violation",
-            "next_steps": [],
-        })
-        parsed_blk = parse_strict_response(raw_blocked, self.req_id, self.art_id)
-        self.assertEqual(parsed_blk["decision"], "BLOCKED")
-
-    def test_wrong_request_id_rejected(self) -> None:
-        raw = json.dumps({
-            "request_id": "REQ-WRONG",
-            "artifact_id": self.art_id,
-            "decision": "APPROVE",
-            "feedback": "Looks good",
-        })
-        with self.assertRaises(ValueError) as ctx:
-            parse_strict_response(raw, self.req_id, self.art_id)
-        self.assertIn("request_id mismatch", str(ctx.exception))
-
-    def test_wrong_artifact_id_rejected(self) -> None:
-        raw = json.dumps({
-            "request_id": self.req_id,
-            "artifact_id": "sha256-wrong",
-            "decision": "APPROVE",
-            "feedback": "Looks good",
-        })
-        with self.assertRaises(ValueError) as ctx:
-            parse_strict_response(raw, self.req_id, self.art_id)
-        self.assertIn("artifact_id mismatch", str(ctx.exception))
-
-    def test_invalid_decision_rejected(self) -> None:
-        raw = json.dumps({
-            "request_id": self.req_id,
-            "artifact_id": self.art_id,
-            "decision": "PASS_WITH_WARNINGS",
-            "feedback": "Not valid enum",
-        })
-        with self.assertRaises(ValueError) as ctx:
-            parse_strict_response(raw, self.req_id, self.art_id)
-        self.assertIn("Invalid decision", str(ctx.exception))
-
-    def test_malformed_response_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            parse_strict_response("This is not JSON at all", self.req_id, self.art_id)
-        with self.assertRaises(ValueError):
-            parse_strict_response("{ broken json", self.req_id, self.art_id)
-        with self.assertRaises(ValueError):
-            parse_strict_response("", self.req_id, self.art_id)
-
-
-class TestCLIIntegration(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-cli-env-"))
-        self.receipt_dir = self.temp_dir / "receipts"
-        self.req_id = "REQ-CLI-001"
-        self.art_id = "sha256-art-cli"
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-bridge-drift-"))
 
     def tearDown(self) -> None:
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_cli_requires_conversation_for_review(self) -> None:
-        import opencli_transport
+    def test_exact_conversation_drift_fails_closed_and_records_send_attempted(self) -> None:
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            # OpenCLI unexpectedly returns a different conversation ID
+            return 0, json.dumps([{"conversationId": "foreign-conv-999", "response": ""}]), ""
 
-        parser = opencli_transport.parser()
-        with self.assertRaises(SystemExit):
-            parser.parse_args([
-                "review",
-                "--request-id", self.req_id,
-                "--artifact-id", self.art_id,
-                "--prompt", "Test prompt",
-            ])
+        with self.assertRaisesRegex(RuntimeError, "Exact-target mismatch: OpenCLI returned foreign conversationId"):
+            dispatch_review(
+                request_id="REQ-DRIFT-001",
+                artifact_id="art-drift-001",
+                review_prompt="prompt",
+                receipt_dir=self.temp_dir,
+                conversation_id="target-conv-111",
+                opencli_runner=runner,
+            )
 
-    def test_cli_review_bootstrap_parser(self) -> None:
-        import opencli_transport
+        # Verify receipt is in SEND_ATTEMPTED state with original target_conv (never rewritten)
+        receipt = load_receipt(self.temp_dir, "REQ-DRIFT-001")
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt.send_state, STATE_SEND_ATTEMPTED)
+        self.assertEqual(receipt.conversation_id, "target-conv-111")
+        self.assertIn("foreign-conv-999", receipt.last_error or "")
 
-        parser = opencli_transport.parser()
-        args = parser.parse_args(["review-bootstrap", "--timeout", "30"])
-        self.assertEqual(args.command, "review-bootstrap")
-        self.assertEqual(args.timeout, 30)
+        # Subsequent dispatch should fail-closed / reconcile against target_conv, not resend
+        def runner_detail(args: list[str], timeout: int) -> tuple[int, str, str]:
+            return 0, json.dumps([]), ""
+
+        res2 = dispatch_review(
+            request_id="REQ-DRIFT-001",
+            artifact_id="art-drift-001",
+            review_prompt="prompt",
+            receipt_dir=self.temp_dir,
+            conversation_id="target-conv-111",
+            opencli_runner=runner_detail,
+        )
+        self.assertEqual(res2["status"], "RESPONSE_PENDING")
+
+
+class TestReconcileIdentity(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-reconcile-test-"))
+        # Seed receipt
+        self.receipt = ReviewReceipt(
+            request_id="REQ-REC-001",
+            request_hash="hash-001",
+            artifact_id="art-rec-001",
+            conversation_id="conv-rec-123",
+            send_state=STATE_SEND_ATTEMPTED,
+            created_at="2026-08-16T12:00:00Z",
+        )
+        save_receipt_atomic(self.temp_dir, self.receipt)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_reconcile_wrong_conversation_rejected_before_detail(self) -> None:
+        detail_called = False
+
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            nonlocal detail_called
+            detail_called = True
+            return 0, "[]", ""
+
+        with self.assertRaisesRegex(ValueError, "Reconcile conversation_id mismatch"):
+            reconcile_review(
+                request_id="REQ-REC-001",
+                artifact_id="art-rec-001",
+                receipt_dir=self.temp_dir,
+                conversation_id="wrong-conv",
+                opencli_runner=runner,
+            )
+        self.assertFalse(detail_called)
+
+    def test_reconcile_wrong_artifact_rejected_before_detail(self) -> None:
+        detail_called = False
+
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            nonlocal detail_called
+            detail_called = True
+            return 0, "[]", ""
+
+        with self.assertRaisesRegex(ValueError, "Reconcile artifact_id mismatch"):
+            reconcile_review(
+                request_id="REQ-REC-001",
+                artifact_id="wrong-art",
+                receipt_dir=self.temp_dir,
+                conversation_id="conv-rec-123",
+                opencli_runner=runner,
+            )
+        self.assertFalse(detail_called)
+
+    def test_reconcile_matching_receipt_uses_exact_stored_conversation(self) -> None:
+        called_args: list[list[str]] = []
+
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            called_args.append(args)
+            return 0, json.dumps([]), ""
+
+        res = reconcile_review(
+            request_id="REQ-REC-001",
+            artifact_id="art-rec-001",
+            receipt_dir=self.temp_dir,
+            opencli_runner=runner,
+        )
+        self.assertEqual(res["status"], "RESPONSE_PENDING")
+        self.assertEqual(len(called_args), 1)
+        self.assertIn("conv-rec-123", called_args[0])
+
+    def test_reconcile_matching_response_cannot_alter_conversation_binding(self) -> None:
+        valid_response = (
+            "```json\n"
+            "{\n"
+            '  "request_id": "REQ-REC-001",\n'
+            '  "artifact_id": "art-rec-001",\n'
+            '  "decision": "APPROVE",\n'
+            '  "feedback": "LGTM",\n'
+            '  "next_steps": []\n'
+            "}\n"
+            "```"
+        )
+
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            return 0, json.dumps([{"role": "assistant", "text": valid_response}]), ""
+
+        res = reconcile_review(
+            request_id="REQ-REC-001",
+            artifact_id="art-rec-001",
+            receipt_dir=self.temp_dir,
+            conversation_id="conv-rec-123",
+            opencli_runner=runner,
+        )
+        self.assertEqual(res["status"], "RESPONSE_READY")
+        self.assertEqual(res["response"]["decision"], "APPROVE")
+
+        # Stored conversation is strictly preserved
+        updated_receipt = load_receipt(self.temp_dir, "REQ-REC-001")
+        self.assertEqual(updated_receipt.conversation_id, "conv-rec-123")
+        self.assertEqual(updated_receipt.send_state, STATE_RESPONSE_RECEIVED)
+
+
+class TestStrictResponseParser(unittest.TestCase):
+    def setUp(self) -> None:
+        self.req_id = "REQ-PARSE-001"
+        self.art_id = "art-parse-001"
+
+    def test_parse_valid_fenced_json(self) -> None:
+        raw = (
+            "Review comments here.\n"
+            "```json\n"
+            "{\n"
+            f'  "request_id": "{self.req_id}",\n'
+            f'  "artifact_id": "{self.art_id}",\n'
+            '  "decision": "APPROVE",\n'
+            '  "feedback": "Acceptance criteria met.",\n'
+            '  "next_steps": []\n'
+            "}\n"
+            "```\n"
+        )
+        res = parse_strict_response(raw, self.req_id, self.art_id)
+        self.assertEqual(res["decision"], "APPROVE")
+        self.assertEqual(res["feedback"], "Acceptance criteria met.")
+        self.assertEqual(res["next_steps"], [])
+
+    def test_parse_valid_bare_json(self) -> None:
+        raw = (
+            "{\n"
+            f'  "request_id": "{self.req_id}",\n'
+            f'  "artifact_id": "{self.art_id}",\n'
+            '  "decision": "REVISE",\n'
+            '  "feedback": "Fix syntax.",\n'
+            '  "next_steps": ["step 1"]\n'
+            "}\n"
+        )
+        res = parse_strict_response(raw, self.req_id, self.art_id)
+        self.assertEqual(res["decision"], "REVISE")
+        self.assertEqual(res["next_steps"], ["step 1"])
+
+    def test_parse_rejects_multiple_fenced_blocks(self) -> None:
+        raw = (
+            "```json\n"
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "APPROVE", "feedback": "ok", "next_steps": []}\n'
+            "```\n"
+            "```json\n"
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "REVISE", "feedback": "no", "next_steps": []}\n'
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, "Ambiguous response: found 2 fenced JSON blocks"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_multiple_bare_json_objects(self) -> None:
+        raw = (
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "APPROVE", "feedback": "ok", "next_steps": []}\n'
+            '{"request_id": "' + self.req_id + '", "artifact_id": "' + self.art_id + '", "decision": "REVISE", "feedback": "no", "next_steps": []}'
+        )
+        with self.assertRaisesRegex(ValueError, "Ambiguous response: found 2 bare JSON objects"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_non_string_elements_in_next_steps(self) -> None:
+        raw = (
+            "```json\n"
+            "{\n"
+            f'  "request_id": "{self.req_id}",\n'
+            f'  "artifact_id": "{self.art_id}",\n'
+            '  "decision": "REVISE",\n'
+            '  "feedback": "Fix items",\n'
+            '  "next_steps": [123, {"key": "val"}]\n'
+            "}\n"
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, "next_steps\\[0\\] must be a string"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+    def test_parse_rejects_empty_feedback(self) -> None:
+        raw = (
+            "```json\n"
+            "{\n"
+            f'  "request_id": "{self.req_id}",\n'
+            f'  "artifact_id": "{self.art_id}",\n'
+            '  "decision": "APPROVE",\n'
+            '  "feedback": "   ",\n'
+            '  "next_steps": []\n'
+            "}\n"
+            "```"
+        )
+        with self.assertRaisesRegex(ValueError, "feedback must be a non-empty string"):
+            parse_strict_response(raw, self.req_id, self.art_id)
+
+
+class TestFastReturnSubmitSemantics(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="aps-fast-submit-test-"))
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_formal_submit_uses_native_wait_false(self) -> None:
+        dispatched_cmd: list[str] = []
+
+        def runner(args: list[str], timeout: int) -> tuple[int, str, str]:
+            dispatched_cmd.extend(args)
+            stdout = json.dumps([{
+                "conversationId": "conv-target-001",
+                "response": "",
+            }])
+            return 0, stdout, ""
+
+        res = dispatch_review(
+            request_id="REQ-SUBMIT-001",
+            artifact_id="art-submit-001",
+            review_prompt="Prompt instructions",
+            receipt_dir=self.temp_dir,
+            conversation_id="conv-target-001",
+            opencli_runner=runner,
+        )
+
+        self.assertEqual(res["status"], "RESPONSE_PENDING")
+        self.assertEqual(res["request_id"], "REQ-SUBMIT-001")
+        self.assertTrue(res["write_attempted"])
+
+        # Check command args include --wait false
+        self.assertIn("--wait", dispatched_cmd)
+        wait_idx = dispatched_cmd.index("--wait")
+        self.assertEqual(dispatched_cmd[wait_idx + 1], "false")
+
+        # Check receipt was updated to SEND_ATTEMPTED
+        receipt = load_receipt(self.temp_dir, "REQ-SUBMIT-001")
+        self.assertIsNotNone(receipt)
+        self.assertEqual(receipt.send_state, STATE_SEND_ATTEMPTED)
 
 
 if __name__ == "__main__":

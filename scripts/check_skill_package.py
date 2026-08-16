@@ -26,9 +26,10 @@ REQUIRED_ASSETS = {
     "rr-lead-init.md",
 }
 REQUIRED_RR_INIT_MARKERS = {
-    "exactly one fenced `text` code block",
-    "put no text before or after that block",
-    "Do not normalize, dedent, repair, or convert",
+    "APPROVE | REVISE | BLOCKED",
+    "request_id",
+    "artifact_id",
+    "decision",
 }
 
 EXPECTED_PACKAGE_FILES = {
@@ -40,24 +41,27 @@ EXPECTED_PACKAGE_FILES = {
 }
 
 REQUIRED_SKILL_MARKERS = {
-    "Builder IDE Agent",
-    "IDE-side Loop Driver",
-    "Browser RR Lead",
-    "OpenCLI",
-    "EXPLICIT_SELECTION_BOOTSTRAP_GATE",
-    "PRECHECK_IS_NOT_BOOTSTRAP",
-    "NO_DOMAIN_WORK_BEFORE_BOOTSTRAP",
-    "NO_LOCAL_BROWSER_REVIEW_SUBSTITUTE",
-    "DELIVERY_STATE",
+    "IDE Execution Agent",
+    "Browser Review Lead",
+    "opencli_transport.py",
+    "minimal_bridge.py",
+    "review-bootstrap",
+    "review",
+    "--reconcile",
+    "request_id",
+    "artifact_id",
     "RESPONSE_PENDING",
     "RESPONSE_READY",
-    "WORK_ITEM_ID",
-    "Context Packet",
-    "Evidence Packet",
-    "NEXT_WORK_ORDER",
-    "NEEDS_DECISION",
-    "Decision Receipt",
-    "UNVERIFIED",
+    "APPROVE",
+    "REVISE",
+    "BLOCKED",
+}
+
+PROHIBITED_STALE_COMMANDS = {
+    "send --prepare-new",
+    "recover --state-file",
+    "acf_review_loop",
+    "completion_gate",
 }
 
 FORBIDDEN_RUNTIME_PATTERNS = {
@@ -210,7 +214,7 @@ def check_assets_and_references(skill_text: str) -> list[str]:
         for marker in sorted(REQUIRED_RR_INIT_MARKERS):
             if marker not in rr_init_text:
                 errors.append(
-                    "rr-lead-init.md is missing fenced response contract marker: "
+                    "rr-lead-init.md is missing required response marker: "
                     f"{marker}"
                 )
     return errors
@@ -224,25 +228,22 @@ def check_portability_and_contract(skill_text: str) -> list[str]:
         for label, pattern in FORBIDDEN_RUNTIME_PATTERNS.items():
             if pattern.search(text):
                 errors.append(f"{relative} contains forbidden {label}")
+        for stale in sorted(PROHIBITED_STALE_COMMANDS):
+            if stale in text:
+                errors.append(f"{relative} contains prohibited stale command: {stale}")
 
     if skill_text:
         for marker in sorted(REQUIRED_SKILL_MARKERS):
             if marker not in skill_text:
                 errors.append(f"SKILL.md is missing required loop marker: {marker}")
         if not re.search(
-            r"must never impersonate the Browser RR Lead|不得冒充 Browser RR Lead",
+            r"must never impersonate the Browser Review Lead|不得冒充",
             skill_text,
             flags=re.IGNORECASE,
         ):
-            errors.append("SKILL.md does not prohibit IDE-side RR Lead impersonation")
+            errors.append("SKILL.md does not prohibit IDE-side Review Lead impersonation")
         if not re.search(r"Git is not used|Git is not applicable", skill_text):
             errors.append("SKILL.md does not explicitly support projects without Git")
-        if re.search(
-            r"(?:must|required to|always)\s+(?:provide|include|use).*Git (?:diff|evidence)",
-            skill_text,
-            flags=re.IGNORECASE,
-        ):
-            errors.append("SKILL.md appears to require Git evidence for every project")
     return errors
 
 
