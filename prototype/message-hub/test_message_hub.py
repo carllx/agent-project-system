@@ -368,5 +368,130 @@ class TestEndToEndHub(unittest.TestCase):
             self.assertEqual(len(events), 2)
 
 
+from opencli_connector import OpenCLIBrowserConnector
+
+
+class TestOpenCLIBrowserConnector(unittest.TestCase):
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.db_path = os.path.join(self.tmp_dir, "test_connector.db")
+        self.storage = Storage(self.db_path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    def test_connector_consumes_durable_request_and_records_states(self):
+        thread_id = "th-conn-1"
+        req_id = "req-conn-1"
+        art_id = "art-conn-1"
+        conv_id = "conv-12345"
+
+        # 1. Create request in storage
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Please review module",
+            artifact_id=art_id,
+        )
+
+        calls = []
+        def fake_runner(cmd, timeout):
+            calls.append((cmd, timeout))
+            return 0, '{"Status": "Success"}', ""
+
+        connector = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_runner)
+        res = connector.process_review_request(thread_id, req_id, conv_id)
+
+        self.assertEqual(res["status"], "EXTERNAL_SEND_COMPLETED")
+        self.assertEqual(len(calls), 1)
+        self.assertIn("--conversation", calls[0][0])
+        self.assertIn(conv_id, calls[0][0])
+
+        # Verify durable event sequence
+        events = self.storage.get_events(thread_id)
+        event_types = [e["event_type"] for e in events]
+        self.assertEqual(event_types, [
+            "REQUEST_CREATED",
+            "CONNECTOR_ACCEPTED",
+            "EXTERNAL_SEND_ATTEMPTED",
+            "EXTERNAL_SEND_COMPLETED",
+        ])
+
+    def test_no_resend_on_duplicate_or_restart(self):
+        thread_id = "th-conn-2"
+        req_id = "req-conn-2"
+        conv_id = "conv-12345"
+
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Please review module",
+            artifact_id="art-2",
+        )
+
+        calls = []
+        def fake_runner(cmd, timeout):
+            calls.append(cmd)
+            return 0, "ok", ""
+
+        connector = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_runner)
+        res1 = connector.process_review_request(thread_id, req_id, conv_id)
+        self.assertEqual(res1["status"], "EXTERNAL_SEND_COMPLETED")
+        self.assertEqual(len(calls), 1)
+
+        # Re-invoke on same connector -> must refuse
+        res2 = connector.process_review_request(thread_id, req_id, conv_id)
+        self.assertEqual(res2["status"], "SKIPPED_ALREADY_ATTEMPTED")
+        self.assertEqual(len(calls), 1)
+
+        # Simulate connector process restart with new instance against same DB
+        connector_restarted = OpenCLIBrowserConnector(storage=Storage(self.db_path), opencli_runner=fake_runner)
+        res3 = connector_restarted.process_review_request(thread_id, req_id, conv_id)
+        self.assertEqual(res3["status"], "SKIPPED_ALREADY_ATTEMPTED")
+        self.assertEqual(len(calls), 1)  # STILL 1 call
+
+    def test_timeout_becomes_unknown_and_never_retries(self):
+        thread_id = "th-conn-3"
+        req_id = "req-conn-3"
+        conv_id = "conv-timeout"
+
+        self.storage.create_message(
+            message_id=req_id,
+            thread_id=thread_id,
+            sender="ide:agent",
+            recipient="browser:lead",
+            message_type="review.request",
+            content="Please review module",
+            artifact_id="art-3",
+        )
+
+        calls = []
+        def fake_timing_out_runner(cmd, timeout):
+            calls.append(cmd)
+            return 124, "", "Command timed out"
+
+        connector = OpenCLIBrowserConnector(storage=self.storage, opencli_runner=fake_timing_out_runner)
+        res = connector.process_review_request(thread_id, req_id, conv_id)
+
+        self.assertEqual(res["status"], "EXTERNAL_SEND_UNKNOWN")
+        self.assertEqual(len(calls), 1)
+
+        events = self.storage.get_events(thread_id)
+        event_types = [e["event_type"] for e in events]
+        self.assertIn("EXTERNAL_SEND_ATTEMPTED", event_types)
+        self.assertIn("EXTERNAL_SEND_UNKNOWN", event_types)
+
+        # Subsequent execution MUST NOT retry
+        res_retry = connector.process_review_request(thread_id, req_id, conv_id)
+        self.assertEqual(res_retry["status"], "SKIPPED_ALREADY_ATTEMPTED")
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
