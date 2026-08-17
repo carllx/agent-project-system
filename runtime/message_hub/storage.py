@@ -96,7 +96,7 @@ class ThreadIntegrityError(StorageError):
 
 
 class CursorError(StorageError):
-    """Raised when cursor advancement operations violate monotonicity."""
+    """Raised when cursor advancement operations violate monotonicity or integrity."""
 
 
 class Storage:
@@ -145,7 +145,8 @@ class Storage:
                         metadata TEXT NOT NULL DEFAULT '{}',
                         status TEXT NOT NULL,
                         created_at REAL NOT NULL,
-                        FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
+                        FOREIGN KEY (thread_id) REFERENCES threads(thread_id),
+                        FOREIGN KEY (reply_to) REFERENCES messages(message_id)
                     );
 
                     CREATE TABLE IF NOT EXISTS events (
@@ -164,7 +165,8 @@ class Storage:
                         thread_id TEXT NOT NULL,
                         claimed_by TEXT NOT NULL,
                         claimed_at REAL NOT NULL,
-                        FOREIGN KEY (thread_id) REFERENCES threads(thread_id)
+                        FOREIGN KEY (thread_id) REFERENCES threads(thread_id),
+                        FOREIGN KEY (request_id) REFERENCES messages(message_id)
                     );
 
                     CREATE TABLE IF NOT EXISTS connector_cursors (
@@ -176,6 +178,8 @@ class Storage:
                     CREATE INDEX IF NOT EXISTS idx_messages_thread ON messages(thread_id);
                     CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_id);
                     CREATE INDEX IF NOT EXISTS idx_messages_reply ON messages(reply_to);
+                    CREATE UNIQUE INDEX IF NOT EXISTS uq_one_response_per_request
+                        ON messages(reply_to) WHERE message_type = 'review.response';
                     CREATE INDEX IF NOT EXISTS idx_events_connector ON events(connector_id, event_id);
                     CREATE INDEX IF NOT EXISTS idx_events_thread ON events(thread_id);
                     CREATE INDEX IF NOT EXISTS idx_events_id ON events(event_id);
@@ -252,6 +256,8 @@ class Storage:
         Returns (Message, is_new).
         - If message_id exists with identical authoritative payload: returns (existing, False).
         - If message_id exists with conflicting payload: raises ConflictError.
+        - If message_type is 'review.response': raises ValueError (authoritative review.response
+          must be created via create_response_and_ready_event).
         - If reply_to is provided: validates parent message exists in the SAME thread.
         """
         t_id = thread_id.strip()
@@ -274,6 +280,13 @@ class Storage:
             raise ValueError("connector_id must be non-empty")
         if not snd or not rcp or not m_type:
             raise ValueError("sender, recipient, and message_type must be non-empty")
+
+        # Invariant 1: Reserve review.response creation to atomic create_response_and_ready_event
+        if m_type == "review.response":
+            raise ValueError(
+                "Authoritative review.response messages must be created via "
+                "create_response_and_ready_event(...) to guarantee atomic RESPONSE_READY creation"
+            )
 
         now = time.time()
 
@@ -460,6 +473,7 @@ class Storage:
     ) -> bool:
         """Atomically attempt to acquire the external-send claim for a request.
 
+        Validates that request_id corresponds to a real review.request in the given thread_id.
         Returns True if acquired (first contender), False if already claimed.
         """
         req_id = request_id.strip()
@@ -472,6 +486,21 @@ class Storage:
 
         with self._connect() as conn:
             with conn:
+                # Invariant 5: Verify target message exists, is in thread_id, and is review.request
+                req_row = conn.execute(
+                    "SELECT thread_id, message_type FROM messages WHERE message_id = ?", (req_id,)
+                ).fetchone()
+                if not req_row:
+                    raise ThreadIntegrityError(f"Cannot claim external send: request '{req_id}' not found")
+                if req_row["thread_id"] != t_id:
+                    raise ThreadIntegrityError(
+                        f"Cannot claim external send: request '{req_id}' belongs to thread '{req_row['thread_id']}', not '{t_id}'"
+                    )
+                if req_row["message_type"] != "review.request":
+                    raise ThreadIntegrityError(
+                        f"Cannot claim external send: message '{req_id}' has type '{req_row['message_type']}', expected 'review.request'"
+                    )
+
                 cursor = conn.execute(
                     """
                     INSERT OR IGNORE INTO send_claims (request_id, thread_id, claimed_by, claimed_at)
@@ -517,44 +546,67 @@ class Storage:
             )
 
     def advance_connector_cursor(
-        self, connector_id: str, last_processed_event_id: int
+        self,
+        connector_id: str,
+        last_processed_event_id: int,
+        handling_outcome: str | None = None,
     ) -> ConnectorCursor:
-        """Advance connector cursor monotonically.
+        """Advance connector cursor monotonically to a validated durable event outcome.
 
-        Fails with CursorError if last_processed_event_id is less than current cursor.
+        - handling_outcome must be provided (e.g. CLAIM_ACQUIRED, CLAIM_SKIPPED, COMPLETED, FAILED, DROPPED).
+        - last_processed_event_id must correspond to a real event matching this connector_id.
+        - Monotonicity enforced atomically via SQL (WHERE last_processed_event_id <= :new).
         """
         conn_id = connector_id.strip()
         if not conn_id:
             raise ValueError("connector_id must be non-empty")
+        if not handling_outcome or not handling_outcome.strip():
+            raise ValueError("handling_outcome must be non-empty to advance cursor")
         now = time.time()
 
         with self._connect() as conn:
             with conn:
-                row = conn.execute(
-                    "SELECT last_processed_event_id FROM connector_cursors WHERE connector_id = ?",
+                # Invariant 7: Validate target event exists and matches connector_id
+                ev_row = conn.execute(
+                    "SELECT event_id, connector_id FROM events WHERE event_id = ?",
+                    (last_processed_event_id,),
+                ).fetchone()
+                if not ev_row:
+                    raise CursorError(
+                        f"Cannot advance cursor: event_id {last_processed_event_id} does not exist"
+                    )
+                if ev_row["connector_id"] != conn_id:
+                    raise CursorError(
+                        f"Cannot advance cursor: event_id {last_processed_event_id} belongs to connector '{ev_row['connector_id']}', not '{conn_id}'"
+                    )
+
+                # Invariant 8: Atomic upsert and conditional update prevents race and regression
+                conn.execute(
+                    """
+                    INSERT INTO connector_cursors (connector_id, last_processed_event_id, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(connector_id) DO UPDATE SET
+                        last_processed_event_id = excluded.last_processed_event_id,
+                        updated_at = excluded.updated_at
+                    WHERE excluded.last_processed_event_id >= connector_cursors.last_processed_event_id
+                    """,
+                    (conn_id, last_processed_event_id, now),
+                )
+
+                final_row = conn.execute(
+                    "SELECT last_processed_event_id, updated_at FROM connector_cursors WHERE connector_id = ?",
                     (conn_id,),
                 ).fetchone()
 
-                if row:
-                    current_event_id = row["last_processed_event_id"]
-                    if last_processed_event_id < current_event_id:
-                        raise CursorError(
-                            f"Cannot move cursor backwards: current={current_event_id}, attempted={last_processed_event_id}"
-                        )
-                    conn.execute(
-                        "UPDATE connector_cursors SET last_processed_event_id = ?, updated_at = ? WHERE connector_id = ?",
-                        (last_processed_event_id, now, conn_id),
-                    )
-                else:
-                    conn.execute(
-                        "INSERT INTO connector_cursors (connector_id, last_processed_event_id, updated_at) VALUES (?, ?, ?)",
-                        (conn_id, last_processed_event_id, now),
+                if final_row and final_row["last_processed_event_id"] > last_processed_event_id:
+                    raise CursorError(
+                        f"Cannot move cursor backwards: current={final_row['last_processed_event_id']}, attempted={last_processed_event_id}"
                     )
 
                 return ConnectorCursor(
                     connector_id=conn_id,
-                    last_processed_event_id=last_processed_event_id,
-                    updated_at=now,
+                    last_processed_event_id=final_row["last_processed_event_id"],
+                    updated_at=final_row["updated_at"],
                 )
 
     # -------------------------------------------------------------------------
@@ -576,6 +628,9 @@ class Storage:
         verdict: str = "APPROVE",
     ) -> tuple[Message, Event, bool]:
         """Atomically create a review.response message and its matching RESPONSE_READY event.
+
+        Validates exact binding between request and response (conversation_id, connector_id,
+        artifact_id, and request message_type). Enforces DB-level uniqueness constraint.
 
         Returns (response_message, ready_event, is_new).
         - If a response already exists for this request_id: returns existing (Message, Event, False).
@@ -600,14 +655,42 @@ class Storage:
 
         with self._connect() as conn:
             with conn:
-                # 1. Check if response for this request_id already exists in thread
+                # Invariant 4: Validate request existence and exact binding
+                req_row = conn.execute(
+                    "SELECT thread_id, conversation_id, connector_id, artifact_id, message_type FROM messages WHERE message_id = ?",
+                    (req_id,),
+                ).fetchone()
+
+                if not req_row:
+                    raise ThreadIntegrityError(f"Request '{req_id}' not found")
+                if req_row["thread_id"] != t_id:
+                    raise ThreadIntegrityError(
+                        f"Cross-thread response rejected: request is in thread '{req_row['thread_id']}', not '{t_id}'"
+                    )
+                if req_row["message_type"] != "review.request":
+                    raise ThreadIntegrityError(
+                        f"Response must reply to a 'review.request', got '{req_row['message_type']}'"
+                    )
+                if req_row["conversation_id"] != conv_id:
+                    raise ThreadIntegrityError(
+                        f"Response conversation_id '{conv_id}' does not match request conversation_id '{req_row['conversation_id']}'"
+                    )
+                if req_row["connector_id"] != conn_id:
+                    raise ThreadIntegrityError(
+                        f"Response connector_id '{conn_id}' does not match request connector_id '{req_row['connector_id']}'"
+                    )
+                if req_row["artifact_id"] != art_id:
+                    raise ThreadIntegrityError(
+                        f"Response artifact_id '{art_id}' does not match request artifact_id '{req_row['artifact_id']}'"
+                    )
+
+                # Check if a response for this request_id already exists
                 existing_resp = conn.execute(
                     "SELECT * FROM messages WHERE reply_to = ? AND message_type = 'review.response'",
                     (req_id,),
                 ).fetchone()
 
                 if existing_resp:
-                    # Fetch matching RESPONSE_READY event
                     ev_row = conn.execute(
                         "SELECT * FROM events WHERE message_id = ? AND event_type = 'RESPONSE_READY'",
                         (existing_resp["message_id"],),
@@ -651,40 +734,76 @@ class Storage:
 
                     return (resp_msg, ready_event, False)
 
-                # Validate that request_id exists and belongs to same thread
-                req_row = conn.execute(
-                    "SELECT thread_id FROM messages WHERE message_id = ?", (req_id,)
-                ).fetchone()
-                if not req_row:
-                    raise ThreadIntegrityError(f"Request '{req_id}' not found")
-                if req_row["thread_id"] != t_id:
-                    raise ThreadIntegrityError(
-                        f"Cross-thread response rejected: request is in thread '{req_row['thread_id']}', not '{t_id}'"
+                # Invariant 2 & 3: Insert with unique index enforcement on (reply_to WHERE message_type='review.response')
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO messages (
+                            message_id, thread_id, conversation_id, connector_id,
+                            sender, recipient, message_type, reply_to, artifact_id,
+                            content, metadata, status, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'review.response', ?, ?, ?, ?, 'COMPLETED', ?)
+                        """,
+                        (
+                            resp_id,
+                            t_id,
+                            conv_id,
+                            conn_id,
+                            snd,
+                            rcp,
+                            req_id,
+                            art_id,
+                            content,
+                            meta_json,
+                            now,
+                        ),
                     )
+                except sqlite3.IntegrityError:
+                    # Race condition caught by DB unique index -> fetch winner
+                    existing_resp = conn.execute(
+                        "SELECT * FROM messages WHERE reply_to = ? AND message_type = 'review.response'",
+                        (req_id,),
+                    ).fetchone()
+                    if existing_resp:
+                        ev_row = conn.execute(
+                            "SELECT * FROM events WHERE message_id = ? AND event_type = 'RESPONSE_READY'",
+                            (existing_resp["message_id"],),
+                        ).fetchone()
+                        try:
+                            ex_meta = json.loads(existing_resp["metadata"])
+                        except Exception:
+                            ex_meta = {}
+                        try:
+                            ev_payload = json.loads(ev_row["payload"]) if ev_row else {}
+                        except Exception:
+                            ev_payload = {}
 
-                # Insert response message
-                conn.execute(
-                    """
-                    INSERT INTO messages (
-                        message_id, thread_id, conversation_id, connector_id,
-                        sender, recipient, message_type, reply_to, artifact_id,
-                        content, metadata, status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'review.response', ?, ?, ?, ?, 'COMPLETED', ?)
-                    """,
-                    (
-                        resp_id,
-                        t_id,
-                        conv_id,
-                        conn_id,
-                        snd,
-                        rcp,
-                        req_id,
-                        art_id,
-                        content,
-                        meta_json,
-                        now,
-                    ),
-                )
+                        resp_msg = Message(
+                            message_id=existing_resp["message_id"],
+                            thread_id=existing_resp["thread_id"],
+                            conversation_id=existing_resp["conversation_id"],
+                            connector_id=existing_resp["connector_id"],
+                            sender=existing_resp["sender"],
+                            recipient=existing_resp["recipient"],
+                            message_type=existing_resp["message_type"],
+                            reply_to=existing_resp["reply_to"],
+                            artifact_id=existing_resp["artifact_id"],
+                            content=existing_resp["content"],
+                            metadata=ex_meta,
+                            status=existing_resp["status"],
+                            created_at=existing_resp["created_at"],
+                        )
+                        ready_event = Event(
+                            event_id=ev_row["event_id"] if ev_row else 0,
+                            thread_id=existing_resp["thread_id"],
+                            message_id=existing_resp["message_id"],
+                            connector_id=existing_resp["connector_id"],
+                            event_type="RESPONSE_READY",
+                            payload=ev_payload,
+                            created_at=ev_row["created_at"] if ev_row else existing_resp["created_at"],
+                        )
+                        return (resp_msg, ready_event, False)
+                    raise
 
                 # Insert matching RESPONSE_READY event
                 ready_payload_dict = {
