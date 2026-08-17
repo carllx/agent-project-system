@@ -62,7 +62,7 @@ Agent Project System
 
 - **ID:** `APS-MESSAGE-HUB-M1-001`
 - **Name:** Message Hub M1 Durable Core
-- **State:** `IN_PROGRESS`
+- **State:** `IMPLEMENTATION_COMPLETE / BROWSER_REVIEW_PENDING`
 - **Workflow state:** `IN_PROGRESS`
 - **Authoritative Issue Tracker:** `https://github.com/carllx/agent-project-system/issues/10`
 - **Architecture Model:** Message Hub 作为 APS 通信与事件控制面候选实现，M1 实现纯 SQLite 关系型持久化核心。

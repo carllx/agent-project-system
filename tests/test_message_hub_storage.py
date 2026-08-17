@@ -6,6 +6,7 @@ import concurrent.futures
 import json
 import os
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -27,7 +28,7 @@ class TestMessageHubM1Storage(unittest.TestCase):
         self.temp_dir.cleanup()
 
     # -------------------------------------------------------------------------
-    # 1 & 2. Schema Bootstrap and DB Reopen Persistence
+    # 1. Schema Bootstrap & Reopen Persistence
     # -------------------------------------------------------------------------
     def test_schema_bootstrap_and_reopen_persistence(self) -> None:
         thread = self.storage.create_thread("t-001", "Main Thread")
@@ -61,7 +62,29 @@ class TestMessageHubM1Storage(unittest.TestCase):
         self.assertEqual(fetched_msg.artifact_id, "art-101")
 
     # -------------------------------------------------------------------------
-    # 3 & 4. Identical Message Deduplication and Conflicting Same-ID Rejection
+    # 2. Reserved Message Type review.response Enforcement
+    # -------------------------------------------------------------------------
+    def test_generic_create_message_rejects_reserved_review_response(self) -> None:
+        self.storage.create_thread("t-reserved")
+        with self.assertRaises(ConflictError) as ctx:
+            self.storage.create_message(
+                thread_id="t-reserved",
+                message_id="resp-unauthorized",
+                conversation_id="conv-1",
+                connector_id="conn-1",
+                sender="browser",
+                recipient="ide",
+                message_type="review.response",
+                content="Illegal bypass",
+            )
+        self.assertIn("Reserved message_type", str(ctx.exception))
+        # Ensure nothing was written
+        self.assertIsNone(self.storage.get_message("resp-unauthorized"))
+        events = self.storage.get_events(thread_id="t-reserved")
+        self.assertEqual(len(events), 0)
+
+    # -------------------------------------------------------------------------
+    # 3. Identical Message Deduplication and Conflicting Same-ID Rejection
     # -------------------------------------------------------------------------
     def test_identical_message_dedup_and_conflicting_payload_rejection(self) -> None:
         self.storage.create_thread("t-001")
@@ -124,13 +147,13 @@ class TestMessageHubM1Storage(unittest.TestCase):
             )
 
     # -------------------------------------------------------------------------
-    # 5 & 6. Same-Thread Reply Hierarchy and Cross-Thread Rejection
+    # 4. Same-Thread Reply Hierarchy and Cross-Thread Rejection
     # -------------------------------------------------------------------------
     def test_same_thread_reply_and_cross_thread_rejection(self) -> None:
         self.storage.create_thread("thread-A")
         self.storage.create_thread("thread-B")
 
-        req_a, _ = self.storage.create_message(
+        self.storage.create_message(
             thread_id="thread-A",
             message_id="req-A",
             conversation_id="conv-A",
@@ -141,17 +164,17 @@ class TestMessageHubM1Storage(unittest.TestCase):
             content="Review A",
         )
 
-        # Valid reply in thread-A
+        # Valid non-authoritative reply in thread-A
         reply_a, is_new = self.storage.create_message(
             thread_id="thread-A",
-            message_id="note-A",
+            message_id="msg-reply-A",
             conversation_id="conv-A",
             connector_id="conn-1",
             sender="browser",
             recipient="ide",
-            message_type="review.comment",
+            message_type="note.reply",
             reply_to="req-A",
-            content="Looking at it",
+            content="Understood note",
         )
         self.assertTrue(is_new)
         self.assertEqual(reply_a.reply_to, "req-A")
@@ -160,12 +183,12 @@ class TestMessageHubM1Storage(unittest.TestCase):
         with self.assertRaises(ThreadIntegrityError):
             self.storage.create_message(
                 thread_id="thread-B",
-                message_id="note-B",
+                message_id="msg-reply-B",
                 conversation_id="conv-B",
                 connector_id="conn-1",
                 sender="browser",
                 recipient="ide",
-                message_type="review.comment",
+                message_type="note.reply",
                 reply_to="req-A",
                 content="Cross-thread attack",
             )
@@ -174,48 +197,18 @@ class TestMessageHubM1Storage(unittest.TestCase):
         with self.assertRaises(ThreadIntegrityError):
             self.storage.create_message(
                 thread_id="thread-A",
-                message_id="note-ghost",
+                message_id="msg-ghost",
                 conversation_id="conv-A",
                 connector_id="conn-1",
                 sender="browser",
                 recipient="ide",
-                message_type="review.comment",
+                message_type="note.reply",
                 reply_to="non-existent-parent",
                 content="Ghost reply",
             )
 
     # -------------------------------------------------------------------------
-    # 7. Reserve review.response to create_response_and_ready_event
-    # -------------------------------------------------------------------------
-    def test_create_message_rejects_review_response_type(self) -> None:
-        self.storage.create_thread("t-resp-gate")
-        self.storage.create_message(
-            thread_id="t-resp-gate",
-            message_id="req-gate",
-            conversation_id="conv-gate",
-            connector_id="conn-gate",
-            sender="ide",
-            recipient="browser",
-            message_type="review.request",
-            content="Review code",
-        )
-
-        with self.assertRaises(ValueError) as ctx:
-            self.storage.create_message(
-                thread_id="t-resp-gate",
-                message_id="resp-unauthorized",
-                conversation_id="conv-gate",
-                connector_id="conn-gate",
-                sender="browser",
-                recipient="ide",
-                message_type="review.response",
-                reply_to="req-gate",
-                content="Verdict bypass",
-            )
-        self.assertIn("Authoritative review.response", str(ctx.exception))
-
-    # -------------------------------------------------------------------------
-    # 8. First-Class Identities (connector_id & conversation_id)
+    # 5. First-Class Identities (connector_id & conversation_id)
     # -------------------------------------------------------------------------
     def test_first_class_identities_persisted_and_validated(self) -> None:
         self.storage.create_thread("t-1")
@@ -258,8 +251,44 @@ class TestMessageHubM1Storage(unittest.TestCase):
             )
 
     # -------------------------------------------------------------------------
-    # 9, 10, 11 & 12. Atomic Send Claim Contention, Request Binding & Persistence
+    # 6. Atomic Send Claim Bound to Real Request & Contention
     # -------------------------------------------------------------------------
+    def test_send_claim_requires_real_review_request(self) -> None:
+        self.storage.create_thread("t-claim-bind")
+        self.storage.create_thread("t-other")
+
+        # 1. Missing request fails closed
+        with self.assertRaises(ThreadIntegrityError):
+            self.storage.try_claim_external_send("non-existent-req", "t-claim-bind", "worker-1")
+
+        # 2. Non-review.request message fails closed
+        self.storage.create_message(
+            thread_id="t-claim-bind",
+            message_id="msg-info",
+            conversation_id="conv-1",
+            connector_id="conn-1",
+            sender="ide",
+            recipient="browser",
+            message_type="chat.note",
+            content="Just a note",
+        )
+        with self.assertRaises(ConflictError):
+            self.storage.try_claim_external_send("msg-info", "t-claim-bind", "worker-1")
+
+        # 3. Wrong thread fails closed
+        self.storage.create_message(
+            thread_id="t-claim-bind",
+            message_id="req-valid",
+            conversation_id="conv-1",
+            connector_id="conn-1",
+            sender="ide",
+            recipient="browser",
+            message_type="review.request",
+            content="Review this",
+        )
+        with self.assertRaises(ThreadIntegrityError):
+            self.storage.try_claim_external_send("req-valid", "t-other", "worker-1")
+
     def test_atomic_send_claim_contention_and_restart_persistence(self) -> None:
         self.storage.create_thread("t-claim")
         req_id = "req-contend-001"
@@ -271,10 +300,13 @@ class TestMessageHubM1Storage(unittest.TestCase):
             sender="ide",
             recipient="browser",
             message_type="review.request",
-            content="Contend request",
+            content="Review",
         )
 
+        barrier = threading.Barrier(10)
+
         def try_claim(worker_name: str) -> bool:
+            barrier.wait()
             st = Storage(self.db_path)
             return st.try_claim_external_send(req_id, "t-claim", worker_name)
 
@@ -286,6 +318,7 @@ class TestMessageHubM1Storage(unittest.TestCase):
         self.assertEqual(results.count(True), 1)
         self.assertEqual(results.count(False), 9)
 
+        # Inspect winner
         claim = self.storage.get_send_claim(req_id)
         self.assertIsNotNone(claim)
         self.assertIn(claim.claimed_by, workers)
@@ -296,241 +329,226 @@ class TestMessageHubM1Storage(unittest.TestCase):
         self.assertIsNotNone(reopened_claim)
         self.assertEqual(reopened_claim.claimed_by, claim.claimed_by)
 
-        # Re-claiming returns False
+        # Attempting to re-claim returns False (no permission for second external send)
         self.assertFalse(storage_reopen.try_claim_external_send(req_id, "t-claim", "worker-replay"))
 
-    def test_send_claim_requires_real_review_request_in_correct_thread(self) -> None:
-        self.storage.create_thread("t-c1")
-        self.storage.create_thread("t-c2")
-
-        self.storage.create_message(
-            thread_id="t-c1",
-            message_id="req-valid",
-            conversation_id="conv-c1",
-            connector_id="conn-c1",
-            sender="ide",
-            recipient="browser",
-            message_type="review.request",
-            content="Valid request",
-        )
-        self.storage.create_message(
-            thread_id="t-c1",
-            message_id="msg-not-req",
-            conversation_id="conv-c1",
-            connector_id="conn-c1",
-            sender="ide",
-            recipient="browser",
-            message_type="system.note",
-            content="Not a review request",
-        )
-
-        # Rejects non-existent request
-        with self.assertRaises(ThreadIntegrityError):
-            self.storage.try_claim_external_send("non-existent-req", "t-c1", "worker-1")
-
-        # Rejects claiming in wrong thread
-        with self.assertRaises(ThreadIntegrityError):
-            self.storage.try_claim_external_send("req-valid", "t-c2", "worker-1")
-
-        # Rejects claiming a message that is not a review.request
-        with self.assertRaises(ThreadIntegrityError):
-            self.storage.try_claim_external_send("msg-not-req", "t-c1", "worker-1")
-
     # -------------------------------------------------------------------------
-    # 13, 14 & 15. Connector Cursor Monotonicity, Handling Outcome & Event Validation
+    # 7. Connector Cursor Validation & Concurrent Monotonicity
     # -------------------------------------------------------------------------
-    def test_connector_cursor_requires_durable_outcome_and_valid_event(self) -> None:
-        conn_id = "connector:opencli_chatgpt"
-        self.storage.create_thread("t-cursor")
-        self.storage.create_message(
-            thread_id="t-cursor",
-            message_id="req-cursor-1",
+    def test_connector_cursor_validation_and_monotonicity(self) -> None:
+        self.storage.create_thread("t-cur")
+        msg, _ = self.storage.create_message(
+            thread_id="t-cur",
+            message_id="m-cur-1",
             conversation_id="conv-1",
-            connector_id=conn_id,
+            connector_id="connector:opencli_chatgpt",
             sender="ide",
             recipient="browser",
             message_type="review.request",
-            content="Task 1",
+            content="Test",
         )
-        events = self.storage.get_events(connector_id=conn_id)
-        self.assertEqual(len(events), 1)
-        valid_ev_id = events[0].event_id
+        events = self.storage.get_events(thread_id="t-cur")
+        ev1 = events[0]
 
-        # Missing handling outcome -> ValueError
+        conn_id = "connector:opencli_chatgpt"
+
+        # 1. Requires non-empty outcome
         with self.assertRaises(ValueError):
-            self.storage.advance_connector_cursor(conn_id, valid_ev_id, handling_outcome="")
+            self.storage.advance_connector_cursor(conn_id, ev1.event_id, durable_outcome="")
 
-        # Non-existent event_id -> CursorError
+        # 2. Non-existent event fails
         with self.assertRaises(CursorError):
-            self.storage.advance_connector_cursor(conn_id, 999999, handling_outcome="CLAIM_ACQUIRED")
+            self.storage.advance_connector_cursor(conn_id, 999999, durable_outcome="PROCESSED")
 
-        # Event belonging to different connector -> CursorError
-        self.storage.create_message(
-            thread_id="t-cursor",
-            message_id="req-other-conn",
-            conversation_id="conv-2",
-            connector_id="connector:other_adapter",
-            sender="ide",
-            recipient="browser",
-            message_type="review.request",
-            content="Task 2",
-        )
-        other_events = self.storage.get_events(connector_id="connector:other_adapter")
-        other_ev_id = other_events[0].event_id
-
+        # 3. Wrong connector event fails
         with self.assertRaises(CursorError):
-            self.storage.advance_connector_cursor(conn_id, other_ev_id, handling_outcome="CLAIM_ACQUIRED")
+            self.storage.advance_connector_cursor("connector:other", ev1.event_id, durable_outcome="PROCESSED")
 
-        # Valid advancement succeeds
-        cursor = self.storage.advance_connector_cursor(conn_id, valid_ev_id, handling_outcome="CLAIM_ACQUIRED")
-        self.assertEqual(cursor.last_processed_event_id, valid_ev_id)
+        # 4. Valid advancement to ev1
+        cursor = self.storage.advance_connector_cursor(conn_id, ev1.event_id, durable_outcome="PROCESSED")
+        self.assertEqual(cursor.last_processed_event_id, ev1.event_id)
 
-    def test_concurrent_cursor_advancement_cannot_regress(self) -> None:
-        conn_id = "connector:concurrent_test"
-        self.storage.create_thread("t-curr")
+        # 5. Backward movement fails
+        with self.assertRaises(CursorError):
+            self.storage.advance_connector_cursor(conn_id, 0, durable_outcome="RESET")
 
-        event_ids: list[int] = []
-        for i in range(5):
+    def test_concurrent_cursor_advances_preserve_maximum(self) -> None:
+        self.storage.create_thread("t-cur-conc")
+        conn_id = "connector:conc"
+
+        # Create multiple events
+        for i in range(1, 11):
             self.storage.create_message(
-                thread_id="t-curr",
-                message_id=f"req-curr-{i}",
-                conversation_id="conv-curr",
+                thread_id="t-cur-conc",
+                message_id=f"m-conc-{i}",
+                conversation_id="conv-1",
                 connector_id=conn_id,
                 sender="ide",
                 recipient="browser",
                 message_type="review.request",
-                content=f"Task {i}",
+                content=f"Test {i}",
             )
-        events = self.storage.get_events(connector_id=conn_id)
+        events = self.storage.get_events(thread_id="t-cur-conc", connector_id=conn_id)
+        self.assertEqual(len(events), 10)
         event_ids = [ev.event_id for ev in events]
-        self.assertEqual(len(event_ids), 5)
 
-        max_event_id = max(event_ids)
+        barrier = threading.Barrier(len(event_ids))
 
-        def advance_worker(ev_id: int) -> None:
+        def advance_worker(eid: int) -> int | None:
+            barrier.wait()
             st = Storage(self.db_path)
             try:
-                st.advance_connector_cursor(conn_id, ev_id, handling_outcome="HANDLED")
+                cur = st.advance_connector_cursor(conn_id, eid, durable_outcome="BATCH_DONE")
+                return cur.last_processed_event_id
             except CursorError:
-                pass  # Slower thread trying to write smaller event_id is rejected
+                # Expected if a higher cursor was already committed by another thread
+                return None
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            list(executor.map(advance_worker, sorted(event_ids, reverse=True)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(event_ids)) as executor:
+            list(executor.map(advance_worker, event_ids))
 
+        # Check final stored cursor: MUST equal maximum event_id
         final_cursor = self.storage.get_connector_cursor(conn_id)
         self.assertIsNotNone(final_cursor)
-        self.assertEqual(final_cursor.last_processed_event_id, max_event_id)
+        self.assertEqual(final_cursor.last_processed_event_id, max(event_ids))
 
     # -------------------------------------------------------------------------
-    # 16, 17, 18, 19 & 20. Exact Request/Response Binding & Concurrent RESPONSE_READY
+    # 8. Exact Response Identity Binding & Mismatch Rejection
     # -------------------------------------------------------------------------
-    def test_response_creation_enforces_exact_request_binding(self) -> None:
+    def test_create_response_enforces_exact_identity_binding(self) -> None:
         self.storage.create_thread("t-bind")
         self.storage.create_message(
             thread_id="t-bind",
-            message_id="req-target",
-            conversation_id="conv-exact-uuid",
-            connector_id="connector:exact_adapter",
-            artifact_id="art-exact-hash",
-            sender="ide",
-            recipient="browser",
-            message_type="review.request",
-            content="Exact binding task",
-        )
-
-        # Mismatched conversation_id -> ThreadIntegrityError
-        with self.assertRaises(ThreadIntegrityError) as ctx:
-            self.storage.create_response_and_ready_event(
-                thread_id="t-bind",
-                response_id="resp-bad-conv",
-                request_id="req-target",
-                conversation_id="conv-WRONG-uuid",
-                connector_id="connector:exact_adapter",
-                artifact_id="art-exact-hash",
-                sender="browser",
-                recipient="ide",
-                content="Verdict",
-            )
-        self.assertIn("conversation_id", str(ctx.exception))
-
-        # Mismatched connector_id -> ThreadIntegrityError
-        with self.assertRaises(ThreadIntegrityError) as ctx:
-            self.storage.create_response_and_ready_event(
-                thread_id="t-bind",
-                response_id="resp-bad-conn",
-                request_id="req-target",
-                conversation_id="conv-exact-uuid",
-                connector_id="connector:WRONG_adapter",
-                artifact_id="art-exact-hash",
-                sender="browser",
-                recipient="ide",
-                content="Verdict",
-            )
-        self.assertIn("connector_id", str(ctx.exception))
-
-        # Mismatched artifact_id -> ThreadIntegrityError
-        with self.assertRaises(ThreadIntegrityError) as ctx:
-            self.storage.create_response_and_ready_event(
-                thread_id="t-bind",
-                response_id="resp-bad-art",
-                request_id="req-target",
-                conversation_id="conv-exact-uuid",
-                connector_id="connector:exact_adapter",
-                artifact_id="art-WRONG-hash",
-                sender="browser",
-                recipient="ide",
-                content="Verdict",
-            )
-        self.assertIn("artifact_id", str(ctx.exception))
-
-    def test_concurrent_response_ready_atomic_creation(self) -> None:
-        self.storage.create_thread("t-resp")
-        self.storage.create_message(
-            thread_id="t-resp",
-            message_id="req-for-resp",
-            conversation_id="conv-resp",
-            connector_id="connector:opencli",
-            artifact_id="art-resp",
+            message_id="req-bound-1",
+            conversation_id="conv-exact-123",
+            connector_id="connector:exact-opencli",
             sender="ide",
             recipient="browser",
             message_type="review.request",
             content="Please review",
+            artifact_id="art-exact-456",
         )
 
+        # 1. Wrong conversation_id fails closed
+        with self.assertRaises(ConflictError) as ctx:
+            self.storage.create_response_and_ready_event(
+                thread_id="t-bind",
+                response_id="resp-err-1",
+                request_id="req-bound-1",
+                conversation_id="conv-WRONG-UUID",
+                connector_id="connector:exact-opencli",
+                sender="browser",
+                recipient="ide",
+                content="Verdict",
+                artifact_id="art-exact-456",
+            )
+        self.assertIn("Conversation mismatch", str(ctx.exception))
+
+        # 2. Wrong connector_id fails closed
+        with self.assertRaises(ConflictError) as ctx:
+            self.storage.create_response_and_ready_event(
+                thread_id="t-bind",
+                response_id="resp-err-2",
+                request_id="req-bound-1",
+                conversation_id="conv-exact-123",
+                connector_id="connector:WRONG-CONNECTOR",
+                sender="browser",
+                recipient="ide",
+                content="Verdict",
+                artifact_id="art-exact-456",
+            )
+        self.assertIn("Connector mismatch", str(ctx.exception))
+
+        # 3. Wrong artifact_id fails closed
+        with self.assertRaises(ConflictError) as ctx:
+            self.storage.create_response_and_ready_event(
+                thread_id="t-bind",
+                response_id="resp-err-3",
+                request_id="req-bound-1",
+                conversation_id="conv-exact-123",
+                connector_id="connector:exact-opencli",
+                sender="browser",
+                recipient="ide",
+                content="Verdict",
+                artifact_id="art-WRONG-HASH",
+            )
+        self.assertIn("Artifact mismatch", str(ctx.exception))
+
+        # 4. Valid creation succeeds
+        resp, ev, is_new = self.storage.create_response_and_ready_event(
+            thread_id="t-bind",
+            response_id="resp-valid-1",
+            request_id="req-bound-1",
+            conversation_id="conv-exact-123",
+            connector_id="connector:exact-opencli",
+            sender="browser",
+            recipient="ide",
+            content="Approved",
+            artifact_id="art-exact-456",
+            verdict="APPROVE",
+        )
+        self.assertTrue(is_new)
+        self.assertEqual(resp.message_id, "resp-valid-1")
+        self.assertEqual(ev.event_type, "RESPONSE_READY")
+
+    # -------------------------------------------------------------------------
+    # 9. Synchronized Response Concurrency & DB Unique Constraint
+    # -------------------------------------------------------------------------
+    def test_synchronized_concurrent_response_ready_atomic_creation(self) -> None:
+        self.storage.create_thread("t-resp-conc")
+        req_id = "req-resp-conc-1"
+        self.storage.create_message(
+            thread_id="t-resp-conc",
+            message_id=req_id,
+            conversation_id="conv-resp-conc",
+            connector_id="connector:opencli",
+            sender="ide",
+            recipient="browser",
+            message_type="review.request",
+            content="Please review concurrency",
+            artifact_id="art-conc",
+        )
+
+        barrier = threading.Barrier(10)
+
         def create_response(thread_index: int) -> tuple[str, bool]:
+            barrier.wait()
             st = Storage(self.db_path)
             msg, ev, is_new = st.create_response_and_ready_event(
-                thread_id="t-resp",
+                thread_id="t-resp-conc",
                 response_id=f"resp-{thread_index}",
-                request_id="req-for-resp",
-                conversation_id="conv-resp",
+                request_id=req_id,
+                conversation_id="conv-resp-conc",
                 connector_id="connector:opencli",
-                artifact_id="art-resp",
                 sender="browser",
                 recipient="ide",
                 content="Verdict content",
+                artifact_id="art-conc",
                 verdict="APPROVE",
             )
             return (msg.message_id, is_new)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            results = list(executor.map(create_response, range(8)))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(create_response, range(10)))
 
         # Exactly one call created the authoritative response
         new_creations = [res for res in results if res[1] is True]
         cached_returns = [res for res in results if res[1] is False]
         self.assertEqual(len(new_creations), 1)
-        self.assertEqual(len(cached_returns), 7)
+        self.assertEqual(len(cached_returns), 9)
 
         winner_resp_id = new_creations[0][0]
 
         # Verify in database: exactly one review.response and one RESPONSE_READY event
-        events = self.storage.get_events(thread_id="t-resp")
+        events = self.storage.get_events(thread_id="t-resp-conc")
         ready_events = [ev for ev in events if ev.event_type == "RESPONSE_READY"]
         self.assertEqual(len(ready_events), 1)
         self.assertEqual(ready_events[0].message_id, winner_resp_id)
         self.assertEqual(ready_events[0].payload.get("verdict"), "APPROVE")
 
+    # -------------------------------------------------------------------------
+    # 10. Transaction Rollback Integrity
+    # -------------------------------------------------------------------------
     def test_transaction_failure_leaves_no_partial_records(self) -> None:
         self.storage.create_thread("t-fail")
         with self.assertRaises(ThreadIntegrityError):
@@ -545,6 +563,7 @@ class TestMessageHubM1Storage(unittest.TestCase):
                 content="Orphan verdict",
             )
 
+        # Verify no orphan message or event was written
         msg = self.storage.get_message("resp-orphan")
         self.assertIsNone(msg)
         events = self.storage.get_events(thread_id="t-fail")
